@@ -18,7 +18,7 @@ TICK_TEXT = {
     'weekly trend': 'The weekly chart is rising (close above a rising 9 EMA), so you are buying with the higher timeframe.',
     'Nifty trend': 'Nifty itself is above its 21 EMA: the broad market is not working against a long.',
     'order block (15m)': 'The 15m order block (last opposite candle before the 15m CHoCH) overlaps the 5m zone: two timeframes defend the same price.',
-    'OI wall': 'Open interest agrees: the option writers\' walls support the trade direction and do not cap the first target.'}
+    'PDH/PDL sweep': 'Earlier today a 15m candle wicked through the previous-day low (calls) or high (puts) and closed back inside: liquidity was taken before the move.'}
 
 def build_logic(section, it, r):
     d = it['direction']; w = _words(d); idx = section == 'options'; dec = 1 if idx else 2; f = lambda v: _n(v, dec); out = []
@@ -59,7 +59,6 @@ def build_logic(section, it, r):
     cautions = list(it.get('notes') or [])
     if it.get('sector'): cautions.append(f"sector {it['sector']} is {it.get('sector_state', 'neutral')}" + (f", {it['rs20']:+.1f}% vs Nifty over 20 days" if it.get('rs20') is not None else ''))
     if (it.get('results') or {}).get('days') is not None: cautions.append(f"results in {it['results']['days']} day(s) on {it['results']['date']}")
-    if it.get('oi'): cautions.append('OI: ' + it['oi'].get('verdict', 'unknown'))
     if cautions: out.append(dict(title='Cautions', text='; '.join(c[:1].upper() + c[1:] for c in cautions) + '.'))
     return out
 

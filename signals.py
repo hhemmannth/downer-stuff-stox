@@ -48,7 +48,7 @@ def new_signal(section, it, ts):
     lvl = lambda k: it.get(k)
     sig = dict(id=key(section, it), section=section, symbol=it['symbol'], direction=it['direction'], label=it.get('label', it['direction'].upper()), grade=it['grade'], score=it['score'],
                instrument=(it.get('options_trade') or {}).get('instrument'), created=pd.Timestamp(ts).isoformat(timespec='minutes'), entry=lvl('entry'), sl=lvl('sl'), t1=lvl('t1'), t2=lvl('t2'), t3=lvl('t3'),
-               stop=lvl('sl'), hits={}, booked=[], status='ACTIVE', outcome=None, last=lvl('entry'), best=lvl('entry'), worst=lvl('entry'), r_now=0.0, events=[], checked_to=pd.Timestamp(ts).isoformat(), item=it)
+               stage=it.get('stage'), checklist=it.get('checklist'), stop=lvl('sl'), hits={}, booked=[], status='ACTIVE', outcome=None, last=lvl('entry'), best=lvl('entry'), worst=lvl('entry'), r_now=0.0, events=[], checked_to=pd.Timestamp(ts).isoformat(), item=it)
     _event(sig, ts, 'trigger', f"Triggered at {it['entry']}. Stop {it['sl']}, T1 {it['t1']}, T2 {it['t2']}, T3 {it['t3']}.")
     return sig
 
@@ -70,7 +70,11 @@ def walk(sig, bars, now):
                 if name in sig['hits']: continue
                 if (long and hi >= lvl) or (not long and lo <= lvl):
                     sig['hits'][name] = pd.Timestamp(ts).isoformat(timespec='minutes'); n = len(sig['hits'])
-                    if n == 1: sig['booked'].append((0.5, lvl)); sig['stop'] = sig['entry']; out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book half, move the stop to entry {sig['entry']}."))
+                    if n == 1 and sig['section'] == 'swing':        # your rules: no breakeven just because +1R was reached
+                        sig['booked'].append((0.5, lvl)); out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book half. Keep the original stop: no early breakeven."))
+                    elif n == 2 and sig['section'] == 'swing':
+                        sig['booked'].append((0.25, lvl)); sig['stop'] = sig['entry']; out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book a quarter, protect at entry {sig['entry']} and trail behind each new daily higher low."))
+                    elif n == 1: sig['booked'].append((0.5, lvl)); sig['stop'] = sig['entry']; out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book half, move the stop to entry {sig['entry']}."))
                     elif n == 2: sig['booked'].append((0.25, lvl)); sig['stop'] = ladder[0][1]; out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book a quarter, move the stop to {ladder[0][1]}."))
                     else: out.append(_close(sig, ts, lvl, 'TARGET', f"{name} {lvl} hit: final target reached.")); break
                 else: break                                       # targets are reached in price order

@@ -27,8 +27,14 @@ def post(base, topic, title, body, tags, click):
     if click: headers['Click'] = click
     urllib.request.urlopen(urllib.request.Request(f'{base}/{topic}', data=body.encode('utf-8'), headers=headers, method='POST'), timeout=20).read()
 
+from urllib.parse import quote
+def deep(click, **q):
+    """A link that opens the exact trade inside the app (one-page app: index.html#/trade?...)."""
+    if not click: return click
+    return click.rstrip('/') + '/#/trade?' + '&'.join(f'{k}={quote(str(v), safe="")}' for k, v in q.items())
+
 def alert_body(s):
-    return '\n'.join([f"Zone {fmt(s['zone_bot'])}-{fmt(s['zone_top'])}   Entry {fmt(s['entry'])}   SL {fmt(s['sl'])}", f"T1 {fmt(s['t1'])} ({fmt(s['r_t1'])}R)   T2 {fmt(s['t2'])}",
+    return '\n'.join([f"Zone {fmt(s['zone_bot'])}-{fmt(s['zone_top'])}   Entry {fmt(s['entry'])}   SL {fmt(s['sl'])}", f"T1 {fmt(s['t1'])} ({fmt(s.get('r_t1'))}R)   T2 {fmt(s['t2'])}   T3 {fmt(s['t3'])}",
                       'Ticks: ' + (', '.join(s['ticks']) or 'none'), ' / '.join(s['notes'][:2]) or 'Check the chart before trading.'])
 
 def send_alert(base, topic, s, section, click):
@@ -71,7 +77,7 @@ def main():
         for s in data.get('setups', []):
             k = f"{key}|{s['symbol']}|{s['direction']}|{s['bos_date']}|{s['status'].split(' ')[0]}"
             if s['score'] < min_score or not s['status'].upper().startswith(statuses) or k in state['sent']: continue
-            try: send_alert(base, topic, s, title, click); state['sent'].append(k); sent += 1
+            try: send_alert(base, topic, s, title, deep(click, s=key, id=f"{s['symbol']}|{s['direction']}")); state['sent'].append(k); sent += 1
             except Exception as ex: print(f"  could not send {s['symbol']}: {ex}", file=sys.stderr)
         if updates == 'off' or (updates == 'swing' and key != 'swing') or state['updated'].get(key) == data.get('generated_at') or not fresh(data, datetime.datetime.now(datetime.timezone.utc)): continue
         try: post(base, topic, f'DownerStuffScreener: {title} scan updated', update_text(key, data), 'arrows_counterclockwise', click); state['updated'][key] = data['generated_at']; ups += 1
@@ -87,7 +93,7 @@ def main():
                     k = f"ev|{sig['id']}|{ev['kind']}|{ev['t']}"
                     if ev['kind'] == 'trigger' or k in state['sent'] or ev['t'][:10] != today: continue
                     what = sig.get('instrument') or f"{sig['symbol']} {sig.get('label', '')}"
-                    try: post(base, topic, f"{title}: {what} {ev['kind'].upper()}", ev['text'], icon.get(ev['kind'], 'bell'), click); state['sent'].append(k); evs += 1
+                    try: post(base, topic, f"{title}: {what} {ev['kind'].upper()}", ev['text'], icon.get(ev['kind'], 'bell'), deep(click, s=key, sig=sig['id'])); state['sent'].append(k); evs += 1
                     except Exception as ex: print(f'  could not send event: {ex}', file=sys.stderr)
     os.makedirs(os.path.dirname(a.state) or '.', exist_ok=True); json.dump(state, open(a.state, 'w')); print(f'alerts sent: {sent}, updates sent: {ups}, trade events sent: {evs}'); return 0
 

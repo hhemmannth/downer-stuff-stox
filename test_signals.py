@@ -49,6 +49,12 @@ check('no new intraday or options trade from a candle at or after 15:00', not le
 led10 = sg.load('/x'); led10['signals'].append(dict(sg.new_signal('intraday', dict(it, symbol='OLD', label='LONG'), T('2026-10-22 15:10')), section='intraday'))
 sg.update(led10, 'intraday', [], {}, {}, T('2026-10-22 15:20'))
 check('late signals opened by the old version are cleaned out', not led10['signals'])
+led11 = sg.load('/x'); sw = dict(it, symbol='SWG', label='LONG', options_trade=None)
+sg.update(led11, 'swing', [sw], {}, {'SWG': bars([[99, 101, 98, 100]], '2026-10-22 10:15', 'h')}, T('2026-10-22 11:00'))
+sg.update(led11, 'swing', [], {}, {'SWG': bars([[100, 116, 99, 114]], '2026-10-22 11:15', 'h')}, T('2026-10-22 12:00'))
+s11 = led11['signals'][0]; check('swing: at T1 the stop stays where it was (no early breakeven)', s11['stop'] == 90.0 and 'T1' in s11['hits'], str(s11['stop']))
+sg.update(led11, 'swing', [], {}, {'SWG': bars([[114, 121, 113, 119]], '2026-10-22 12:15', 'h')}, T('2026-10-22 13:00'))
+check('swing: at T2 the stop moves to entry', s11['stop'] == 100.0)
 import tempfile, os
 p = os.path.join(tempfile.mkdtemp(), 'signals_options.json'); sg.save(p, led8, now); back = sg.load(p)
 check('saved and loaded back intact', back['signals'][0]['id'] == led8['signals'][0]['id'] and 'updated' in back)

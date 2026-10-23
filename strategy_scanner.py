@@ -20,7 +20,6 @@ import pandas as pd
 import explain, greeks, market, newsfeed, sector_index, signals
 import warnings
 warnings.filterwarnings('ignore')                     # yfinance + pandas 3 print thousands of deprecation lines
-import oi as oimod
 
 # ------------------------------------------------------------------ settings
 CFG = dict(                       # swing: structure on 1D, trigger on 1H
@@ -57,6 +56,25 @@ def swing_points(df, n):
         if l[i] <= l[i - n:i].min() and l[i] < l[i + 1:i + n + 1].min(): pl.append(i)
     return ph, pl
 
+def pivots(df, cfg):
+    """Swing highs and lows, plus the bar at which each one becomes known.
+    Default: n-bar fractals (known n bars later). With cfg['zz'] = k: a zigzag that only counts a swing once price has
+    reversed by k x ATR from it, which reads daily structure the way you mark it by eye (a meaningful bounce, not every wiggle)."""
+    k = cfg.get('zz')
+    if not k:
+        n = cfg['pivot']; ph, pl = swing_points(df, n); return ph, pl, {i: i + n for i in ph + pl}
+    h, l = df.High.values, df.Low.values; a = atr(df, cfg.get('atr_n', 14)).values; N = len(df)
+    ph, pl, known = [], [], {}; dirn = 0; hi = lo = 0
+    for t in range(1, N):
+        rng = float(np.mean(h[:t + 1] - l[:t + 1])); thr = k * (a[t] if not math.isnan(a[t]) else rng)
+        if dirn >= 0 and h[t] >= h[hi]: hi = t
+        if dirn <= 0 and l[t] <= l[lo]: lo = t
+        if dirn >= 0 and hi < t and h[hi] - l[t] >= thr and (dirn == 1 or hi > lo):
+            ph.append(hi); known[hi] = t; dirn = -1; lo = t; continue
+        if dirn <= 0 and lo < t and h[t] - l[lo] >= thr and (dirn == -1 or lo > hi):
+            pl.append(lo); known[lo] = t; dirn = 1; hi = t
+    return ph, pl, known
+
 def r05(x):
     """Round a price to the NSE tick size of 5 paise."""
     return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(round(float(x) / TICK) * TICK, 2)
@@ -67,7 +85,7 @@ def find_structures(df, cfg):
     then a BOS with a displacement candle. Later BOS legs of the same move (continuations after a pullback) are candidates too,
     each with its own order block and fair value gap, so a trend keeps producing fresh zones instead of going stale."""
     N = len(df); o, h, l, c = (df[k].values for k in ('Open', 'High', 'Low', 'Close'))
-    a = atr(df, cfg['atr_n']).values; n = cfg['pivot']; ph, pl = swing_points(df, n); out = []; seen = set()
+    a = atr(df, cfg['atr_n']).values; n = cfg['pivot']; ph, pl, known = pivots(df, cfg); out = []; seen = set()
     atr_at = lambda j: a[j - 1] if j >= 1 and not math.isnan(a[j - 1]) else (h[j] - l[j])
     def next_bos(start, run):
         pulled = False
@@ -93,7 +111,7 @@ def find_structures(df, cfg):
         return dict(ob_low=ob[0] if ob else np.nan, ob_high=ob[1] if ob else np.nan, fvg_low=fvg[0] if fvg else np.nan, fvg_high=fvg[1] if fvg else np.nan,
                     zone_bot=zone_bot, zone_top=zone_top, zone_q=2 if stacked else 1, leg_low=leg_low, leg_high=leg_high, fib_hi=leg_high - 0.618 * rng, fib_lo=leg_high - 0.705 * rng)
     for ci in range(N - 1, max(n * 3, N - cfg['lookback']) - 1, -1):
-        phs = [i for i in ph if i + n <= ci - 1]; pls = [i for i in pl if i + n <= ci - 1]
+        phs = [i for i in ph if known[i] <= ci - 1]; pls = [i for i in pl if known[i] <= ci - 1]
         if len(phs) < 2 or len(pls) < 2: continue
         lh, lh2 = phs[-1], phs[-2]
         if not h[lh] < h[lh2]: continue                      # last swing high is a lower high
@@ -183,7 +201,7 @@ def round_in_zone(bot, top):
     step = 5 if top < 200 else 10 if top < 600 else 25 if top < 1500 else 50 if top < 4000 else 100 if top < 15000 else 500
     return math.floor(top / step) * step >= bot
 
-def detect(struct, trig, cfg, K=None, section='swing', bias=None, levels=(), extra_ticks=(), oi=None):
+def detect(struct, trig, cfg, K=None, section='swing', bias=None, levels=(), extra_ticks=()):
     """One side (long) on one instrument. Shorts are found by passing mirrored frames and K."""
     struct = struct.dropna(subset=['Open', 'High', 'Low', 'Close']).copy()
     if len(struct) < cfg['min_bars']: return None
@@ -221,21 +239,17 @@ def detect(struct, trig, cfg, K=None, section='swing', bias=None, levels=(), ext
     else:
         t_ok = trig.Close.iloc[-1] > ema(trig.Close, 9).iloc[-1]; b_ok = bias is None or bias.Close.iloc[-1] > ema(bias.Close, 9).iloc[-1]
         if t_ok and b_ok: ticks.append('MTF EMA')                                              # 5m and 15m on the same side
-    if section == 'options':
-        if b and not math.isnan(b['ob_low']) and min(b['ob_high'], s['zone_top'] + .25 * a) >= max(b['ob_low'], s['zone_bot'] - .25 * a): ticks.append('order block (15m)')
-        aln = oimod.alignment(side, conv(entry), conv(sl), conv(plan['t1']), oi) if plan else dict(aligned=False, verdict='unknown', notes=[])
-        if aln['aligned']: ticks.append('OI wall')
-    else: aln = None
+    if section == 'options' and b and not math.isnan(b['ob_low']) and min(b['ob_high'], s['zone_top'] + .25 * a) >= max(b['ob_low'], s['zone_bot'] - .25 * a): ticks.append('order block (15m)')
     ticks += [t for t in extra_ticks if t not in ticks]
     structure = 2; conf = cf['rejection'] + cf['reclaim'] + (cf['rvol_ok'] if use_vol else 0)
-    ctx = min(4 if section == 'options' else 3, len(ticks)); score = structure + s['zone_q'] + conf + ctx
-    notes = {'swing': ['check the results date and the sector'], 'intraday': ['check the news and results date for this stock'], 'options': ['check futures OI and the OI panel', 'expiry day: skip afternoon entries or size down']}[section]
+    ctx = min(3, len(ticks)); score = structure + s['zone_q'] + conf + ctx
+    notes = {'swing': ['check the results date and the sector'], 'intraday': ['check the news and results date for this stock'], 'options': ['convert the index stop to premium (points x delta) and size to your fixed risk', 'stop after two losses in a day']}[section]
     if plan and plan['r_t1'] < 1.5: notes.append('limited room to the prior high' if side == 'long' else 'limited room to the prior low')
     if plan and plan['risk_pct'] > 7 and section == 'swing': notes.append('wide stop: reduce size or skip')
     out = dict(state=state, status=status, structure=structure, zone_q=s['zone_q'], confirm=conf, context=ctx, score=score, grade=grade(score), ticks=', '.join(ticks) or '-', rvol=cf['rvol'] if use_vol else np.nan,
                price=px, choch_level=s['choch_level'], bos_level=s['bos_level'], zone_bot=s['zone_bot'], zone_top=s['zone_top'], ob_low=s['ob_low'], ob_high=s['ob_high'], fvg_low=s['fvg_low'], fvg_high=s['fvg_high'],
                fib_lo=s['fib_lo'], fib_hi=s['fib_hi'], leg_low=s['leg_low'], leg_high=s['leg_high'], choch_date=str(struct.index[s['choch_i']])[:16], bos_date=str(struct.index[s['bos_i']])[:16], leg=s.get('leg', 1),
-               notes='; '.join(notes), atr=a, pullback_low=cf['pullback_low'], rejection=cf['rejection'], reclaim=cf['reclaim'], rvol_ok=cf['rvol_ok'], oi_verdict=aln, **plan)
+               notes='; '.join(notes), atr=a, pullback_low=cf['pullback_low'], rejection=cf['rejection'], reclaim=cf['reclaim'], rvol_ok=cf['rvol_ok'], **plan)
     if b: out.update(b15_level=b['level'], b15_base=b['base_low'], b15_date=b['date'], b15_kind=b.get('kind', 'CHoCH'), b15_ob_low=b['ob_low'], b15_ob_high=b['ob_high'])
     return out
 
@@ -258,15 +272,15 @@ def scan_symbol(daily, hourly=None, side='long', cfg=CFG, extra_ticks=()):
     if bool((daily.High.tail(5) == daily.Low.tail(5)).any()): return None
     return detect(daily, hourly, cfg, None, 'swing', extra_ticks=extra_ticks)
 
-def scan_intraday(df5, df15, side='long', cfg=CFG_I, levels=(), extra_ticks=(), section='intraday', oi=None):
+def scan_intraday(df5, df15, side='long', cfg=CFG_I, levels=(), extra_ticks=(), section='intraday'):
     """Options (Nifty) and intraday (stocks). long = CALL / buy, short = PUT / sell. 15m needs a CHoCH only; 5m needs CHoCH + BOS."""
     df5 = df5.dropna(subset=['Open', 'High', 'Low', 'Close'])
     if len(df5) < cfg['min_bars']: return None
     if side == 'short':
         K = float(2 * max(df5.High.max(), df15.High.max() if df15 is not None else 0))
-        r = detect(invert(df5, K), invert(df5, K), cfg, K, section, bias=invert(df15, K) if df15 is not None else None, levels=levels, extra_ticks=extra_ticks, oi=oi)
+        r = detect(invert(df5, K), invert(df5, K), cfg, K, section, bias=invert(df15, K) if df15 is not None else None, levels=levels, extra_ticks=extra_ticks)
         return unflip(r, K) if r and 'zone_bot' in r else r
-    return detect(df5, df5, cfg, None, section, bias=df15, levels=levels, extra_ticks=extra_ticks, oi=oi)
+    return detect(df5, df5, cfg, None, section, bias=df15, levels=levels, extra_ticks=extra_ticks)
 
 def weekly_ok(daily):
     w = daily.Close.resample('W-FRI').last().dropna()
@@ -398,7 +412,6 @@ def build_item(sym, direction, r, frame, tfs, bars, section, label=None, extra=N
               times=[x.strftime(fmt) for x in d.index], candles=[[round(float(x), 2) for x in row] for row in d[['Open', 'High', 'Low', 'Close']].values], ema=[round(float(x), 2) for x in ema(frame.Close, 9).tail(bars).values])
     if ltp is not None: it['price'] = r05(ltp)
     if extra: it.update(extra)
-    if r.get('oi_verdict'): it['oi'] = r['oi_verdict']
     it['logic'] = explain.build_logic(section, it, r); it['plan'] = explain.build_plan(section, it)
     return it
 
@@ -436,78 +449,157 @@ def holidays(args):
     return [h['date'] for h in newsfeed.load_events(args.events).get('holidays', [])]
 
 # ------------------------------------------------------------------ runs
+def candles(frame, bars, fmt):
+    d = frame.tail(bars)
+    return dict(times=[x.strftime(fmt) for x in d.index], candles=[[round(float(x), 2) for x in row] for row in d[['Open', 'High', 'Low', 'Close']].values],
+                volume=[int(x) for x in d.Volume.fillna(0).values], ema=[round(float(x), 2) for x in ema(frame.Close, 9).tail(bars).values])
+
+def swing_item(sym, r, daily, h1, m15, extra, ltp=None):
+    """A swing setup as the pages read it: stage, scorecard, the playbook checklist, plan and 1D / 1H / 15m charts."""
+    keys = ('price', 'zone_bot', 'zone_top', 'entry', 'sl', 't1', 't2', 't3', 'fib_lo', 'fib_hi', 'ob_low', 'ob_high', 'fvg_low', 'fvg_high', 'choch_level', 'bos_level',
+            'prior_high', 'resistance', 'sweep_low', 'sweep_level', 'pullback_low')
+    it = {k: r05(r.get(k)) for k in keys}; it.update({k: _num(r.get(k)) for k in ('risk_pct', 'rvol', 'room_r', 'atr', 'bos_rvol')})
+    it.update(symbol=sym, direction='long', label='LONG', section='swing', stage=r['stage'], stage_label=r['stage_label'], status=r['status'], holds=r.get('holds', []),
+              grade=r['grade'], score=int(r['score']), max_score=10, structure=int(r['structure']), zone_q=int(r['zone_q']), confirm=int(r['confirm']), context=int(r['context']),
+              ticks=[t for t in r['ticks'].split(', ') if t and t != '-'], notes=[n for n in r['notes'].split('; ') if n], sweep=r.get('sweep'), sweep_date=r.get('sweep_date'),
+              choch_date=str(r.get('choch_date'))[:10], bos_date=str(r.get('bos_date'))[:10], weekly=r.get('weekly'), tf_structure='1D', tf_trigger='15m', r_t1=1.0)
+    m = r.get('m15') or {}; cf = r.get('cf') or {}
+    it['h1'] = {k: cf.get(k) for k in ('t_touch', 't_confirm', 'rejection', 'reclaim', 'rvol_ok')}; it['h1']['rvol'] = _num(cf.get('rvol'))
+    it['m15'] = dict(found=bool(m.get('found')), note=m.get('note', ''), trigger=m.get('trigger'), retest=m.get('retest'), entry=r05(m.get('entry')), rvol=_num(m.get('rvol')),
+                     choch=m.get('choch'), bos=m.get('bos'), fvg=m.get('fvg'), ob=m.get('ob'))
+    cd, _ = with_today(daily, h1); it['charts'] = {'1D': candles(cd, 90, '%Y-%m-%d')}
+    if h1 is not None and len(h1) and r['stage'] >= 2: it['charts']['1H'] = candles(h1, 70, '%d %b %H:%M')
+    if m15 is not None and len(m15) and r['stage'] >= 4: it['charts']['15m'] = candles(m15, 80, '%d %b %H:%M')
+    c1 = it['charts']['1D']; it.update(times=c1['times'], candles=c1['candles'], ema=c1['ema'])
+    if ltp is not None: it['price'] = r05(ltp)
+    if extra: it.update(extra)
+    it['checklist'] = swing.checklist(r, extra or {}); it['plan'] = swing.plan_text(r)
+    it['logic'] = [dict(title=f"{c['tf']}: {c['title']}", text=c['text'], ok=c['ok']) for c in it['checklist']]
+    return it
+
 def run_swing(args, now):
+    """Swing (primary segment): your swing playbook on the Nifty 500. Weekly location -> 1D structure and zone -> 1H confirmation -> 15m entry."""
     syms, note, industries = load_nifty500(args.universe_csv or 'nifty500.csv', args.watchlist)
     print(f'swing: {note}'); daily, failed = download_many(syms, '1y', '1d'); daily = {s: tidy_daily(f, now) for s, f in daily.items()}
     if not daily: print('No data downloaded (Yahoo blocked or offline). Nothing written.', file=sys.stderr); sys.exit(2)
     nd, _ = download_many(['^NSEI'], '1y', '1d'); nifty = tidy_daily(nd['^NSEI'], now) if '^NSEI' in nd else None; n_up = index_ok(nifty)
     b_sum, b_sec, per = market.breadth(daily, industries, nifty) if nifty is not None else (None, [], {})
     write_json(args.out, 'breadth.json', dict(generated_at=now.isoformat(timespec='seconds'), summary=b_sum, sectors=b_sec))
-    extra = lambda f: (['weekly trend'] if weekly_ok(f) else []) + (['Nifty trend'] if n_up else [])
-    cand, turnover, states = {}, {}, {}
+    turnover, states, res = {}, {}, {}
     for s, f in daily.items():
+        f = f.dropna(subset=['Open', 'High', 'Low', 'Close'])
         if len(f) >= CFG['min_bars']: turnover[s] = float((f.Close * f.Volume).tail(20).mean() / 1e7)
-        r = scan_symbol(f, None, 'long', CFG, extra(f)); states[(s, 'long')] = state_of(r, args.min_score)
-        if r and 'zone_bot' in r: cand[s] = r
+        if len(f) < CFG['min_bars'] or not liquid(f, CFG) or bool((f.High.tail(5) == f.Low.tail(5)).any()): states[(s, 'long')] = None; continue
+        try: r = swing.analyse(f)
+        except Exception as ex: print(f'  error {s}: {ex}', file=sys.stderr); continue
+        states[(s, 'long')] = state_of(r, args.min_score) if r and 'stage' not in r else ('OK' if r else None)
+        if r and 'stage' in r: res[s] = r
     liq = [s for s, _ in sorted(turnover.items(), key=lambda kv: -kv[1])[:args.intraday_top]]
     write_json(args.out, 'liquid.json', dict(generated_at=now.isoformat(timespec='seconds'), top=liq))
     active = [x['symbol'] for x in signals.load(os.path.join(args.out, 'signals_swing.json'))['signals'] if x['status'] == 'ACTIVE']
-    need = list(dict.fromkeys(list(cand) + active)); hourly, _ = download_many(need, '3mo', '1h') if need else ({}, [])
-    hmap, rows = {s: tidy_intraday(hourly[s], now, 60) for s in hourly}, []
-    for s in cand:
-        h = hmap.get(s); r = scan_symbol(daily[s], h, 'long', CFG, extra(daily[s])); states[(s, 'long')] = state_of(r, args.min_score)
-        if r and 'zone_bot' in r and r['score'] >= args.min_score: rows.append((s, r))
+    need1h = list(dict.fromkeys([s for s, r in res.items() if r['stage'] >= 2] + active))
+    hourly, _ = download_many(need1h, '3mo', '1h') if need1h else ({}, [])
+    hmap = {s: tidy_intraday(hourly[s], now, 60) for s in hourly}
+    for s in [s for s, r in res.items() if r['stage'] >= 2 and s in hmap]:
+        try: res[s] = swing.analyse(daily[s], hmap[s]) or res[s]
+        except Exception as ex: print(f'  1H error {s}: {ex}', file=sys.stderr)
+    need15 = [s for s, r in res.items() if r.get('stage', 0) >= 4]
+    m15raw, _ = download_many(need15, '10d', '15m') if need15 else ({}, [])
+    mmap = {s: tidy_intraday(m15raw[s], now, 15) for s in m15raw}
+    for s in need15:
+        if s in mmap:
+            try: res[s] = swing.analyse(daily[s], hmap.get(s), mmap[s]) or res[s]
+            except Exception as ex: print(f'  15m error {s}: {ex}', file=sys.stderr)
+    for s, r in list(res.items()):
+        if 'stage' not in r: states[(s, 'long')] = r.get('state'); del res[s]
+    keep = [(s, r) for s, r in res.items() if (r['stage'] == 1 and r['weekly'].get('up')) or (r['stage'] >= 2 and r['score'] >= args.min_score)]
+    hot = [s for s, r in keep if r['stage'] >= 3]
     fd = lambda t: {k: tidy_daily(v, now) for k, v in download_many(t, '1y', '1d')[0].items()}
     fh = lambda t: {k: tidy_intraday(v, now, 60) for k, v in download_many(t, '5d', '1h')[0].items()}
-    checks = sector_index.confirm([s for s, _ in rows], daily, industries, fd, fh, now) if rows else {}
-    for s, r in rows:                                      # a falling sector index holds a long back: it cannot sustain
-        chk = checks[s]
-        if chk['state'] == 'falling':
-            if r['status'] == 'TRIGGERED': r['status'] = 'WATCH (index falling)'
-            r['notes'] += '; ' + f"{chk['sector_index']} is falling: wait for it to stabilise"
-        elif chk['state'] == 'unknown': r['notes'] += '; sector index data unavailable: check the index yourself'
-    rows.sort(key=lambda sr: (-sr[1]['score'], 0 if sr[1]['status'].startswith('TRIGGER') else 1)); rows = rows[:args.top]
+    checks = sector_index.confirm(hot, daily, industries, fd, fh, now) if hot else {}
+    keep.sort(key=lambda sr: (-sr[1]['stage'], -sr[1]['score']))
+    dev = [x for x in keep if x[1]['stage'] == 1][:25]; keep = [x for x in keep if x[1]['stage'] >= 2][:args.top] + dev
     items = []
-    for s, r in rows:
-        ex = dict(per.get(s, {})); ex['index_check'] = checks[s]; res = results_info(s, now) if len(items) < 25 else None
-        if res: ex['results'] = res
-        cf, ltp = with_today(daily[s], hmap.get(s)); items.append(build_item(s, 'long', r, cf, ('1D', '1H'), 70, 'swing', extra=ex, ltp=ltp))
-    for s, r in rows:                                     # a held-back trigger stays on the watch list, not as a signal
-        if r['status'] == 'WATCH (index falling)': states[(s, 'long')] = 'OK'
-    follow(args, 'swing', items, states, hmap, now, True)
-    write_json(args.out, 'swing.json', meta('swing', now, len(syms), len(daily), failed, note, items, nifty_trend=bool(n_up)))
+    for s, r in keep:
+        ex = dict(per.get(s, {}))
+        if s in checks:
+            chk = checks[s]; ex['index_check'] = chk
+            if chk['state'] == 'falling':
+                if r['status'] == 'TRIGGERED': r['status'] = 'WATCH (index falling)'; r['holds'] = r.get('holds', []) + ['index falling']
+                r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"{chk['sector_index']} is falling: wait for it to stabilise"
+            elif chk['state'] == 'unknown': r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + 'sector index data unavailable: check the index yourself'
+        if r['stage'] >= 3 and sum(1 for i in items if i.get('results')) < 30:
+            rs = results_info(s, now)
+            if rs:
+                ex['results'] = rs
+                if rs['days'] <= swing.CFG['results_hold_days']:
+                    r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"results in {rs['days']} days: exit before them or skip"
+                    if r['status'] == 'TRIGGERED': r['status'] = 'WATCH (results inside hold)'; r['holds'] = r.get('holds', []) + ['results inside hold']
+        ltp = float(hmap[s].Close.iloc[-1]) if s in hmap and len(hmap[s]) else None
+        items.append(swing_item(s, r, daily[s], hmap.get(s), mmap.get(s), ex, ltp))
+    for it in items:
+        if it['status'].startswith('WATCH'): states[(it['symbol'], 'long')] = 'OK'
+    follow(args, 'swing', [i for i in items if i['stage'] >= 2], states, hmap, now, True)
+    counts = {str(k): sum(1 for i in items if i['stage'] == k) for k in range(1, 6)}
+    write_json(args.out, 'swing.json', meta('swing', now, len(syms), len(daily), failed, note, items, nifty_trend=bool(n_up), stages=counts))
     return items
 
-def snapshot(df5, df15, vix, oi_info):
+def snapshot(df5, df15, vix, h1=None):
     last = df5.iloc[-1]; day = df5[df5.index.normalize() == df5.index[-1].normalize()]; prev = df5[df5.index.normalize() < df5.index[-1].normalize()]
     chg = (last.Close / prev.Close.iloc[-1] - 1) * 100 if len(prev) else None
     return dict(spot=_num(last.Close), change_pct=_num(chg), day_high=_num(day.High.max()), day_low=_num(day.Low.min()), above_5m=bool(last.Close > ema(df5.Close, 9).iloc[-1]),
                 above_15m=bool(df15 is not None and df15.Close.iloc[-1] > ema(df15.Close, 9).iloc[-1]), ema_5m=_num(ema(df5.Close, 9).iloc[-1]), ema_15m=_num(ema(df15.Close, 9).iloc[-1]) if df15 is not None else None,
                 pdh_pdl=[_num(x) for x in prev_day_levels(df5)], bias_up=choch_bias(df15) is not None,
-                bias_down=choch_bias(invert(df15, float(2 * df15.High.max()))) is not None if df15 is not None else False, vix=_num(vix), oi=oi_info)
+                bias_down=choch_bias(invert(df15, float(2 * df15.High.max()))) is not None if df15 is not None else False, vix=_num(vix),
+                above_1h=bool(h1.Close.iloc[-1] > ema(h1.Close, 9).iloc[-1]) if h1 is not None and len(h1) > 10 else None, ema_1h=_num(ema(h1.Close, 9).iloc[-1]) if h1 is not None and len(h1) > 10 else None)
 
 REASON = {'FAR': 'Price is far from the zone: wait for a pullback.', 'STALE': 'The structure is old.', 'WIDE': 'The zone is too tall for a sensible stop.', 'BROKEN': 'The zone was broken.',
           'EXTENDED': 'The trigger fired but price has already run away from the zone.', 'NO_BIAS': 'The 15m has no intact CHoCH in this direction.', None: 'No CHoCH + BOS found on the 5m.'}
 
+def pdl_sweep(df15, df5, side):
+    """Options playbook, 15m context: today a 15m candle wicked through the previous-day low (calls) or high (puts) and closed back inside."""
+    lv = prev_day_levels(df5)
+    if not lv or df15 is None or not len(df15): return False
+    today = df15[df15.index.normalize() == df15.index[-1].normalize()]; pdh, pdl = lv
+    if side == 'long': return bool(((today.Low < pdl) & (today.Close > pdl)).any())
+    return bool(((today.High > pdh) & (today.Close < pdh)).any())
+
+def losses_today(args, now, section='options'):
+    led = signals.load(os.path.join(args.out, f'signals_{section}.json')); d = str(pd.Timestamp(now).date())
+    return sum(1 for x in led['signals'] if x['status'] == 'CLOSED' and (x.get('closed') or '')[:10] == d and (x.get('r_final') or 0) < 0)
+
 def run_options(args, now):
-    d5, _ = download_many(['^NSEI'], '5d', '5m'); d15, _ = download_many(['^NSEI'], '10d', '15m'); dv, _ = download_many(['^INDIAVIX'], '1mo', '1d')
+    """Nifty options playbook: 1H alignment -> 15m bias (CHoCH, PDH/PDL sweep, 9 EMA) -> 5m CHoCH + BOS, FVG + OB, fib, pullback, 9 EMA close.
+    No open-interest rules. Skip expiry-day afternoons and stop after two losses in a day."""
+    d5, _ = download_many(['^NSEI'], '5d', '5m'); d15, _ = download_many(['^NSEI'], '10d', '15m'); d1h, _ = download_many(['^NSEI'], '1mo', '1h'); dv, _ = download_many(['^INDIAVIX'], '1mo', '1d')
     if '^NSEI' not in d5 or '^NSEI' not in d15: print('No Nifty data downloaded. Nothing written.', file=sys.stderr); sys.exit(2)
-    df5 = tidy_intraday(d5['^NSEI'], now, 5); df15 = tidy_intraday(d15['^NSEI'], now, 15); lv = prev_day_levels(df5)
+    df5 = tidy_intraday(d5['^NSEI'], now, 5); df15 = tidy_intraday(d15['^NSEI'], now, 15); h1 = tidy_intraday(d1h['^NSEI'], now, 60) if '^NSEI' in d1h else None; lv = prev_day_levels(df5)
     vix = float(dv['^INDIAVIX'].Close.iloc[-1]) if '^INDIAVIX' in dv else None
-    try: oi_info = oimod.analyse_chain(oimod.fetch_nse_chain('NIFTY'))
-    except Exception as ex: print(f'  OI unavailable: {ex}', file=sys.stderr); oi_info = None
     hol = holidays(args); rows, why, states = [], {}, {}
+    t = pd.Timestamp(now); expiry_pm = False
+    try: expiry_pm = str(greeks.weekly_expiry(now, hol)) == str(t.date()) and t.hour >= 13
+    except Exception: pass
+    lost = losses_today(args, now)
     for side, label in (('long', 'CALL'), ('short', 'PUT')):
-        r = scan_intraday(df5, df15, side, CFG_I, lv, section='options', oi=oi_info); states[('NIFTY 50', side)] = state_of(r, args.min_score)
+        ex_t = ['PDH/PDL sweep'] if pdl_sweep(df15, df5, side) else []
+        r = scan_intraday(df5, df15, side, CFG_I, lv, extra_ticks=ex_t, section='options'); states[('NIFTY 50', side)] = state_of(r, args.min_score)
         if r and 'zone_bot' in r and r['score'] >= args.min_score:
-            ex = {}
+            aligned = None if h1 is None or len(h1) < 10 else (h1.Close.iloc[-1] > ema(h1.Close, 9).iloc[-1]) == (side == 'long')
+            hold = None
+            if aligned is False: hold = '1H against'
+            elif expiry_pm: hold = 'expiry afternoon'
+            elif lost >= 2: hold = '2 losses today: stop'
+            if hold and r['status'] == 'TRIGGERED': r['status'] = f'WATCH ({hold})'
+            if aligned is False: r['notes'] += '; the 1H is on the other side of its 9 EMA: no trade until it aligns'
+            if lost >= 2: r['notes'] += '; two losing trades today: stop for the day (your rule)'
+            ex = dict(h1_aligned=aligned)
             try: ex['options_trade'] = greeks.pick_strike(side, float(df5.Close.iloc[-1]), r['entry'], r['sl'], [r['t1'], r['t2'], r['t3']], vix, now, hol)
             except Exception as e: print(f'  strike selection failed: {e}', file=sys.stderr)
             rows.append(build_item('NIFTY 50', side, r, df5, ('5m', '5m'), 90, 'options', label, ex))
         else: why[label] = REASON.get((r or {}).get('state'), 'No setup.')
     late_cut(rows, now)
     follow(args, 'options', rows, states, {'NIFTY 50': df5}, now, market_open(now))
-    snap = snapshot(df5, df15, vix, oi_info); snap['why_none'] = why
+    snap = snapshot(df5, df15, vix, h1); snap['why_none'] = why; snap['losses_today'] = lost; snap['expiry_afternoon'] = expiry_pm
     write_json(args.out, 'options.json', meta('options', now, 1, 1, [], 'Nifty 50 index only', rows, snapshot=snap, session_date=str(df5.index[-1].date()), lot_size=greeks.LOT_SIZE))
     return rows
 
@@ -587,6 +679,9 @@ def minutes_since(path, now):
     """Age of a results file in minutes (infinite if it is missing). Keeps the 30-minute intraday rhythm even when GitHub starts runs late."""
     try: return (now - pd.Timestamp(json.load(open(path))['generated_at'])).total_seconds() / 60
     except Exception: return float('inf')
+
+import swing                                        # the playbook swing engine uses the helpers above
+swing.bind(sys.modules[__name__])
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
