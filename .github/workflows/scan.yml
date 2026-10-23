@@ -21,6 +21,9 @@ on:
 permissions:
   contents: write                      # publishes to the gh-pages branch
 
+env:
+  PYTHONWARNINGS: ignore              # keeps the log readable (yfinance + pandas 3 deprecation spam)
+
 concurrency:
   group: scan
   cancel-in-progress: false

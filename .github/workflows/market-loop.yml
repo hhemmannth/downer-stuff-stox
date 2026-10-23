@@ -16,6 +16,9 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONWARNINGS: ignore              # keeps the log readable (yfinance + pandas 3 deprecation spam)
+
 concurrency:
   group: market-loop
   cancel-in-progress: false
