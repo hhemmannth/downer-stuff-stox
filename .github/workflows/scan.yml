@@ -1,1 +1,80 @@
+name: scan
 
+# Manual runs (Actions > scan > Run workflow) plus the swing scan before the open and after the close.
+# During market hours the market-loop workflow does the 5-minute and hourly scans.
+on:
+  schedule:
+    - cron: '7 3 * * 1-5'              # about 08:37 IST  swing + market + news
+    - cron: '47 10 * * 1-5'            # about 16:17 IST  swing + market + news
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to scan
+        type: choice
+        default: all
+        options: [all, swing, live, options, intraday, market, news]
+      test_alert:
+        description: Also send a test notification to the phone
+        type: boolean
+        default: false
+
+permissions:
+  contents: write                      # publishes to the gh-pages branch
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Send a test alert
+        if: ${{ inputs.test_alert }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+        run: python notify.py --test
+
+      - id: m
+        name: Choose what to scan
+        run: |
+          mode="${{ inputs.mode }}"
+          if [ -z "$mode" ]; then mode=swing; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Scanning: $mode"
+
+      - name: Get the published site and data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python publish.py prepare pub
+          echo "START=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Scan
+        run: python strategy_scanner.py --mode ${{ steps.m.outputs.mode }} --out pub/data --state-dir .cache
+
+      - name: Push alerts to the phone
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          NTFY_MIN_SCORE: ${{ vars.NTFY_MIN_SCORE || '6' }}
+          NTFY_STATUSES: ${{ vars.NTFY_STATUSES || 'TRIGGER' }}
+          NTFY_UPDATES: ${{ vars.NTFY_UPDATES || 'swing' }}
+          NTFY_EVENTS: ${{ vars.NTFY_EVENTS || 'on' }}
+        run: python notify.py --dir pub/data --state pub/state/notified.json
+
+      - name: Publish to GitHub Pages (gh-pages branch)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python publish.py push pub "$START" "scan ${{ steps.m.outputs.mode }}"

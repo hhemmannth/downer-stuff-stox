@@ -1,0 +1,46 @@
+name: market-loop
+
+# Runs inside GitHub during market hours: on the minute, every 5 minutes, it scans Nifty options + intraday stocks + market
+# and publishes; every hour at :25 it also runs the swing scan. A job may last 6 hours at most, so the first loop runs to about
+# 14:50 IST and a second one (queued behind it) finishes the session at 15:40. Extra start times are backups: if a loop is
+# already running they simply wait, and a loop that starts after 15:40 exits at once.
+on:
+  schedule:
+    - cron: '35 3 * * 1-5'             # 09:05 IST  start
+    - cron: '50 3 * * 1-5'             # 09:20 IST  backup start
+    - cron: '5 4 * * 1-5'              # 09:35 IST  backup start
+    - cron: '0 9 * * 1-5'              # 14:30 IST  end of session (waits for the first loop to finish)
+    - cron: '20 9 * * 1-5'             # 14:50 IST  backup
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market-loop
+  cancel-in-progress: false
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Scan every 5 minutes until the session ends
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          NTFY_MIN_SCORE: ${{ vars.NTFY_MIN_SCORE || '6' }}
+          NTFY_STATUSES: ${{ vars.NTFY_STATUSES || 'TRIGGER' }}
+          NTFY_UPDATES: ${{ vars.NTFY_UPDATES || 'swing' }}
+          NTFY_EVENTS: ${{ vars.NTFY_EVENTS || 'on' }}
+        run: python loop.py --pub pub
