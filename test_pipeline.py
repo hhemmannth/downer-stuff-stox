@@ -23,6 +23,9 @@ def fake_download(symbols, period, interval, chunk=50, pause=1.0):
 sc.download_many = fake_download
 csv_ind = {'AAA': 'Information Technology', 'BBB': 'Information Technology', 'CCC': 'Realty', 'DDD': 'Realty'}
 sc.load_nifty500 = lambda *a, **k: (['AAA', 'BBB', 'CCC', 'DDD'], 'test universe (4 symbols)', csv_ind)
+_late = sc.late_cut; sc.late_cut = lambda items, now: None        # the 15:00 cut-off depends on the clock; it is checked on its own below
+its = [{'status': 'TRIGGERED'}]; _late(its, pd.Timestamp('2026-10-22 15:05', tz='Asia/Kolkata')); its2 = [{'status': 'TRIGGERED'}]; _late(its2, pd.Timestamp('2026-10-22 14:55', tz='Asia/Kolkata'))
+LATE_OK = its[0]['status'].startswith('WATCH (after 15:00') and its2[0]['status'] == 'TRIGGERED'
 sc.results_info = lambda s, now: dict(date='2026-10-23', days=2, source='test') if s == 'AAA' else None
 chain = dict(records=dict(underlyingValue=1103, timestamp='21-Oct-2026 11:00:00', expiryDates=['27-Oct-2026'], data=[dict(strikePrice=k, expiryDate='27-Oct-2026', CE=dict(openInterest=1000 + (200000 if k == 1200 else 0), changeinOpenInterest=100), PE=dict(openInterest=1000 + (260000 if k == 1050 else 0), changeinOpenInterest=100)) for k in range(1000, 1210, 10)]))
 sc.oimod.fetch_nse_chain = lambda *a, **k: chain
@@ -71,6 +74,7 @@ check('news: events include the weekly expiry and your setup results date; risk 
 
 
 print('--- trade lifecycle ---')
+check('options and intraday: a trigger after 15:00 is shown as WATCH, not a trade (before 15:00 it stays TRIGGERED)', LATE_OK)
 LS = json.load(open(os.path.join(out, 'signals_swing.json')))
 check('swing: the triggered AAA setup is now a tracked signal with a trigger event and its trade snapshot', any(s['symbol'] == 'AAA' and s['status'] == 'ACTIVE' and s['events'][0]['kind'] == 'trigger' and s['item']['symbol'] == 'AAA' for s in LS['signals']), str([(s['symbol'], s['status']) for s in LS['signals']]))
 check('swing: BBB (waiting) is on the watch list, not a signal', any(w['symbol'] == 'BBB' for w in LS['watch'].values()) and not any(s['symbol'] == 'BBB' for s in LS['signals']))

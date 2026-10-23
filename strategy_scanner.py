@@ -18,6 +18,8 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 import explain, greeks, market, newsfeed, sector_index, signals
+import warnings
+warnings.filterwarnings('ignore')                     # yfinance + pandas 3 print thousands of deprecation lines
 import oi as oimod
 
 # ------------------------------------------------------------------ settings
@@ -418,6 +420,13 @@ def state_of(r, min_score):
     if 'zone_bot' not in r: return r.get('state')
     return 'OK' if r['score'] >= min_score else 'SCORE'
 
+def late_cut(items, now):
+    """Your rule: no new options or intraday trade after 15:00 IST. A late trigger is shown, but not as a trade to take."""
+    t = pd.Timestamp(now); t = t.tz_convert(IST) if t.tzinfo else t
+    if (t.hour, t.minute) >= (15, 0):
+        for it in items:
+            if it.get('status') == 'TRIGGERED': it['status'] = 'WATCH (after 15:00, no new trades)'
+
 def follow(args, section, items, states, bars, now, can_open):
     path = os.path.join(args.out, f'signals_{section}.json'); led = signals.load(path)
     events = signals.update(led, section, items, states, bars, now, can_open); signals.save(path, led, now)
@@ -496,6 +505,7 @@ def run_options(args, now):
             except Exception as e: print(f'  strike selection failed: {e}', file=sys.stderr)
             rows.append(build_item('NIFTY 50', side, r, df5, ('5m', '5m'), 90, 'options', label, ex))
         else: why[label] = REASON.get((r or {}).get('state'), 'No setup.')
+    late_cut(rows, now)
     follow(args, 'options', rows, states, {'NIFTY 50': df5}, now, market_open(now))
     snap = snapshot(df5, df15, vix, oi_info); snap['why_none'] = why
     write_json(args.out, 'options.json', meta('options', now, 1, 1, [], 'Nifty 50 index only', rows, snapshot=snap, session_date=str(df5.index[-1].date()), lot_size=greeks.LOT_SIZE))
@@ -533,6 +543,7 @@ def run_intraday(args, now):
             if r and 'zone_bot' in r and r['score'] >= args.min_score: rows.append((s, side, r, f5))
     rows.sort(key=lambda x: (-x[2]['score'], 0 if x[2]['status'].startswith('TRIGGER') else 1)); rows = rows[:args.top]
     items = [build_item(s, side, r, f5, ('5m', '5m'), 90, 'intraday') for s, side, r, f5 in rows]
+    late_cut(items, now)
     follow(args, 'intraday', items, states, frames, now, market_open(now))
     write_json(args.out, 'intraday.json', meta('intraday', now, len(syms), len(d5), failed, note, items))
     return items

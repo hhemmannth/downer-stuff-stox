@@ -8,6 +8,7 @@ import pandas as pd
 KEEP_DAYS = {'swing': 30, 'options': 5, 'intraday': 5}            # how long closed signals and dropped setups stay listed
 SWING_EXPIRY_DAYS = 28                                            # calendar days a swing signal may stay open
 SQUARE_OFF = (15, 15)                                             # options and intraday are closed by 15:15 IST
+LAST_ENTRY = '15:00'                                              # and no new options or intraday trade after 15:00 IST
 REASONS = {'BROKEN': 'Zone broken: price closed through the zone, so the setup is cancelled.',
            'EXTENDED': 'The trigger came after price had already run more than 1 ATR from the zone: no chase, no entry.',
            'FAR': 'Price moved away from the zone without a trigger.',
@@ -87,13 +88,16 @@ def walk(sig, bars, now):
 def update(led, section, items, states, bars, now, can_open=True):
     """items: setups from this run. states: {(symbol, direction): state or None} for everything scanned.
     bars: {symbol: closed candles to follow open trades}. Returns the new lifecycle events (for phone alerts)."""
+    late = lambda s: s['section'] in ('options', 'intraday') and pd.Timestamp(s['created']).strftime('%H:%M') >= LAST_ENTRY
+    led['signals'] = [s for s in led['signals'] if not (s['status'] == 'ACTIVE' and late(s))]   # no new trades after 15:00
     events = []; known = {s['id'] for s in led['signals']}
     for sig in led['signals']:
         if sig['status'] == 'ACTIVE': events += walk(sig, bars.get(sig['symbol']), now)
     current = {key(section, it): it for it in items}
     for k, it in current.items():
+        frame = bars.get(it['symbol']); ts = frame.index[-1] if frame is not None and len(frame) else now
+        if section in ('options', 'intraday') and pd.Timestamp(ts).strftime('%H:%M') >= LAST_ENTRY: can_open = False
         if it['status'] == 'TRIGGERED' and k not in known and can_open:
-            frame = bars.get(it['symbol']); ts = frame.index[-1] if frame is not None and len(frame) else now
             sig = new_signal(section, it, ts); led['signals'].append(sig); events.append(dict(sig['events'][0], id=sig['id'], symbol=sig['symbol'], section=section, label=sig['label'])); led['watch'].pop(k, None)
         elif not it['status'].startswith('TRIGGER'):
             w = led['watch'].get(k) or dict(first_seen=now.isoformat(timespec='minutes'))

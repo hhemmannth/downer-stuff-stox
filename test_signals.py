@@ -44,6 +44,11 @@ led7 = sg.load('/x'); sg.update(led7, 'options', [it], {}, {}, now, can_open=Fal
 check('no new signals outside market hours (can_open=False)', not led7['signals'])
 led8 = sg.load('/x'); sg.update(led8, 'options', [it], {}, {}, now); sg.update(led8, 'options', [it], {}, {}, T('2026-10-22 10:05'))
 check('the same trigger is not opened twice', len(led8['signals']) == 1)
+led9 = sg.load('/x'); sg.update(led9, 'intraday', [dict(it, symbol='LATE', label='LONG', options_trade=None)], {}, {'LATE': bars([[99, 101, 98, 100]], '2026-10-22 15:05')}, T('2026-10-22 15:11'))
+check('no new intraday or options trade from a candle at or after 15:00', not led9['signals'])
+led10 = sg.load('/x'); led10['signals'].append(dict(sg.new_signal('intraday', dict(it, symbol='OLD', label='LONG'), T('2026-10-22 15:10')), section='intraday'))
+sg.update(led10, 'intraday', [], {}, {}, T('2026-10-22 15:20'))
+check('late signals opened by the old version are cleaned out', not led10['signals'])
 import tempfile, os
 p = os.path.join(tempfile.mkdtemp(), 'signals_options.json'); sg.save(p, led8, now); back = sg.load(p)
 check('saved and loaded back intact', back['signals'][0]['id'] == led8['signals'][0]['id'] and 'updated' in back)
