@@ -1,0 +1,50 @@
+"""Lifecycle ledger tests. Run: python test_signals.py"""
+import sys
+import pandas as pd
+import signals as sg
+fails = []
+def check(name, cond, info=''):
+    print(('PASS ' if cond else 'FAIL ') + name + (f'   {info}' if info else ''))
+    if not cond: fails.append(name)
+TZ = 'Asia/Kolkata'; T = lambda s: pd.Timestamp(s, tz=TZ)
+def bars(rows, start='2026-10-22 10:00', freq='5min'):
+    return pd.DataFrame(rows, columns=['Open', 'High', 'Low', 'Close'], index=pd.date_range(start, periods=len(rows), freq=freq, tz=TZ))
+it = dict(symbol='NIFTY 50', direction='long', label='CALL', grade='A+', score=9, status='TRIGGERED', entry=100.0, sl=90.0, t1=115.0, t2=120.0, t3=130.0, bos_date='2026-10-22 09:30', zone_bot=95.0, zone_top=101.0, options_trade={'instrument': 'NIFTY 22700 CE'})
+led = sg.load('/nonexistent.json'); now = T('2026-10-22 10:00')
+ev = sg.update(led, 'options', [it], {}, {'NIFTY 50': bars([[99, 101, 98, 100]], '2026-10-22 09:55')}, now)
+s = led['signals'][0]
+check('a TRIGGERED setup becomes an ACTIVE signal with a trigger event', s['status'] == 'ACTIVE' and s['instrument'] == 'NIFTY 22700 CE' and ev and ev[0]['kind'] == 'trigger')
+ev = sg.update(led, 'options', [], {('NIFTY 50', 'long'): None}, {'NIFTY 50': bars([[100, 116, 99, 114], [114, 121, 113, 119]], '2026-10-22 10:00')}, T('2026-10-22 10:10'))
+check('the signal stays even though the setup is gone from the scan', len(led['signals']) == 1 and s['status'] == 'ACTIVE')
+check('T1 then T2 (sorted by price) are recorded, stop moves to entry then to the first target', set(s['hits']) == {'T1', 'T2'} and s['stop'] == 115.0 and [e['kind'] for e in ev] == ['t1', 't2'], str(s['hits']) + ' ' + str(s['stop']))
+check('R now follows the last close', s['r_now'] == 1.9 and s['last'] == 119)
+ev = sg.update(led, 'options', [], {}, {'NIFTY 50': bars([[119, 119.5, 114, 115]], '2026-10-22 10:10')}, T('2026-10-22 10:15'))
+check('trailing stop closes it: half at 115 (1.5R) + quarter at 120 (2R) + quarter at 115 (1.5R) = 1.62R', s['status'] == 'CLOSED' and s['outcome'] == 'TRAIL' and abs(s['r_final'] - 1.62) < 0.01, f"{s['outcome']} {s.get('r_final')}")
+led2 = sg.load('/x'); sg.update(led2, 'intraday', [dict(it, symbol='AAA', label='LONG', options_trade=None)], {}, {'AAA': bars([[99, 101, 98, 100]], '2026-10-22 09:55')}, now)
+ev = sg.update(led2, 'intraday', [], {}, {'AAA': bars([[100, 101, 89, 90]], '2026-10-22 10:00')}, T('2026-10-22 10:05'))
+s2 = led2['signals'][0]; check('stop-loss before any target is -1R', s2['outcome'] == 'SL' and s2['r_final'] == -1.0 and ev[0]['kind'] == 'sl')
+led_c = sg.load('/x'); sg.update(led_c, 'intraday', [dict(it, symbol='ZZZ', label='LONG', options_trade=None)], {}, {'ZZZ': bars([[99, 101, 98, 100]], '2026-10-22 09:55')}, now)
+sg.update(led_c, 'intraday', [], {}, {'ZZZ': bars([[100, 131, 89, 100]], '2026-10-22 10:00')}, T('2026-10-22 10:05'))
+check('the stop is checked before targets inside the same candle (cautious)', led_c['signals'][0]['outcome'] == 'SL')
+led3 = sg.load('/x'); sg.update(led3, 'intraday', [dict(it, symbol='BBB', label='LONG')], {}, {'BBB': bars([[99, 101, 98, 100]], '2026-10-22 14:55')}, T('2026-10-22 15:00'))
+ev = sg.update(led3, 'intraday', [], {}, {'BBB': bars([[100, 104, 99, 103]], '2026-10-22 15:00')}, T('2026-10-22 15:16'))
+check('intraday and options are squared off at 15:15', led3['signals'][0]['outcome'] == 'EXPIRED' and led3['signals'][0]['r_final'] == 0.3, str(led3['signals'][0].get('r_final')))
+short = dict(it, symbol='CCC', direction='short', label='PUT', entry=100.0, sl=110.0, t1=85.0, t2=80.0, t3=70.0, options_trade=None)
+led4 = sg.load('/x'); sg.update(led4, 'options', [short], {}, {'CCC': bars([[101, 102, 99, 100]], '2026-10-22 09:55')}, now)
+sg.update(led4, 'options', [], {}, {'CCC': bars([[100, 100, 84, 86], [86, 87, 69, 70]], '2026-10-22 10:00')}, T('2026-10-22 10:10'))
+check('short (PUT) side: targets below, final target closes it with the right R', led4['signals'][0]['outcome'] == 'TARGET' and abs(led4['signals'][0]['r_final'] - (0.5 * 1.5 + 0.25 * 2 + 0.25 * 3)) < .01, str(led4['signals'][0].get('r_final')))
+watch = dict(it, symbol='DDD', status='WATCH (in zone)', options_trade=None, label='LONG')
+led5 = sg.load('/x'); sg.update(led5, 'intraday', [watch], {}, {}, now)
+check('a setup in WATCH is remembered', len(led5['watch']) == 1 and not led5['signals'])
+sg.update(led5, 'intraday', [], {('DDD', 'long'): 'BROKEN'}, {}, T('2026-10-22 10:05'))
+check('when it disappears, it is listed as invalidated with the reason', len(led5['dropped']) == 1 and 'Zone broken' in led5['dropped'][0]['reason'] and not led5['watch'])
+led6 = sg.load('/x'); sg.update(led6, 'intraday', [watch], {}, {}, now); sg.update(led6, 'intraday', [], {}, {}, T('2026-10-22 10:05'))
+check('a symbol that was not scanned this run (data missing) is not wrongly invalidated', len(led6['dropped']) == 0)
+led7 = sg.load('/x'); sg.update(led7, 'options', [it], {}, {}, now, can_open=False)
+check('no new signals outside market hours (can_open=False)', not led7['signals'])
+led8 = sg.load('/x'); sg.update(led8, 'options', [it], {}, {}, now); sg.update(led8, 'options', [it], {}, {}, T('2026-10-22 10:05'))
+check('the same trigger is not opened twice', len(led8['signals']) == 1)
+import tempfile, os
+p = os.path.join(tempfile.mkdtemp(), 'signals_options.json'); sg.save(p, led8, now); back = sg.load(p)
+check('saved and loaded back intact', back['signals'][0]['id'] == led8['signals'][0]['id'] and 'updated' in back)
+print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: {fails}'); sys.exit(1 if fails else 0)

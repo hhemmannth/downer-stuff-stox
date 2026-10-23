@@ -1,0 +1,42 @@
+"""Option maths tests. Run: python test_greeks.py"""
+import datetime as dt, sys
+import greeks as g
+fails = []
+def check(name, cond, info=''):
+    print(('PASS ' if cond else 'FAIL ') + name + (f'   {info}' if info else ''))
+    if not cond: fails.append(name)
+close = lambda a, b, t=1e-3: abs(a - b) <= t
+# textbook case: S=K=100, T=1y, r=5%, sigma=20%, no dividend
+c = g.bs(100, 100, 1.0, 0.20, 'CE', r=0.05, q=0.0); p = g.bs(100, 100, 1.0, 0.20, 'PE', r=0.05, q=0.0)
+check('call price 10.4506', close(c['price'], 10.4506, 2e-3), f"{c['price']:.4f}")
+check('put price 5.5735', close(p['price'], 5.5735, 2e-3), f"{p['price']:.4f}")
+check('call delta 0.6368 and put delta -0.3632', close(c['delta'], 0.6368, 1e-3) and close(p['delta'], -0.3632, 1e-3))
+check('gamma 0.01876 (same for call and put)', close(c['gamma'], 0.01876, 1e-4) and close(c['gamma'], p['gamma'], 1e-12))
+check('vega 0.3752 per volatility point', close(c['vega'], 0.3752, 1e-3), f"{c['vega']:.4f}")
+check('call theta -0.01757 per day', close(c['theta'], -0.01757, 1e-4), f"{c['theta']:.5f}")
+check('put-call parity', close(c['price'] - p['price'], 100 - 100 * 0.951229424, 2e-3))
+q = g.bs(22700, 22700, 7 / 365, 0.14, 'CE')
+check('with a dividend yield the call is a bit cheaper than without', q['price'] < g.bs(22700, 22700, 7 / 365, 0.14, 'CE', q=0.0)['price'])
+check('expired option is intrinsic value', g.bs(105, 100, 0, 0.2, 'CE')['price'] == 5 and g.bs(95, 100, 0, 0.2, 'PE')['price'] == 5)
+IST = dt.timezone(dt.timedelta(hours=5, minutes=30)); at = lambda y, m, d, h=11, mi=0: dt.datetime(y, m, d, h, mi, tzinfo=IST)
+check('expiry is the next Tuesday (Wed 21 Oct 2026 -> Tue 27 Oct)', g.weekly_expiry(at(2026, 10, 21)) == dt.date(2026, 10, 27))
+check('on expiry morning it is today, after 15:30 it is next week', g.weekly_expiry(at(2026, 10, 27, 10)) == dt.date(2026, 10, 27) and g.weekly_expiry(at(2026, 10, 27, 16)) == dt.date(2026, 11, 3))
+check('a Tuesday holiday moves expiry to Monday (10 Nov 2026 -> Mon 9 Nov)', g.weekly_expiry(at(2026, 11, 5), ['2026-11-10']) == dt.date(2026, 11, 9))
+e, d, why = g.choose_expiry(at(2026, 10, 26, 11)); check('under 2 days away -> next weekly', e == dt.date(2026, 11, 3), f'{e} {d:.1f}d')
+e, d, why = g.choose_expiry(at(2026, 10, 21, 11)); check('6 days away -> nearest weekly', e == dt.date(2026, 10, 27), f'{e} {d:.1f}d')
+now = at(2026, 10, 21, 11)
+call = g.pick_strike('long', 22700, 22700, 22660, [22740, 22780, 22820], 14.0, now)
+put = g.pick_strike('short', 22700, 22700, 22740, [22660, 22620, 22580], 14.0, now)
+check('call setup buys a CE, put setup buys a PE', call['kind'] == 'CE' and put['kind'] == 'PE' and call['instrument'].endswith('CE') and put['instrument'].endswith('PE'))
+check('recommended delta is inside the band', call['delta_band'][0] <= call['delta'] <= call['delta_band'][1] and put['delta_band'][0] <= put['delta'] <= put['delta_band'][1], f"{call['delta']:.2f} {put['delta']:.2f}")
+check('call and put are mirror images at the same distance', abs(call['premium'] - put['premium']) / call['premium'] < 0.06, f"{call['premium']:.1f} vs {put['premium']:.1f}")
+check('premium falls at the stop and rises at targets', call['premium_sl'] < call['premium'] < call['premium_targets'][0] < call['premium_targets'][1] < call['premium_targets'][2])
+check('stop-loss premium loss is about delta times the index points', abs((call['premium'] - call['premium_sl']) - call['delta'] * 40) < 8, f"{call['premium'] - call['premium_sl']:.1f}")
+check('five candidates, exactly one recommended', len(call['candidates']) == 5 and sum(c['recommended'] for c in call['candidates']) == 1)
+check('theta is negative and gamma positive for a long option', call['theta_day'] < 0 and call['gamma'] > 0 and call['vega'] > 0)
+late = g.pick_strike('long', 22700, 22700, 22660, [22740, 22780, 22820], 14.0, at(2026, 10, 21, 14, 30))
+check('late in the day the delta band moves up (pay for delta, not theta)', late['delta_band'] == [0.50, 0.70] and late['delta'] >= 0.50, f"{late['delta']:.2f}")
+none = g.pick_strike('long', 22700, 22700, 22660, [22740, 22780, 22820], None, now)
+check('missing India VIX falls back to an assumed 14 and says so', none['iv'] == 14.0 and 'assumed' in none['iv_source'])
+check('the reasons mention delta, gamma, theta and vega', all(any(w in r for r in call['reasons']) for w in ('Delta', 'Gamma', 'Theta', 'Vega')))
+print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: {fails}'); sys.exit(1 if fails else 0)
