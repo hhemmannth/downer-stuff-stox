@@ -126,8 +126,48 @@ App.ui.callout = (kind, html) => `<div class="callout ${kind}"><span class="ic">
 App.ui.seg = (key, opts, cur) => `<div class="seg" role="group">${opts.map(([v, t]) => `<button type="button" data-seg="${key}" data-v="${v}" aria-pressed="${String(cur) === String(v)}">${t}</button>`).join('')}</div>`;
 App.tv = sym => `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(sym === 'NIFTY 50' ? 'NSE:NIFTY' : 'NSE:' + sym.replace(/&/g, '_').replace(/-/g, '_'))}`;
 
+/* ---------- private access: sign-in gate ----------
+   Nothing in the app is built and no data is loaded until an allowed account is signed in.
+   The session is remembered on each device (Supabase keeps it in this browser), so you sign in once per device. */
+App.SUPA = { url: 'https://gdecjijdudotkfikfona.supabase.co', key: 'sb_publishable_xBuw3PmoTgq-gNz3_YY7Kg_1p_adtBI' };
+App.ALLOWED = [];  // optional extra lock: put your email(s) here, e.g. ['you@example.com']. Empty = any account in your Supabase project.
+const allowedUser = u => !!u && (!App.ALLOWED.length || App.ALLOWED.map(e => e.toLowerCase()).includes(String(u.email || '').toLowerCase()));
+function gateView(msg, fatal) {
+  let g = $('#gate'); if (!g) { g = document.createElement('div'); g.id = 'gate'; document.body.appendChild(g); }
+  g.innerHTML = `<form class="gate-card" id="gateF" novalidate>
+    <div class="gate-mark"><span class="logo">DS</span><div><b>DownerStuff</b><small>Private trading desk</small></div></div>
+    <h1>Sign in</h1><p class="gate-sub">Use your Trade Insight account.</p>
+    ${fatal ? `<div class="callout bad"><span class="ic">!</span><div>${esc(msg)}</div></div>` : `
+    <div class="field"><label for="gEm">Email</label><input id="gEm" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required></div>
+    <div class="field"><label for="gPw">Password</label><input id="gPw" type="password" autocomplete="current-password" required></div>
+    <p class="gate-msg" id="gMsg" role="alert">${msg ? esc(msg) : ''}</p>
+    <button class="btn primary gate-btn" id="gBtn" type="submit">Sign in</button>`}
+  </form>`;
+  return g;
+}
+async function gate() {
+  if (!window.supabase) { gateView('The sign-in service did not load. Check your connection and reload the page.', true); return null; }
+  App.sb = window.supabase.createClient(App.SUPA.url, App.SUPA.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+  try { const { data } = await App.sb.auth.getSession(); const u = data && data.session && data.session.user;
+    if (allowedUser(u)) return u; if (u) await App.sb.auth.signOut(); } catch (e) { console.error(e); }
+  return new Promise(done => {
+    const g = gateView(''); const f = $('#gateF', g); setTimeout(() => { const e = $('#gEm', g); if (e) e.focus(); }, 50);
+    f.onsubmit = async ev => { ev.preventDefault(); const m = $('#gMsg', g), b = $('#gBtn', g), em = $('#gEm', g).value.trim(), pw = $('#gPw', g).value;
+      if (!em || !pw) { m.textContent = 'Enter your email and password.'; return; }
+      b.disabled = true; b.textContent = 'Signing in…'; m.textContent = '';
+      try { const { data, error } = await App.sb.auth.signInWithPassword({ email: em, password: pw }); if (error) throw error;
+        if (!allowedUser(data.user)) { await App.sb.auth.signOut(); throw new Error('This account does not have access.'); }
+        g.remove(); done(data.user); }
+      catch (e) { m.textContent = /invalid/i.test(e.message || '') ? 'Wrong email or password.' : (e.message || 'Sign-in failed.'); b.disabled = false; b.textContent = 'Sign in'; $('#gPw', g).select(); } };
+  });
+}
+
 /* ---------- start ---------- */
 App.start = async () => {
+  applyTheme();
+  const user = await gate(); if (!user) return;
+  App.user = user;
+  App.sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') location.reload(); });
   shell(); applyTheme();
   if (App.journal) App.journal.init();
   App.render();

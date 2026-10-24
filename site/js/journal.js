@@ -186,11 +186,11 @@ JR.signIn = async (email, password) => {
   const { data, error } = await sb.auth.signInWithPassword({ email, password }); if (error) throw error;
   Cloud.userId = data.user.id; Cloud.email = data.user.email; Cloud.off = false; await pull(true); Cloud.mode = 'cloud'; JR.paintSync(); App.render();
 };
-JR.signOut = async () => { if (sb) await sb.auth.signOut(); Cloud.userId = null; Cloud.email = null; Cloud.mode = 'signin'; JR.paintSync(); App.render(); };
+JR.signOut = async () => { if (sb) await sb.auth.signOut(); location.reload(); };
 JR.syncNow = async () => { Cloud.off = false; try { await pull(false); App.toast('Synced'); } catch (e) { fail(e); } };
 async function cloudInit() {
   if (!window.supabase) { Cloud.mode = 'local'; JR.paintSync(); return; }
-  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+  sb = App.sb || window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
   try { const { data } = await sb.auth.getSession(); const u = data && data.session && data.session.user;
     if (u) { Cloud.userId = u.id; Cloud.email = u.email; await pull(true); } else Cloud.mode = 'signin'; } catch (e) { fail(e); }
   JR.paintSync();
