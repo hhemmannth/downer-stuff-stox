@@ -313,3 +313,18 @@ hr.sep{border:0;border-top:1px solid var(--line);margin:14px 0}
 .sheet{position:fixed;inset:auto 0 0 0;z-index:110;background:var(--panel);border-radius:18px 18px 0 0;border-top:1px solid var(--line);padding:10px 12px calc(16px + env(safe-area-inset-bottom,0px));box-shadow:0 -10px 40px rgba(0,0,0,.25)}
 .sheet .nav a{font-size:16px;padding:12px}
 @media print{ .side,.top,.tabbar{display:none} .app{display:block} }
+
+/* sign-in gate */
+#gate{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px max(16px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));background:radial-gradient(1200px 600px at 50% -10%,var(--brand-soft),transparent 70%),var(--bg);overflow:auto}
+.gate-card{width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px;padding:28px 26px 26px;background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:0 18px 50px -20px var(--glow)}
+.gate-mark{display:flex;align-items:center;gap:11px;margin-bottom:6px}
+.gate-mark .logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--brand),var(--c6));display:grid;place-items:center;color:#fff;font:800 17px var(--disp);box-shadow:0 4px 12px var(--glow)}
+.gate-mark b{display:block;font-family:var(--disp);font-size:17px;letter-spacing:-.01em}
+.gate-mark small{color:var(--ink-3);font-weight:600;font-size:12.5px}
+.gate-card h1{font-size:26px}
+.gate-sub{margin:-8px 0 2px;color:var(--ink-2);font-size:14.5px}
+.gate-card .field input{padding:11px 12px;font-size:16px}
+.gate-msg{margin:0;min-height:1.2em;color:var(--bad);font-size:13.5px;font-weight:600}
+.gate-msg:empty{min-height:0;margin-top:-14px}
+.gate-btn{padding:11px 14px;font-size:15px}
+.gate-btn:disabled{opacity:.7;cursor:wait}
