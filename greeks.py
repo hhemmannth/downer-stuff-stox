@@ -61,11 +61,24 @@ def reprice(S, K, T_days, sigma, kind, hold_hours):
     """Premium after the index has moved to S and `hold_hours` of trading time have passed."""
     return bs(S, K, max(T_days - hold_hours / HOURS_PER_DAY, 1e-4) / 365.0, sigma, kind)['price']
 
-def pick_strike(side, spot, entry, sl, targets, vix, now, holidays=(), hold_hours=0.75):
+def implied_vol(price, S, K, dte_days, kind):
+    """Volatility that makes the model price equal the live option price (bisection). None if it cannot be solved."""
+    T = max(float(dte_days), 0.02) / 365.0; lo, hi = 0.01, 3.0
+    try:
+        if not (bs(S, K, T, lo, kind)['price'] <= price <= bs(S, K, T, hi, kind)['price']): return None
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            if bs(S, K, T, mid, kind)['price'] < price: lo = mid
+            else: hi = mid
+        return (lo + hi) / 2
+    except Exception: return None
+
+def pick_strike(side, spot, entry, sl, targets, vix, now, holidays=(), hold_hours=0.75, iv_label=None):
     """side is 'long' (buy a CALL) or 'short' (buy a PUT). entry, sl and targets are index levels.
     Returns the recommended strike, its Greeks, premium estimates at SL/T1/T2/T3 and five candidates."""
     kind = 'CE' if side == 'long' else 'PE'; iv_src = 'India VIX'
     if not vix or vix <= 0: vix, iv_src = 14.0, 'assumed 14 (India VIX unavailable)'
+    elif iv_label: iv_src = iv_label
     sigma = vix / 100.0; expiry, dte, why_exp = choose_expiry(now, holidays); T = dte / 365.0
     late = (now.hour * 60 + now.minute) >= 14 * 60
     lo, hi = (0.50, 0.70) if (late or dte < 3) else (0.40, 0.60)
@@ -90,7 +103,7 @@ def pick_strike(side, spot, entry, sl, targets, vix, now, holidays=(), hold_hour
                f"Theta {best['theta_day']:.1f} per day (about {best['theta_hour']:.1f} per trading hour, {best['theta_pct_hour']:.1f}% of the premium): time is the cost of waiting, so exit if the move stalls.",
                f"Vega {best['vega']:.1f} per volatility point: a 1-point fall in India VIX costs about {best['vega']:.1f} per unit, so avoid buying right before events that crush volatility.",
                f"The index must move about {be:.0f} points your way just to recover the premium (premium divided by delta).",
-               f"Volatility input: {iv_src} {vix:.1f}, held constant. These are model prices: compare with the live chain before you place the order."]
+               (f"Volatility input: {iv_src} ({vix:.1f}%), held constant. The premium at your stop and targets is a model estimate around it." if iv_label else f"Volatility input: {iv_src} {vix:.1f}, held constant. These are model prices: compare with the live chain before you place the order.")]
     return dict(side=side, kind=kind, instrument=f"NIFTY {best['strike']} {kind}", expiry=expiry.isoformat(), dte_days=round(dte, 2), iv=vix, iv_source=iv_src, hold_hours=hold_hours,
                 lot_size=LOT_SIZE, delta_band=[lo, hi], strike=best['strike'], premium=best['premium'], delta=best['delta'], gamma=best['gamma'], theta_day=best['theta_day'],
                 theta_hour=best['theta_hour'], vega=best['vega'], premium_sl=best['premium_sl'], premium_targets=best['premium_targets'], breakeven_points=be, reasons=reasons, candidates=rows)

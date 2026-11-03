@@ -17,7 +17,7 @@ import argparse, io, json, math, os, pickle, sys, time, urllib.request
 import datetime as dt
 import numpy as np
 import pandas as pd
-import explain, greeks, market, newsfeed, sector_index, signals
+import datasource, explain, greeks, market, newsfeed, sector_index, signals
 import warnings
 warnings.filterwarnings('ignore')                     # yfinance + pandas 3 print thousands of deprecation lines
 
@@ -335,6 +335,11 @@ def _extract(d, t, multi):
     return f
 
 def download_many(symbols, period, interval, chunk=50, pause=1.0):
+    """Every download goes through here: Angel One first (official data, when its secrets are set), Yahoo for the rest.
+    Returns ({symbol: frame}, [failed symbols]). See datasource.py."""
+    return datasource.fetch(symbols, period, interval, yahoo=lambda sy, pe, iv: yahoo_many(sy, pe, iv, chunk, pause))
+
+def yahoo_many(symbols, period, interval, chunk=50, pause=1.0):
     """Chunked yfinance download with one-by-one retries. Returns ({symbol: frame}, [failed symbols])."""
     import yfinance as yf
     out, missing = {}, []
@@ -486,14 +491,18 @@ def run_swing(args, now):
     b_sum, b_sec, per = market.breadth(daily, industries, nifty) if nifty is not None else (None, [], {})
     write_json(args.out, 'breadth.json', dict(generated_at=now.isoformat(timespec='seconds'), summary=b_sum, sectors=b_sec))
     turnover, states, res = {}, {}, {}
+    why = {x: (0, 'nodata', 'No data from Yahoo for this symbol in this scan') for x in failed}
     for s, f in daily.items():
         f = f.dropna(subset=['Open', 'High', 'Low', 'Close'])
         if len(f) >= CFG['min_bars']: turnover[s] = float((f.Close * f.Volume).tail(20).mean() / 1e7)
-        if len(f) < CFG['min_bars'] or not liquid(f, CFG) or bool((f.High.tail(5) == f.Low.tail(5)).any()): states[(s, 'long')] = None; continue
+        if len(f) < CFG['min_bars']: why[s] = (0, 'history', f"Only {len(f)} daily candles: the scan needs {CFG['min_bars']}"); states[(s, 'long')] = None; continue
+        if not liquid(f, CFG): why[s] = (0, 'liquidity', f"Below the liquidity filter: price under ₹{CFG['min_price']:.0f} or 20-day turnover under ₹{CFG['min_turnover_cr']:.0f} Cr"); states[(s, 'long')] = None; continue
+        if bool((f.High.tail(5) == f.Low.tail(5)).any()): why[s] = (0, 'locked', 'Locked at a circuit in the last 5 sessions: skipped'); states[(s, 'long')] = None; continue
         try: r = swing.analyse(f)
-        except Exception as ex: print(f'  error {s}: {ex}', file=sys.stderr); continue
+        except Exception as ex: print(f'  error {s}: {ex}', file=sys.stderr); why[s] = (0, 'error', f'The engine hit an error on this stock: {ex}'); continue
         states[(s, 'long')] = state_of(r, args.min_score) if r and 'stage' not in r else ('OK' if r else None)
         if r and 'stage' in r: res[s] = r
+        else: why[s] = (0, 'structure', WHY_STATE.get((r or {}).get('state'), WHY_STATE[None]))
     liq = [s for s, _ in sorted(turnover.items(), key=lambda kv: -kv[1])[:args.intraday_top]]
     write_json(args.out, 'liquid.json', dict(generated_at=now.isoformat(timespec='seconds'), top=liq))
     active = [x['symbol'] for x in signals.load(os.path.join(args.out, 'signals_swing.json'))['signals'] if x['status'] == 'ACTIVE']
@@ -511,7 +520,7 @@ def run_swing(args, now):
             try: res[s] = swing.analyse(daily[s], hmap.get(s), mmap[s]) or res[s]
             except Exception as ex: print(f'  15m error {s}: {ex}', file=sys.stderr)
     for s, r in list(res.items()):
-        if 'stage' not in r: states[(s, 'long')] = r.get('state'); del res[s]
+        if 'stage' not in r: states[(s, 'long')] = r.get('state'); why[s] = (0, 'structure', WHY_STATE.get(r.get('state'), WHY_STATE[None])); del res[s]
     keep = [(s, r) for s, r in res.items() if (r['stage'] == 1 and r['weekly'].get('up')) or (r['stage'] >= 2 and r['score'] >= args.min_score)]
     hot = [s for s, r in keep if r['stage'] >= 3]
     fd = lambda t: {k: tidy_daily(v, now) for k, v in download_many(t, '1y', '1d')[0].items()}
@@ -519,6 +528,13 @@ def run_swing(args, now):
     checks = sector_index.confirm(hot, daily, industries, fd, fh, now) if hot else {}
     keep.sort(key=lambda sr: (-sr[1]['stage'], -sr[1]['score']))
     dev = [x for x in keep if x[1]['stage'] == 1][:25]; keep = [x for x in keep if x[1]['stage'] >= 2][:args.top] + dev
+    listed = {x[0] for x in keep}
+    for x, r in res.items():
+        if x in listed: continue
+        k = r['stage']
+        if k == 1 and not r['weekly'].get('up'): why[x] = (1, 'weekly', 'Daily CHoCH found, but the weekly trend is not up (your weekly location filter)', r['score'])
+        elif k >= 2 and r['score'] < args.min_score: why[x] = (k, 'score', f"Stage {k} ({swing.STAGE_SHORT[k]}), but the score {r['score']}/10 is below your minimum {args.min_score}/10", r['score'])
+        else: why[x] = (k, 'ranked', f"Stage {k} ({swing.STAGE_SHORT[k]}), score {r['score']}/10, but ranked below the top {args.top if k >= 2 else 25} shown", r['score'])
     items = []
     for s, r in keep:
         ex = dict(per.get(s, {}))
@@ -541,8 +557,33 @@ def run_swing(args, now):
         if it['status'].startswith('WATCH'): states[(it['symbol'], 'long')] = 'OK'
     follow(args, 'swing', [i for i in items if i['stage'] >= 2], states, hmap, now, True)
     counts = {str(k): sum(1 for i in items if i['stage'] == k) for k in range(1, 6)}
-    write_json(args.out, 'swing.json', meta('swing', now, len(syms), len(daily), failed, note, items, nifty_trend=bool(n_up), stages=counts))
+    for it in items: why[it['symbol']] = (it['stage'], 'listed', f"Listed: stage {it['stage']} ({it['stage_label']}), {it['status']}", it['score'])
+    for x in syms: why.setdefault(x, (0, 'nodata', 'No data from Yahoo for this symbol in this scan'))
+    light, charts = split_charts(items)
+    write_json(args.out, 'swing_charts.json', dict(generated_at=now.isoformat(timespec='seconds'), charts=charts))
+    write_json(args.out, 'swing.json', meta('swing', now, len(syms), len(daily), failed, note, light, nifty_trend=bool(n_up), stages=counts))
+    px = {x: round(float(f.Close.iloc[-1]), 2) for x, f in daily.items() if len(f)}
+    write_json(args.out, 'explain.json', dict(generated_at=now.isoformat(timespec='seconds'), min_score=args.min_score, top=args.top,
+               rows={x: [w[0], w[1], w[2], w[3] if len(w) > 3 else None, px.get(x), industries.get(x)] for x, w in why.items()}))
     return items
+
+WHY_STATE = {None: 'No live daily structure: no recent CHoCH, and no BOS with a usable pullback zone',
+             'STALE': 'The last daily BOS is more than 60 sessions old: the structure is too old to trade',
+             'WIDE': 'The daily zone is too wide (over 3.5 ATR or 10% of price): the stop would be too wide',
+             'BROKEN': 'Price closed below the daily zone: the structure failed',
+             'FAR': 'Price is far above the last daily zone (over 4 ATR, or the BOS is over 20 sessions old): wait for a new structure, no chasing',
+             'APPROACH': 'Price is approaching the daily zone', 'IN_ZONE': 'Price is in the daily zone'}
+
+def split_charts(items):
+    """swing.json stays small (it reloads every minute on the phone): the 1D/1H/15m candles go to swing_charts.json, which the
+    trade page loads only when you open a setup. Each item keeps the list of timeframes and the last 60 daily closes for its card."""
+    light, charts = [], {}
+    for it in items:
+        ch = it.get('charts') or {}; charts[it['symbol']] = ch
+        x = {k: v for k, v in it.items() if k not in ('charts', 'times', 'candles', 'ema')}
+        x['tfs'] = list(ch); x['spark'] = [c[3] for c in (ch.get('1D') or {}).get('candles', [])[-60:]]
+        light.append(x)
+    return light, charts
 
 def snapshot(df5, df15, vix, h1=None):
     last = df5.iloc[-1]; day = df5[df5.index.normalize() == df5.index[-1].normalize()]; prev = df5[df5.index.normalize() < df5.index[-1].normalize()]
@@ -593,7 +634,7 @@ def run_options(args, now):
             if aligned is False: r['notes'] += '; the 1H is on the other side of its 9 EMA: no trade until it aligns'
             if lost >= 2: r['notes'] += '; two losing trades today: stop for the day (your rule)'
             ex = dict(h1_aligned=aligned)
-            try: ex['options_trade'] = greeks.pick_strike(side, float(df5.Close.iloc[-1]), r['entry'], r['sl'], [r['t1'], r['t2'], r['t3']], vix, now, hol)
+            try: ex['options_trade'] = live_strike(side, float(df5.Close.iloc[-1]), r, vix, now, hol)
             except Exception as e: print(f'  strike selection failed: {e}', file=sys.stderr)
             rows.append(build_item('NIFTY 50', side, r, df5, ('5m', '5m'), 90, 'options', label, ex))
         else: why[label] = REASON.get((r or {}).get('state'), 'No setup.')
@@ -602,6 +643,18 @@ def run_options(args, now):
     snap = snapshot(df5, df15, vix, h1); snap['why_none'] = why; snap['losses_today'] = lost; snap['expiry_afternoon'] = expiry_pm
     write_json(args.out, 'options.json', meta('options', now, 1, 1, [], 'Nifty 50 index only', rows, snapshot=snap, session_date=str(df5.index[-1].date()), lot_size=greeks.LOT_SIZE))
     return rows
+
+def live_strike(side, spot, r, vix, now, hol):
+    """Strike by delta as before. With Angel One connected, the volatility comes from the live option price instead of India VIX,
+    and each strike carries its live last price, bid and ask."""
+    tg = [r['t1'], r['t2'], r['t3']]; ot = greeks.pick_strike(side, spot, r['entry'], r['sl'], tg, vix, now, hol)
+    q = datasource.option_quotes(ot['expiry'], [c['strike'] for c in ot['candidates']] + [round(spot / greeks.STEP) * greeks.STEP], ot['kind'])
+    if not q: return ot
+    atm = min(q, key=lambda k: abs(k - spot)); iv = greeks.implied_vol(q[atm]['ltp'], spot, atm, ot['dte_days'], ot['kind'])
+    if iv: ot = greeks.pick_strike(side, spot, r['entry'], r['sl'], tg, iv * 100, now, hol, iv_label=f"implied from the live {atm} {ot['kind']} at {q[atm]['ltp']:.2f}")
+    for c in ot['candidates']: c['live'] = q.get(c['strike'])
+    ot['live'] = q.get(ot['strike']); ot['live_at'] = pd.Timestamp.now(tz=IST).isoformat(timespec='seconds')
+    return ot
 
 def quarter_index(ts): return (ts.hour * 60 + ts.minute - 555) // 15          # which 15-minute candle of the session we are in
 
@@ -672,7 +725,7 @@ def run_news(args, now):
     for name in ('swing', 'intraday'):
         for s in (read_json(args.out, name + '.json') or {}).get('setups', []):
             if (s.get('results') or {}).get('date'): results[s['symbol']] = s['results']['date']
-    ev = newsfeed.upcoming(now, cfg, results); news.update(events=ev, risk_flags=newsfeed.risk_flags(ev))
+    ev = newsfeed.upcoming(now, cfg, results); news.update(events=ev, risk_flags=newsfeed.risk_flags(ev), holidays=[h['date'] for h in cfg.get('holidays', [])])
     write_json(args.out, 'news.json', news); return news
 
 def minutes_since(path, now):
@@ -688,15 +741,34 @@ def main():
     p.add_argument('--mode', choices=['swing', 'options', 'intraday', 'market', 'news', 'live', 'all'], default='swing')
     p.add_argument('--out', default='_site/data'); p.add_argument('--watchlist', default='watchlist.txt'); p.add_argument('--universe-csv', default=None); p.add_argument('--events', default='events.json'); p.add_argument('--state-dir', default='.state')
     p.add_argument('--min-score', type=int, default=4); p.add_argument('--top', type=int, default=60); p.add_argument('--intraday-top', type=int, default=100)
-    args = p.parse_args(); now = pd.Timestamp.now(tz=IST)
+    args = p.parse_args(); now = pd.Timestamp.now(tz=IST); datasource.configure(args.state_dir)
     news_due = minutes_since(os.path.join(args.out, 'news.json'), now) >= 25
     modes = {'swing': ['swing'] + ([] if market_open(now) else ['market', 'news']), 'options': ['options'], 'intraday': ['intraday'], 'market': ['market'], 'news': ['news'], 'all': ['swing', 'options', 'intraday', 'market', 'news']}.get(args.mode)
     if args.mode == 'live': modes = ['options', 'intraday', 'market'] + (['news'] if news_due else [])         # Nifty and intraday stocks every 5 minutes, news about every 30
     runs = dict(swing=run_swing, options=run_options, intraday=run_intraday, market=run_market, news=run_news)
+    t0, sections = time.time(), {}
     for m in modes:
-        try: runs[m](args, now)
-        except SystemExit: raise
-        except Exception as ex: print(f'{m} failed: {ex}', file=sys.stderr)         # one section failing must not stop the others
+        t1 = time.time()
+        try: runs[m](args, now); sections[m] = dict(ok=True, seconds=round(time.time() - t1, 1))
+        except SystemExit:
+            sections[m] = dict(ok=False, seconds=round(time.time() - t1, 1), error='no data downloaded (Yahoo blocked or offline)'); write_health(args, now, sections, t0); raise
+        except Exception as ex:
+            print(f'{m} failed: {ex}', file=sys.stderr); sections[m] = dict(ok=False, seconds=round(time.time() - t1, 1), error=str(ex)[:300])    # one section failing must not stop the others
+    write_health(args, now, sections, t0)
+
+def write_health(args, now, sections, t0):
+    """data/health/<mode>.json: when this run finished, how long each section took, and what failed. Read by the System health page."""
+    for m, x in sections.items():
+        js = read_json(args.out, m + '.json') or {}
+        if 'scanned' in js: x.update(scanned=js.get('scanned'), universe=js.get('universe'), failed_n=len(js.get('failed') or []), failed=(js.get('failed') or [])[:20])
+    try: write_json(os.path.join(args.out, 'health'), args.mode + '.json', dict(mode=args.mode, started_at=now.isoformat(timespec='seconds'),
+                    finished_at=pd.Timestamp.now(tz=IST).isoformat(timespec='seconds'), seconds=round(time.time() - t0, 1), ok=all(x['ok'] for x in sections.values()), sections=sections, data=datasource.report(),
+                    run_url=run_url()))
+    except Exception as ex: print(f'health not written: {ex}', file=sys.stderr)
+
+def run_url():
+    e = os.environ
+    return f"{e.get('GITHUB_SERVER_URL', 'https://github.com')}/{e['GITHUB_REPOSITORY']}/actions/runs/{e['GITHUB_RUN_ID']}" if e.get('GITHUB_REPOSITORY') and e.get('GITHUB_RUN_ID') else None
 
 if __name__ == '__main__':
     main()

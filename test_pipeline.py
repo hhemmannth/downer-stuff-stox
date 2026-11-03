@@ -23,6 +23,9 @@ FR = {
 def fake_download(symbols, period, interval, chunk=50, pause=1.0):
     out = {s: FR[interval][s].copy() for s in symbols if s in FR[interval]}; return out, [s for s in symbols if s not in out]
 sc.download_many = fake_download
+import datetime as _dt
+_we = sc.greeks.weekly_expiry                    # keep the test independent of the clock: never treat "now" as an expiry afternoon
+sc.greeks.weekly_expiry = lambda now, holidays=(): (lambda d: d + _dt.timedelta(days=7) if str(d) == str(pd.Timestamp(now).date()) else d)(_we(now, holidays))
 csv_ind = {'AAA': 'Information Technology', 'BBB': 'Information Technology', 'CCC': 'Realty', 'DDD': 'Realty', 'PBK': 'Information Technology'}
 sc.load_nifty500 = lambda *a, **k: (['AAA', 'BBB', 'CCC', 'DDD', 'PBK'], 'test universe (5 symbols)', csv_ind)
 _late = sc.late_cut; sc.late_cut = lambda items, now: None        # the 15:00 cut-off depends on the clock; it is checked on its own below
@@ -46,7 +49,16 @@ check('swing: long only, even though a bearish stock is in the universe', S and 
 check('swing: the playbook example walks all five stages to a 15m entry: TRIGGERED, entry 1,070', P.get('stage') == 5 and P.get('status') == 'TRIGGERED' and P.get('entry') == 1070, str((P.get('stage'), P.get('status'), P.get('entry'))))
 check('swing: stop below the daily OB with a buffer, T1/T2/T3 at 1R/2R/3R, on the 5 paise tick', 1035 <= P['sl'] <= 1037 and abs((P['t1'] - P['entry']) - (P['entry'] - P['sl'])) < 0.06 and all(abs(P[k] / 0.05 - round(P[k] / 0.05)) < 1e-6 for k in ('entry', 'sl', 't1', 't2', 't3', 'zone_bot', 'zone_top')))
 check('swing: scorecard 10/10 A+ with the playbook ticks', (P['score'], P['grade']) == (10, 'A+') and set(P['ticks']) == {'Key level', 'Fib 0.618', 'MTF EMA'}, str((P['score'], P['ticks'])))
-check('swing: 1D, 1H and 15m charts are attached for the trade page', set(P['charts']) == {'1D', '1H', '15m'} and len(P['charts']['15m']['candles']) == len(PBM) and len(P['times'][0]) == 10)
+CH = J('swing_charts')['charts'].get('PBK', {})
+check('swing: 1D, 1H and 15m charts are written to swing_charts.json for the trade page', set(CH) == {'1D', '1H', '15m'} and len(CH['15m']['candles']) == len(PBM) and len(CH['1D']['times'][0]) == 10)
+check('swing: swing.json stays light (no candles), with the timeframe list and a 60-close sparkline', all('charts' not in x and 'candles' not in x for x in sw['setups']) and P['tfs'] == ['1D', '1H', '15m'] and 0 < len(P['spark']) <= 60)
+EX = J('explain')['rows']
+check('explain: every symbol in the universe gets a reason', set(EX) >= {'AAA', 'BBB', 'CCC', 'DDD', 'PBK'}, str({k: v[1] for k, v in EX.items()}))
+check('explain: a listed setup says so, with its stage', EX['PBK'][1] == 'listed' and EX['PBK'][0] == 5 and 'stage 5' in EX['PBK'][2])
+check('explain: a stock that is not a setup gets a plain reason', all(EX[k][1] in ('structure', 'weekly', 'score', 'ranked', 'listed', 'liquidity', 'history', 'locked', 'nodata', 'error') and len(EX[k][2]) > 20 for k in EX))
+HL = json.load(open(os.path.join(out, 'health', 'all.json')))
+check('health: the run records each section, its time and the scanned counts', HL['mode'] == 'all' and set(HL['sections']) >= {'swing', 'options', 'intraday', 'market', 'news'} and all('seconds' in x for x in HL['sections'].values()) and HL['sections']['swing'].get('universe') == 5, str(HL['sections'].get('swing')))
+check('news: carries the NSE holiday list for the app', isinstance(nw.get('holidays'), list))
 check('swing: the playbook checklist and plan are attached', len(P['checklist']) >= 12 and P['plan'] and any('No early breakeven' in x for x in P['plan']['trail']) and P['m15']['trigger'])
 check('swing: sector, sector strength and relative strength are attached', P['sector'] == 'Information Technology' and P['sector_state'] in ('strong', 'neutral', 'weak') and isinstance(P['rs20'], float))
 check('swing: the results date is attached (20 days away: outside the hold, so no hold-back)', P['results']['days'] == 20 and P['status'] == 'TRIGGERED')

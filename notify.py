@@ -13,8 +13,10 @@ Env vars:
   NTFY_UPDATES     default swing.  swing = only the hourly swing scans, all = every fresh scan (about 150 pushes a day at a 5-minute rhythm), off = none.
   PAGE_URL         optional, opens when you tap the push
   NTFY_URL         default https://ntfy.sh
+  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   optional: the same pushes as Telegram messages with an "Open" button.
+                   TELEGRAM_CHAT_ID can hold several ids separated by commas. Either channel alone is enough.
 No Priority header is sent: some iOS installs of the ntfy app do not show pushes that carry one."""
-import argparse, datetime, json, os, sys, urllib.request
+import argparse, datetime, html, json, os, sys, urllib.request
 
 SECTIONS = [('swing', 'Swing'), ('options', 'Nifty options'), ('intraday', 'Intraday')]
 FRESH_MINUTES = 20
@@ -22,10 +24,35 @@ FRESH_MINUTES = 20
 def ist_now(): return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=5, minutes=30)
 def fmt(v): return '-' if v is None else f'{v + 1e-9:,.1f}'
 
+EMOJI = {'star': '⭐', 'chart_with_upwards_trend': '📈', 'chart_with_downwards_trend': '📉', 'white_check_mark': '✅', 'trophy': '🏆', 'x': '❌', 'lock': '🔒',
+         'hourglass': '⏳', 'arrows_counterclockwise': '🔄', 'rotating_light': '🚨', 'bell': '🔔'}
+
+def telegram_ready(): return bool(os.environ.get('TELEGRAM_BOT_TOKEN', '').strip() and os.environ.get('TELEGRAM_CHAT_ID', '').strip())
+
+def telegram(title, body, tags, click):
+    """One Telegram message per chat id: bold title, the body, and an Open button that goes straight to the trade."""
+    token = os.environ['TELEGRAM_BOT_TOKEN'].strip(); api = os.environ.get('TELEGRAM_API', 'https://api.telegram.org').rstrip('/')
+    icon = ''.join(EMOJI.get(t, '') for t in str(tags).split(','))
+    text = (f'{icon} ' if icon else '') + f'<b>{html.escape(title)}</b>\n{html.escape(body)}'
+    msg = dict(text=text[:4000], parse_mode='HTML', disable_web_page_preview=True)
+    if click and click.startswith('https://'): msg['reply_markup'] = {'inline_keyboard': [[{'text': 'Open in DownerStuff', 'url': click}]]}
+    for chat in [c.strip() for c in os.environ['TELEGRAM_CHAT_ID'].split(',') if c.strip()]:
+        req = urllib.request.Request(f'{api}/bot{token}/sendMessage', data=json.dumps(dict(msg, chat_id=chat)).encode(), headers={'Content-Type': 'application/json'}, method='POST')
+        urllib.request.urlopen(req, timeout=20).read()
+
 def post(base, topic, title, body, tags, click):
-    headers = {'Title': title.encode('ascii', 'ignore').decode(), 'Tags': tags}
-    if click: headers['Click'] = click
-    urllib.request.urlopen(urllib.request.Request(f'{base}/{topic}', data=body.encode('utf-8'), headers=headers, method='POST'), timeout=20).read()
+    """Send to every configured channel (ntfy and/or Telegram). Fails only if every channel failed."""
+    ok, errs = 0, []
+    if topic:
+        headers = {'Title': title.encode('ascii', 'ignore').decode(), 'Tags': tags}
+        if click: headers['Click'] = click
+        try: urllib.request.urlopen(urllib.request.Request(f'{base}/{topic}', data=body.encode('utf-8'), headers=headers, method='POST'), timeout=20).read(); ok += 1
+        except Exception as ex: errs.append(f'ntfy: {ex}')
+    if telegram_ready():
+        try: telegram(title, body, tags, click); ok += 1
+        except Exception as ex: errs.append(f'telegram: {ex}')
+    if not ok: raise RuntimeError('; '.join(errs) or 'no channel configured')
+    if errs: print('  ' + '; '.join(errs), file=sys.stderr)
 
 from urllib.parse import quote
 def deep(click, **q):
@@ -61,9 +88,9 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--dir', default='_site/data'); ap.add_argument('--state', default='.state/notified.json')
     ap.add_argument('--test', action='store_true', help='send one test push and exit'); a = ap.parse_args()
     topic = os.environ.get('NTFY_TOPIC', '').strip(); click = os.environ.get('PAGE_URL', '').strip(); base = os.environ.get('NTFY_URL', 'https://ntfy.sh').rstrip('/')
-    if not topic: print('NTFY_TOPIC not set, skipping alerts.'); return 1 if a.test else 0
+    if not topic and not telegram_ready(): print('Neither NTFY_TOPIC nor TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID is set, skipping alerts.'); return 1 if a.test else 0
     if a.test:
-        try: post(base, topic, 'DownerStuffScreener: test', 'If you see this banner on the lock screen, pushes work. You will get a push when a setup triggers (score 6 or more) and when a scan finishes.', 'white_check_mark', click); print('test alert sent'); return 0
+        try: post(base, topic, 'DownerStuffScreener: test', 'If you see this, pushes work. You will get one when a setup triggers (score 6 or more) and when a scan finishes.', 'white_check_mark', click); print('test alert sent to ' + ' and '.join(x for x, on in (('ntfy', bool(topic)), ('Telegram', telegram_ready())) if on)); return 0
         except Exception as ex: print(f'test alert failed: {ex}', file=sys.stderr); return 1
     min_score = int(os.environ.get('NTFY_MIN_SCORE', '6') or 6); updates = os.environ.get('NTFY_UPDATES', 'swing').strip().lower() or 'swing'
     statuses = tuple(x.strip().upper() for x in os.environ.get('NTFY_STATUSES', 'TRIGGER').split(',') if x.strip()); now = ist_now(); today = now.strftime('%Y-%m-%d')
