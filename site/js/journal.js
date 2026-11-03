@@ -186,7 +186,7 @@ JR.signIn = async (email, password) => {
   const { data, error } = await sb.auth.signInWithPassword({ email, password }); if (error) throw error;
   Cloud.userId = data.user.id; Cloud.email = data.user.email; Cloud.off = false; await pull(true); Cloud.mode = 'cloud'; JR.paintSync(); App.render();
 };
-JR.signOut = async () => { if (sb) await sb.auth.signOut(); location.reload(); };
+JR.signOut = async () => { App.clearCache(); if (sb) await sb.auth.signOut(); location.reload(); };
 JR.syncNow = async () => { Cloud.off = false; try { await pull(false); App.toast('Synced'); } catch (e) { fail(e); } };
 async function cloudInit() {
   if (!window.supabase) { Cloud.mode = 'local'; JR.paintSync(); return; }

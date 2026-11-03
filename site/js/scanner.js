@@ -19,7 +19,7 @@ function card(sec, it) {
   const ot = it.options_trade, stage = it.stage, warn = [...(it.holds || []).map(x => 'Held: ' + x), ...(it.notes || [])].slice(0, 2);
   const lv = it.entry != null ? [['e', it.stage >= 5 || hot ? 'Entry' : 'Plan entry', it.entry], ['s', 'Stop', it.sl], ['t', 'T1', it.t1], ['t', 'T2', it.t2]] : [['', 'CHoCH', it.choch_level], ['', 'Price', it.price]];
   const sub = sec === 'options' ? (ot ? `${esc(ot.instrument)} · Δ ${fmt(ot.delta)} · ₹${fmt(ot.premium)}` : 'Nifty 50 index') : [it.sector, it.sector_state ? it.sector_state + ' sector' : '', it.results && it.results.days != null ? `results in ${it.results.days}d` : ''].filter(Boolean).join(' · ');
-  const spark = it.candles ? App.charts.spark(it.candles.slice(-60).map(c => c[3]), { lo: it.zone_bot, hi: it.zone_top, sl: it.sl }) : '';
+  const sp = it.spark || (it.candles ? it.candles.slice(-60).map(c => c[3]) : null), spark = sp && sp.length ? App.charts.spark(sp, { lo: it.zone_bot, hi: it.zone_top, sl: it.sl }) : '';
   return `<a class="sc${hot ? ' hot' : ''}" href="${href}"><div class="sc-h"><div class="nm"><b>${esc(it.symbol)} ${sec !== 'swing' ? `<span class="tag ${it.direction}">${esc(it.label)}</span>` : ''}</b><small>${sub || '&nbsp;'}</small></div><div class="score">${App.ui.ring(it.score)}${App.ui.grade(it.grade)}</div></div>
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="st ${stCls(it)}">${esc(it.status)}</span>${tracked ? '<span class="pill ok">tracked</span>' : ''}${App.journal.findByTag(key(sec, it)) ? '<span class="pill info">in journal</span>' : ''}</div>
     ${stage ? `<div class="stages${stage === 5 ? ' s5' : ''}" title="Playbook stage ${stage} of 5">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= stage ? 'on' : ''}"></i>`).join('')}</div>` : ''}
@@ -58,11 +58,29 @@ App.pages.swing = () => {
   let L = S.filter(s => (u.stage === 'all' ? s.stage >= 2 : s.stage === +u.stage) && (u.grade === 'all' || (u.grade === 'A' ? ['A', 'A+'].includes(s.grade) : s.grade === 'A+')) && (!u.q || s.symbol.includes(u.q.toUpperCase()) || (s.sector || '').toLowerCase().includes(u.q.toLowerCase())));
   h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${App.ui.seg('swstage', [['all', 'All active'], ...[5, 4, 3, 2, 1].map(k => [k, STG[k][0]])], u.stage)}${App.ui.seg('swgrade', [['all', 'Any grade'], ['A', 'A and A+'], ['A+', 'A+ only']], u.grade)}<input class="inp" style="width:180px" id="swQ" placeholder="Symbol or sector" value="${esc(u.q)}" aria-label="Filter"></div>`;
   h += L.length ? `<div class="cards">${L.map(s => card('swing', s)).join('')}</div>` : `<div class="card"><div class="bd">${App.ui.empty('Nothing at this stage right now', u.stage === 'all' ? 'No stock is past the BOS with a pullback zone. Developing setups (CHoCH only) are in stage 1.' : '')}</div></div>`;
+  h += whyCard();
   h += `<p class="help" style="margin-top:12px">${d.scanned}/${d.universe} stocks scanned (${esc(d.note || '')}). Nifty ${d.nifty_trend ? 'is above' : 'is below'} its 21 EMA. Stages 1 and 2 never alert; only a 15m entry with a clean checklist does.</p>`;
   return h;
 };
+const WHY_TONE = { listed: 'good', score: 'warn', ranked: 'warn', weekly: 'warn' };
+function whyCard() {
+  const u = SU(), q = (u.why || '').trim().toUpperCase(), ex = App.lazyNow('explain');
+  let out = '';
+  if (q) {
+    if (!ex) out = `<p class="help">Loading the scan details…</p>`;
+    else { const row = ex.rows[q], near = row ? [] : Object.keys(ex.rows).filter(k => k.startsWith(q.slice(0, 3))).slice(0, 8);
+      if (row) { const [stage, code, text, score, px, ind] = row;
+        out = App.ui.callout(WHY_TONE[code] || 'bad', `<b>${esc(q)}</b>${ind ? ` <small class="muted">${esc(ind)}</small>` : ''}${px != null ? ` · last ${fmt(px)}` : ''}<br>${esc(text)}${code === 'listed' ? ` <a href="#/trade?s=swing&id=${encodeURIComponent(q + '|long')}">Open it</a>` : ''}`); }
+      else out = App.ui.callout('info', `<b>${esc(q)}</b> is not in the Nifty 500 list this scan used.${near.length ? ` Did you mean ${near.map(k => `<a href="#" data-why="${k}">${k}</a>`).join(', ')}?` : ' Check the NSE symbol (for example, BANKBARODA, not Bank of Baroda).'}`); }
+  }
+  return `<div class="card" style="margin-top:14px"><div class="hd"><h2>Why isn't a stock here?</h2><span class="cap">every stock the scan checked, and the step where it stopped</span></div><div class="bd">
+    <form id="whyF" style="display:flex;gap:8px;margin-bottom:${out ? 12 : 0}px"><input class="inp" id="whyQ" placeholder="NSE symbol, e.g. COFORGE" value="${esc(u.why || '')}" autocapitalize="characters" autocomplete="off" spellcheck="false" style="max-width:260px"><button class="btn" type="submit">Check</button></form>${out}</div></div>`;
+}
 App.binds.swing = () => {
   const u = SU(); bindView('swing', u);
+  if (u.why && App.lazyAge('explain') > 60000) App.lazy('explain').then(() => { if (App.route().page === 'swing') App.render(); });
+  const f = $('#whyF'); if (f) { const go = v => { u.why = v; App.render(); App.lazy('explain').then(() => App.render()); };
+    f.onsubmit = e => { e.preventDefault(); go($('#whyQ').value); }; $$('[data-why]').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.why); }); }
   $$('[data-stage]').forEach(b => b.onclick = () => { u.stage = String(u.stage) === b.dataset.stage ? 'all' : b.dataset.stage; App.render(); });
   $$('[data-seg="swstage"]').forEach(b => b.onclick = () => { u.stage = b.dataset.v; App.render(); });
   $$('[data-seg="swgrade"]').forEach(b => b.onclick = () => { u.grade = b.dataset.v; App.render(); });
@@ -128,7 +146,7 @@ function chartSpec(it, tf, sig) {
     if (it.sweep && it.sweep_date) mk.push({ t: it.sweep_date, p: it.sweep_low, label: 'Sweep', c: 'bad', below: true });
   } else if (tf === '1H') {
     z.push({ lo: it.zone_bot, hi: it.zone_top, c: 'brand', label: '1D zone', k: 2 }); if (isNum(it.fib_lo)) z.push({ lo: it.fib_lo, hi: it.fib_hi, c: 'sun', label: 'Fib', k: 1, scale: false });
-    const h1 = it.h1 || {}; if (h1.t_touch) mk.push({ t: toLbl(h1.t_touch), p: it.pullback_low, label: 'Pullback', c: 'good', below: true }); if (h1.t_confirm) mk.push({ t: toLbl(h1.t_confirm), p: (it.charts['1H'].candles[it.charts['1H'].times.indexOf(toLbl(h1.t_confirm))] || [])[3], label: 'Confirm', c: 'good' });
+    const h1 = it.h1 || {}; if (h1.t_touch) mk.push({ t: toLbl(h1.t_touch), p: it.pullback_low, label: 'Pullback', c: 'good', below: true }); if (h1.t_confirm) mk.push({ t: toLbl(h1.t_confirm), p: (((chartsOf(it) || {})['1H'] || { candles: [] }).candles[(((chartsOf(it) || {})['1H'] || { times: [] }).times || []).indexOf(toLbl(h1.t_confirm))] || [])[3], label: 'Confirm', c: 'good' });
   } else if (tf === '15m') {
     const m = it.m15 || {}; z.push({ lo: it.zone_bot, hi: it.zone_top, c: 'brand', label: '1D zone', k: 1, scale: false });
     if (m.fvg && isNum(m.fvg.low)) z.push({ lo: m.fvg.low, hi: m.fvg.high, c: 'good', label: '15m FVG', k: 2 }); if (m.ob && isNum(m.ob.low)) z.push({ lo: m.ob.low, hi: m.ob.high, c: 'c1', label: '15m OB', k: 2 });
@@ -138,8 +156,16 @@ function chartSpec(it, tf, sig) {
   plan.forEach(([l, p, c, dash, k]) => { if (isNum(p) && (tf !== '15m' || l === 'Entry' || l === 'SL')) lv.push({ p, c, dash, label: (hit(l) ? '✓ ' : '') + l, k, w: l === 'Entry' || l === 'SL' ? 1.6 : 1.1, scale: tf === '15m' ? l === 'Entry' : l !== 'T3' && l !== 'T2' }); });
   return { zones: z, levels: lv, marks: mk };
 }
+function chartsOf(it) {
+  if (it.charts) return it.charts;
+  if (it.section === 'swing' && it.tfs) { const all = App.lazyNow('swing_charts'); return all && all.charts ? all.charts[it.symbol] || null : null; }
+  return { [it.tf_structure || '5m']: { times: it.times, candles: it.candles, ema: it.ema } };
+}
 function chartFor(it, tf, sig, W) {
-  const data = it.charts ? it.charts[tf] : { times: it.times, candles: it.candles, ema: it.ema }, s = chartSpec(it, tf, sig);
+  const ch = chartsOf(it);
+  if (!ch) return `<div class="empty" style="min-height:220px"><b>Loading the chart…</b></div>`;
+  if (!ch[tf]) return App.ui.empty('Chart not available', 'This timeframe was not in the last swing scan. It refreshes at the next hourly scan.');
+  const data = ch[tf], s = chartSpec(it, tf, sig);
   return App.charts.candles(data, { W, levels: s.levels, zones: s.zones, marks: s.marks, label: `${it.symbol} ${tf} chart` });
 }
 function checklistCard(it) {
@@ -173,10 +199,12 @@ function sizeCard(it) {
 }
 function optionCard(it) {
   const o = it.options_trade; if (!o) return '';
-  return `<div class="card"><div class="hd"><h2>${esc(o.instrument)}</h2><span class="cap">expiry ${esc(o.expiry)} · ${o.dte_days != null ? o.dte_days + ' days' : ''}</span></div><div class="bd"><div class="kv">
-    <span>Model premium</span><b>₹${fmt(o.premium)}</b><span>Delta / Gamma</span><b>${fmt(o.delta)} / ${fmt(o.gamma, 4)}</b><span>Theta per day / Vega</span><b>${fmt(o.theta_day)} / ${fmt(o.vega)}</b><span>Premium stop</span><b class="bad">₹${fmt(o.premium_sl)}</b><span>Premium targets</span><b class="good">${(o.premium_targets || []).map(x => '₹' + fmt(x)).join(' · ')}</b></div>
-    ${(o.candidates || []).length ? `<hr class="sep"><table class="tbl"><thead><tr><th>Strike</th><th class="n">Delta</th><th class="n">Premium</th><th class="n">Theta/day</th></tr></thead><tbody>${o.candidates.map(c => `<tr${c.strike === o.strike ? ' style="font-weight:700"' : ''}><td>${c.strike}</td><td class="n">${fmt(c.delta)}</td><td class="n">${fmt(c.premium)}</td><td class="n">${fmt(c.theta_day)}</td></tr>`).join('')}</tbody></table>` : ''}
-    <p class="help" style="margin-top:8px">Black-Scholes with India VIX: a model price, check the live premium before you buy.</p></div></div>`;
+  const L = o.live, spr = L && L.bid && L.ask ? (L.ask - L.bid) / ((L.ask + L.bid) / 2) * 100 : null, liveAny = (o.candidates || []).some(c => c.live);
+  return `<div class="card"><div class="hd"><h2>${esc(o.instrument)}</h2><span class="cap">expiry ${esc(o.expiry)} · ${o.dte_days != null ? o.dte_days + ' days' : ''}</span>${L ? '<span class="sp"></span><span class="pill ok">live prices</span>' : ''}</div><div class="bd"><div class="kv">
+    ${L ? `<span>Live last price</span><b>₹${fmt(L.ltp)}${o.live_at ? ` <small class="muted">${esc(hmIST(o.live_at))}</small>` : ''}</b><span>Bid / Ask</span><b>${L.bid ? '₹' + fmt(L.bid) : '-'} / ${L.ask ? '₹' + fmt(L.ask) : '-'}${spr != null ? ` <small class="${spr > 2 ? 'bad' : 'muted'}">spread ${spr.toFixed(1)}%</small>` : ''}</b>` : ''}
+    <span>${L ? 'Model premium at entry' : 'Model premium'}</span><b>₹${fmt(o.premium)}</b><span>Delta / Gamma</span><b>${fmt(o.delta)} / ${fmt(o.gamma, 4)}</b><span>Theta per day / Vega</span><b>${fmt(o.theta_day)} / ${fmt(o.vega)}</b><span>Premium stop</span><b class="bad">₹${fmt(o.premium_sl)}</b><span>Premium targets</span><b class="good">${(o.premium_targets || []).map(x => '₹' + fmt(x)).join(' · ')}</b><span>Volatility</span><b>${fmt(o.iv, 1)}% <small class="muted">${esc(o.iv_source || '')}</small></b></div>
+    ${(o.candidates || []).length ? `<hr class="sep"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Strike</th><th class="n">Delta</th><th class="n">Model</th>${liveAny ? '<th class="n">Live</th><th class="n">Bid / Ask</th>' : ''}<th class="n">Theta/day</th></tr></thead><tbody>${o.candidates.map(c => `<tr${c.strike === o.strike ? ' style="font-weight:700"' : ''}><td>${c.strike}</td><td class="n">${fmt(c.delta)}</td><td class="n">${fmt(c.premium)}</td>${liveAny ? `<td class="n">${c.live ? fmt(c.live.ltp) : '-'}</td><td class="n">${c.live && c.live.bid ? fmt(c.live.bid) + ' / ' + fmt(c.live.ask) : '-'}</td>` : ''}<td class="n">${fmt(c.theta_day)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <p class="help" style="margin-top:8px">${L ? 'Volatility comes from the live option price (Angel One). Stop and target premiums are model estimates around it: place the order on the live price.' : 'Black-Scholes with India VIX: a model price, check the live premium before you buy.'}</p></div></div>`;
 }
 function trackCard(sig, it) {
   const d = dec(it), closed = sig.status === 'CLOSED', r = closed ? sig.r_final : sig.r_now;
@@ -189,7 +217,7 @@ App.pages.trade = q => {
   const R = resolve(q), sec = R.sec, back = `<a class="back" href="#/${sec}">${ic('back')} ${sec === 'options' ? 'Nifty options' : sec[0].toUpperCase() + sec.slice(1)}</a>`;
   if (!R.it) { const w = R.drop; return back + (w ? `<div class="thead"><h1>${esc(w.symbol)}</h1><span class="pill bad">invalidated</span></div><div style="height:12px"></div>${App.ui.callout('bad', `<b>This setup was cancelled before it triggered</b> (${esc((w.dropped || '').replace('T', ' ').slice(0, 16))}).<br>${esc(w.reason || '')}`)}
       <div class="card" style="margin-top:14px"><div class="bd"><div class="kv"><span>Last status</span><b>${esc(w.status || '')}</b><span>Grade / score</span><b>${esc(w.grade || '')} ${w.score || ''}/10</b><span>Zone</span><b>${fmt(w.zone_bot)} – ${fmt(w.zone_top)}</b><span>Plan entry / SL / T1</span><b>${fmt(w.entry)} / ${fmt(w.sl)} / ${fmt(w.t1)}</b></div><p class="help" style="margin-top:8px">If you entered anyway, manage it with the original stop and log it as a rule break ("No confirmation").</p></div></div>` : App.ui.empty('Setup not found', 'It is no longer in the scan and never triggered.')); }
-  const it = R.it, sig = R.sig, d = dec(it), inJ = App.journal.findByTag(sig ? sig.id : key(sec, it)), tfs = it.charts ? Object.keys(it.charts) : [it.tf_structure || '5m'];
+  const it = R.it, sig = R.sig, d = dec(it), inJ = App.journal.findByTag(sig ? sig.id : key(sec, it)), tfs = it.charts ? Object.keys(it.charts) : it.tfs && it.tfs.length ? it.tfs : [it.tf_structure || '5m'];
   const tf = App.ui.tf && tfs.includes(App.ui.tf) ? App.ui.tf : (tfs.includes('15m') && it.stage >= 5 ? '15m' : tfs[0]); App.ui.tfCur = tf;
   const role = { '1D': 'Structure and zone', '1H': 'Confirmation', '15m': 'Precision entry', '5m': 'Setup and trigger' };
   const news = ((App.data.news || {}).by_symbol || {})[it.symbol] || [];
@@ -210,7 +238,11 @@ App.binds.trade = q => {
   $('#logT').onclick = () => App.journal.openForm(null, App.journal.fromScanner(R.it, R.sig));
   $$('[data-tf]').forEach(b => b.onclick = () => { App.ui.tf = b.dataset.tf; App.render(); });
   const draw = () => { const b = $('#chBox'); if (b) b.innerHTML = chartFor(R.it, App.ui.tfCur, R.sig, b.clientWidth - 32); };
-  draw(); let t; window.onresize = () => { clearTimeout(t); t = setTimeout(draw, 150); };
+  draw();
+  if (!R.it.charts && R.it.section === 'swing' && R.it.tfs) {
+    const gen = (App.data.swing || {}).generated_at, have = App.lazyNow('swing_charts');
+    App.lazy('swing_charts', have && have.generated_at === gen ? 3600e3 : 0).then(draw);       // loads once per swing scan
+  } let t; window.onresize = () => { clearTimeout(t); t = setTimeout(draw, 150); };
 };
 SC.card = card; SC.STG = STG;
 })();

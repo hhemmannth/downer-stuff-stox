@@ -20,8 +20,8 @@ App.charts.candles = function (d, o = {}) {
   zones.forEach(z => { const x1 = isNum(z.from) ? Math.max(PL, X(z.from - off) - bw) : PL, y1 = Y(Math.min(z.hi, hi)), y2 = Y(Math.max(z.lo, lo)); if (y2 <= y1) return;
     g.push(`<rect x="${x1}" y="${y1}" width="${PL + PW - x1}" height="${Math.max(2, y2 - y1)}" fill="${cv(z.c)}" opacity=".15"/><rect x="${x1}" y="${y1}" width="${PL + PW - x1}" height="${Math.max(2, y2 - y1)}" fill="none" stroke="${cv(z.c)}" stroke-width=".8" opacity=".5"/>`);
     if (z.label) labs.push({ y: (y1 + y2) / 2, t: z.label, c: cv(z.c), k: z.k || 1 }); });
-  for (let i = 0; i < n; i++) { const [O, Hh, L, Cc] = C[i], col = Cc >= O ? 'var(--good)' : 'var(--bad)';
-    g.push(`<line x1="${X(i)}" x2="${X(i)}" y1="${Y(Hh)}" y2="${Y(L)}" stroke="${col}" stroke-width="1"/><rect x="${X(i) - bw / 2}" y="${Y(Math.max(O, Cc))}" width="${bw}" height="${Math.max(1, Math.abs(Y(O) - Y(Cc)))}" fill="${col}"/>`); }
+  for (let i = 0; i < n; i++) { const [O, Hh, L, Cc] = C[i], up = Cc >= O;                 // monochrome candles: up hollow, down solid
+    g.push(`<line x1="${X(i)}" x2="${X(i)}" y1="${Y(Hh)}" y2="${Y(L)}" stroke="var(--ink)" stroke-width="1"/><rect x="${X(i) - bw / 2}" y="${Y(Math.max(O, Cc))}" width="${bw}" height="${Math.max(1, Math.abs(Y(O) - Y(Cc)))}" fill="${up ? 'var(--bg)' : 'var(--ink)'}" stroke="var(--ink)" stroke-width="1"/>`); }
   if (E) g.push(`<polyline points="${E.map((v, i) => `${X(i)},${Y(v)}`).join(' ')}" fill="none" stroke="var(--c6)" stroke-width="1.4"/>`);
   levels.forEach(l => { if (l.p < lo || l.p > hi) return; const x1 = isNum(l.from) ? Math.max(PL, X(l.from - off)) : PL;
     g.push(`<line x1="${x1}" x2="${PL + PW}" y1="${Y(l.p)}" y2="${Y(l.p)}" stroke="${cv(l.c)}" stroke-width="${l.w || 1.2}"${l.dash ? ' stroke-dasharray="5 4"' : ''}/>`);

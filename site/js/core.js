@@ -33,7 +33,7 @@ const ICONS = {
   playbook: '<path d="M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2z"/><path d="M8 7h6M8 11h6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>', refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', pulse: '<path d="M3 12h4l3-7 4 14 3-7h4"/>', refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>', back: '<path d="M15 5l-7 7 7 7"/>', ext: '<path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>',
   cloud: '<path d="M7 18h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 18z"/>', download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', upload: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>'
@@ -46,9 +46,9 @@ const NAV = [
   ['Scanner', [['swing', 'Swing', 'swing', 'primary'], ['options', 'Nifty options', 'options'], ['intraday', 'Intraday', 'intraday']]],
   ['Journal', [['journal', 'Trades', 'journal'], ['analytics', 'Analytics', 'analytics']]],
   ['Context', [['market', 'Market', 'market'], ['news', 'News & events', 'news']]],
-  ['You', [['playbook', 'Playbook & rules', 'playbook'], ['settings', 'Settings', 'settings']]]];
+  ['You', [['playbook', 'Playbook & rules', 'playbook'], ['health', 'System health', 'pulse'], ['settings', 'Settings', 'settings']]]];
 const TABS = [['dashboard', 'Today', 'home'], ['swing', 'Swing', 'swing'], ['journal', 'Journal', 'journal'], ['analytics', 'Stats', 'analytics']];
-const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', settings: 'Settings', trade: 'Trade' };
+const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade' };
 
 App.route = () => { const h = location.hash.replace(/^#\/?/, ''); const [p, q] = h.split('?'); return { page: p || 'dashboard', q: new URLSearchParams(q || '') }; };
 App.go = (page, q) => { location.hash = '#/' + page + (q ? '?' + new URLSearchParams(q).toString() : ''); };
@@ -79,15 +79,46 @@ App.setTheme = t => { const ui = store.get('tji_ui_v1', {}) || {}; ui.theme = t;
 function applyTheme() { const t = (store.get('tji_ui_v1', {}) || {}).theme || 'auto'; if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t); const b = $('#themeB'); if (b) b.innerHTML = ic(App.theme() === 'dark' ? 'sun' : 'moon'); }
 
 /* ---------- scanner data ---------- */
-const FILES = ['swing', 'options', 'intraday', 'market', 'news', 'signals_swing', 'signals_options', 'signals_intraday'];
+const FILES = ['swing', 'options', 'intraday', 'market', 'news', 'signals_swing', 'signals_options', 'signals_intraday', 'health/loop'];
+const CACHE = 'ds_data_v1';
 App.reload = async (manual) => {
+  let got = 0;
   await Promise.all(FILES.map(async f => {
-    try { const r = await fetch(`data/${f}.json?t=${Date.now()}`, { cache: 'no-store' }); if (r.ok) App.data[f] = await r.json(); } catch (e) { }
+    try { const r = await fetch(`data/${f}.json?t=${Date.now()}`, { cache: 'no-store' }); if (r.ok) { App.data[f] = await r.json(); got++; } } catch (e) { }
   }));
-  App.loaded.at = Date.now(); paintChrome(); if (manual !== 'silent') App.render(); if (manual === true) App.toast('Data refreshed');
+  App.loaded.at = Date.now(); App.loaded.live = got > 0 || App.loaded.live; if (got) saveCache();
+  paintChrome(); if (manual !== 'silent') App.render(); if (manual === true) App.toast(got ? 'Data refreshed' : 'Could not reach the data: showing the last copy');
 };
+/* Instant open: the last data is kept on this device and shown at once, then replaced by fresh data a moment later. */
+function saveCache() { const keep = {}; FILES.forEach(f => { if (App.data[f]) keep[f] = App.data[f]; });
+  try { localStorage.setItem(CACHE, JSON.stringify({ at: Date.now(), data: keep })); }
+  catch (e) { try { ['signals_swing', 'signals_options', 'signals_intraday'].forEach(f => delete keep[f]); localStorage.setItem(CACHE, JSON.stringify({ at: Date.now(), data: keep })); } catch (e2) { localStorage.removeItem(CACHE); } } }
+function loadCache() { try { const c = JSON.parse(localStorage.getItem(CACHE) || 'null'); if (c && c.data) { Object.assign(App.data, c.data); App.loaded.cached = c.at; return true; } } catch (e) { } return false; }
+App.clearCache = () => { try { localStorage.removeItem(CACHE); } catch (e) { } };
+/* Files loaded only when a page needs them (explainer, charts, health), re-fetched at most once a minute. */
+const LAZY = {};
+App.lazy = async (name, maxAge = 60000) => {
+  const c = LAZY[name]; if (c && Date.now() - c.at < maxAge) return c.data;
+  if (c && c.p) return c.p;
+  const p = fetch(`data/${name}.json?t=${Date.now()}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null)
+    .then(d => { LAZY[name] = { at: Date.now(), data: d || (c && c.data) || null }; return LAZY[name].data; });
+  LAZY[name] = Object.assign({}, c || { at: 0, data: null }, { p }); return p;
+};
+App.lazyNow = name => (LAZY[name] || {}).data || null;
+App.lazyAge = name => LAZY[name] && LAZY[name].at ? Date.now() - LAZY[name].at : Infinity;
 App.marketOpen = () => { const t = istNow(), d = t.getUTCDay(), m = t.getUTCHours() * 60 + t.getUTCMinutes(); return d > 0 && d < 6 && m >= 555 && m <= 930; };
+App.tradingDay = () => { const t = istNow(), d = t.getUTCDay(), hol = (App.data.news || {}).holidays || []; return d > 0 && d < 6 && !hol.includes(todayIST()); };
+App.loopAge = () => { const hb = App.data['health/loop'], o = App.data.options, t = (hb && (hb.last_tick || hb.started)) || (o && o.generated_at); return t ? (Date.now() - new Date(t)) / 6e4 : null; };
+App.staleBanner = () => {
+  if (!App.marketOpen() || !App.tradingDay()) return '';
+  const m = istNow().getUTCHours() * 60 + istNow().getUTCMinutes(); if (m < 9 * 60 + 25) return '';      // the first scan lands about 09:25
+  const age = App.loopAge(); if (age != null && age <= 11) return '';
+  const wf = actionsUrl() + '/workflows/market-loop.yml';
+  return `<div class="stale" role="alert"><span class="ic">!</span><div><b>${age == null ? 'No live data yet today.' : `Live data is ${Math.round(age)} min old.`}</b> The 5-minute market loop isn't running, so options, intraday and tracked trades are not updating.
+    The watchdog restarts it within about 10 minutes, or <a href="${wf}" target="_blank" rel="noopener">start it now on GitHub</a> (Run workflow). <a href="#/health">System health</a></div></div>`;
+};
 App.LED = k => App.data['signals_' + k] || { signals: [], dropped: [], watch: {} };
+App.actionsUrl = () => actionsUrl();
 function actionsUrl() { const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/').filter(Boolean)[0]; return m && repo ? `https://github.com/${m[1]}/${repo}/actions` : 'https://github.com'; }
 function paintChrome() {
   const o = App.marketOpen(), mk = $('#mkt'); if (mk) { mk.className = 'pill ' + (o ? 'ok' : ''); mk.querySelector('span').textContent = o ? 'Market open' : 'Market closed'; }
@@ -110,7 +141,7 @@ App.render = () => {
   $$('[data-tab]').forEach(a => a.classList.toggle('on', a.dataset.tab === page));
   $('#ttl').textContent = TITLES[page] || 'DownerStuff';
   const keep = App._lastPage === page ? window.scrollY : 0;
-  try { el.innerHTML = fn(App.route().q); } catch (e) { console.error(e); el.innerHTML = `<div class="callout bad"><span class="ic">!</span><div><b>This page hit an error.</b> ${esc(e.message)}</div></div>`; }
+  try { el.innerHTML = App.staleBanner() + fn(App.route().q); } catch (e) { console.error(e); el.innerHTML = `<div class="callout bad"><span class="ic">!</span><div><b>This page hit an error.</b> ${esc(e.message)}</div></div>`; }
   if (App.binds[page]) try { App.binds[page](App.route().q); } catch (e) { console.error(e); }
   if (App._lastPage !== page) window.scrollTo(0, 0); else window.scrollTo(0, keep);
   App._lastPage = page; paintChrome();
@@ -167,10 +198,10 @@ App.start = async () => {
   applyTheme();
   const user = await gate(); if (!user) return;
   App.user = user;
-  App.sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') location.reload(); });
+  App.sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') { App.clearCache(); location.reload(); } });
   shell(); applyTheme();
   if (App.journal) App.journal.init();
-  App.render();
+  loadCache(); App.render();
   await App.reload('silent'); App.render();
   window.addEventListener('hashchange', App.render);
   setInterval(() => { if (App.marketOpen() && !document.hidden && !$('.modal-bg')) App.reload('silent').then(() => { if (!document.activeElement || !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) App.render(); }); }, 60000);

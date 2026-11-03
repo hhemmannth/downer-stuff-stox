@@ -3,6 +3,52 @@
 (function () {
 const JR = App.journal, SC = App.scanner;
 
+/* ---------- system health ---------- */
+const HEALTH_FILES = ['live', 'swing', 'all', 'options', 'intraday', 'market', 'news'];
+const FRESH = [['swing', 'Swing', 'hourly at :25 in market hours, plus 08:37 and 16:17', 100], ['options', 'Nifty options', 'every 5 minutes', 12], ['intraday', 'Intraday', 'every 5 minutes', 12],
+  ['market', 'Market', 'every 5 minutes', 12], ['news', 'News & events', 'about every 30 minutes', 45]];
+App.pages.health = () => {
+  const hb = App.data['health/loop'], live = App.marketOpen() && App.tradingDay(), age = App.loopAge(), wf = App.actionsUrl() + '/workflows/market-loop.yml';
+  const st = !hb ? ['bad', 'No heartbeat yet'] : hb.state === 'running' ? (age != null && age <= 11 ? ['ok', 'Running'] : ['bad', 'Silent']) : ['', 'Finished for the day'];
+  const t = v => v ? `${hmIST(v)} <small class="muted">${esc(ago(v))}</small>` : '-';
+  let h = `<div class="ph"><div><h1>System health</h1><p>Is the scanner alive, how fresh is each section, and what failed. If something is red during market hours, start here.</p></div></div><div class="grid g-main"><div class="stack">`;
+  h += `<div class="card"><div class="hd"><h2>5-minute market loop</h2><span class="sp"></span><span class="pill ${st[0]}"><i></i>${st[1]}</span></div><div class="bd"><div class="kv">
+    <span>Started</span><b>${t(hb && hb.started)}</b><span>Runs until</span><b>${hb && hb.until ? hmIST(hb.until) : '-'}</b>
+    <span>Last tick</span><b>${t(hb && hb.last_tick)}</b><span>Next tick</span><b>${hb && hb.next_tick && hb.state === 'running' ? hmIST(hb.next_tick) : '-'}</b>
+    <span>Ticks this run</span><b>${hb ? hb.ticks : '-'}</b><span>Last scan took</span><b>${hb && hb.last_scan_s != null ? hb.last_scan_s + ' s' : '-'}${hb && hb.last_rc ? ' <span class="bad">(exit ' + hb.last_rc + ')</span>' : ''}</b>
+    <span>Last publish</span><b class="${hb && String(hb.publish || '').startsWith('failed') ? 'bad' : ''}">${esc(hb ? hb.publish || '-' : '-')}</b></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${hb && hb.run_url ? `<a class="btn sm" href="${esc(hb.run_url)}" target="_blank" rel="noopener">Open this run</a>` : ''}<a class="btn sm" href="${wf}" target="_blank" rel="noopener">market-loop on GitHub</a></div>
+    ${live && st[0] !== 'ok' ? `<p class="help bad" style="margin-top:10px">The loop should be running now. The watchdog restarts it within about 10 minutes, or open market-loop on GitHub and press Run workflow.</p>` : ''}</div></div>`;
+  h += `<div class="card"><div class="hd"><h2>Data freshness</h2><span class="cap">${live ? 'market hours: late sections are red' : 'market closed: ages are expected to grow'}</span></div><div class="bd"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Section</th><th>Updated</th><th>Expected</th><th class="n">Status</th></tr></thead><tbody>
+    ${FRESH.map(([k, name, every, lim]) => { const d = App.data[k], g = d && d.generated_at, a = g ? (Date.now() - new Date(g)) / 6e4 : null, late = live && (a == null || a > lim);
+      return `<tr><td><b>${name}</b></td><td>${g ? `${dateIST(g)} ${hmIST(g)} <small class="muted">${esc(ago(g))}</small>` : '-'}</td><td><small>${every}</small></td><td class="n"><span class="pill ${late ? 'bad' : g ? 'ok' : ''}">${late ? 'Late' : g ? 'OK' : 'No data'}</span></td></tr>`; }).join('')}
+    </tbody></table></div></div></div>`;
+  const runs = HEALTH_FILES.map(n => App.lazyNow('health/' + n)).filter(Boolean).sort((a, b) => (b.finished_at || '').localeCompare(a.finished_at || ''));
+  h += `<div class="card"><div class="hd"><h2>Last scans</h2><span class="cap">one row per kind of run</span></div><div class="bd">${runs.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Run</th><th>Finished</th><th class="n">Took</th><th>Sections</th></tr></thead><tbody>
+    ${runs.map(r => `<tr><td><b>${esc(r.mode)}</b>${r.run_url ? ` <a href="${esc(r.run_url)}" target="_blank" rel="noopener"><small>log</small></a>` : ''}</td><td>${t(r.finished_at)}</td><td class="n">${r.seconds}s</td>
+      <td>${Object.entries(r.sections || {}).map(([k, x]) => `<span class="pill ${x.ok ? 'ok' : 'bad'}" title="${esc(x.error || (x.scanned != null ? x.scanned + '/' + x.universe + ' scanned' : ''))}">${k}${x.ok ? '' : ' failed'}</span>`).join(' ')}</td></tr>`).join('')}</tbody></table></div>
+    ${runs.flatMap(r => Object.entries(r.sections || {}).filter(([, x]) => !x.ok).map(([k, x]) => `<p class="help bad" style="margin-top:8px"><b>${esc(r.mode)} / ${esc(k)}:</b> ${esc(x.error || 'failed')}</p>`)).slice(0, 4).join('')}`
+    : App.ui.empty('Loading the run records…', 'They appear after the first scan with this update.')}</div></div>`;
+  h += `</div><div class="stack">`;
+  const src = runs.find(r => r.data) && runs.find(r => r.data).data;
+  h += `<div class="card"><div class="hd"><h2>Data sources</h2>${src ? `<span class="sp"></span><span class="pill ${src.angel && src.angel.ok ? 'ok' : src.angel && src.angel.configured ? 'bad' : 'info'}">${esc(src.primary)}</span>` : ''}</div><div class="bd">${!src ? App.ui.empty('Shown after the next scan', '') : `
+    <div class="kv"><span>Angel One</span><b class="${src.angel.ok ? 'good' : src.angel.configured ? 'bad' : ''}">${src.angel.ok ? 'connected: official exchange data' : src.angel.configured ? 'not working: ' + esc(src.angel.error || 'unknown error') : 'not set up (add the four ANGEL_ secrets)'}</b>
+      <span>Fallback</span><b>Yahoo Finance</b>${src.option_quotes ? `<span>Live option prices</span><b>${esc(src.option_quotes)}</b>` : ''}</div>
+    ${Object.keys(src.by_interval || {}).length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="tbl"><thead><tr><th>Candles</th><th>Where they came from (last run)</th></tr></thead><tbody>${Object.entries(src.by_interval).map(([iv, m]) => `<tr><td><b>${esc(iv)}</b></td><td><small>${Object.entries(m).map(([k, n]) => `${esc(k)} ${n}`).join(' · ')}</small></td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${(src.xcheck || []).length ? `<p class="help" style="margin:12px 0 6px"><b>Accuracy check</b>: recent closes, Angel One against Yahoo</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Symbol</th><th class="n">Angel</th><th class="n">Yahoo</th><th class="n">Max gap</th></tr></thead><tbody>${src.xcheck.map(x => `<tr><td><b>${esc(x.symbol)}</b> <small class="muted">${esc(x.date || '')}</small></td><td class="n">${fmt(x.angel)}</td><td class="n">${fmt(x.yahoo)}</td><td class="n ${x.max_diff_pct > 0.5 ? 'bad' : ''}">${x.max_diff_pct != null ? x.max_diff_pct + '%' : '-'}</td></tr>`).join('')}</tbody></table></div><p class="help" style="margin-top:6px">Gaps over 0.5% are in red. Angel One is the exchange's own data, so a gap usually means Yahoo is off that day.</p>` : ''}`}</div></div>`;
+  const fl = ['swing', 'intraday'].map(k => [k, ((App.data[k] || {}).failed || [])]).filter(([, f]) => f.length);
+  h += `<div class="card"><div class="hd"><h2>Symbols with no data</h2></div><div class="bd">${fl.length ? fl.map(([k, f]) => `<p style="margin:0 0 8px"><b>${k}</b> <small class="muted">${f.length}</small><br><small>${f.map(esc).join(', ')}</small></p>`).join('') + '<p class="help">Yahoo returned nothing for these. Usually a renamed, merged or newly listed symbol. One or two is normal; dozens means Yahoo was blocking that run.</p>' : App.ui.empty('None', 'Every symbol returned data in the last scans.')}</div></div>`;
+  h += `<div class="card"><div class="hd"><h2>What keeps it running</h2></div><div class="bd"><ul class="ins">
+    <li><i></i><span><b>market-loop</b> scans every 5 minutes from about 09:05 to 15:40 and runs the swing scan hourly at :25.</span></li>
+    <li><i></i><span><b>watchdog</b> checks every 10 minutes in market hours: it starts the loop if none is running and restarts it if it goes silent for 20 minutes. It pushes a phone alert only when it acts.</span></li>
+    <li><i></i><span>GitHub sometimes skips scheduled runs. For on-time starts, point a cron-job.org job at the <b>watchdog</b> workflow every 10 minutes from 09:05 to 15:25 (setup in the README).</span></li></ul></div></div>`;
+  return h + `</div></div>`;
+};
+App.binds.health = () => {
+  const need = HEALTH_FILES.filter(n => App.lazyAge('health/' + n) > 60000);
+  if (need.length) Promise.all(need.map(n => App.lazy('health/' + n))).then(() => { if (App.route().page === 'health') App.render(); });
+};
+
 /* ---------- dashboard ---------- */
 App.pages.dashboard = () => {
   const m = App.data.market || {}, idx = m.indices || {}, sw = App.data.swing, nw = App.data.news || {}, rs = JR.riskStatus(), J = JR.J(), T = JR.enrich(J);
