@@ -16,7 +16,7 @@ Env vars:
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   optional: the same pushes as Telegram messages with an "Open" button.
                    TELEGRAM_CHAT_ID can hold several ids separated by commas. Either channel alone is enough.
 No Priority header is sent: some iOS installs of the ntfy app do not show pushes that carry one."""
-import argparse, datetime, html, json, os, sys, urllib.request
+import argparse, datetime, html, json, os, sys, urllib.error, urllib.request
 
 SECTIONS = [('swing', 'Swing'), ('options', 'Nifty options'), ('intraday', 'Intraday')]
 FRESH_MINUTES = 20
@@ -29,16 +29,23 @@ EMOJI = {'star': '⭐', 'chart_with_upwards_trend': '📈', 'chart_with_downward
 
 def telegram_ready(): return bool(os.environ.get('TELEGRAM_BOT_TOKEN', '').strip() and os.environ.get('TELEGRAM_CHAT_ID', '').strip())
 
+TELEGRAM_HINTS = {404: 'bot token is wrong (check TELEGRAM_BOT_TOKEN: only the token from @BotFather, like 123456789:AAH..., no "bot" in front, no quotes or spaces)',
+                  400: 'chat not found (check TELEGRAM_CHAT_ID, and send your bot a message first)', 401: 'bot token was revoked: get a new one from @BotFather',
+                  403: 'the bot cannot message this chat (you blocked it, or it is not in the group)'}
+
 def telegram(title, body, tags, click):
     """One Telegram message per chat id: bold title, the body, and an Open button that goes straight to the trade."""
-    token = os.environ['TELEGRAM_BOT_TOKEN'].strip(); api = os.environ.get('TELEGRAM_API', 'https://api.telegram.org').rstrip('/')
+    token = os.environ['TELEGRAM_BOT_TOKEN'].strip().strip('"\'').strip()
+    if token.lower().startswith('bot') and token[3:4].isdigit(): token = token[3:]          # pasted with the "bot" from the URL in front
+    api = os.environ.get('TELEGRAM_API', 'https://api.telegram.org').rstrip('/')
     icon = ''.join(EMOJI.get(t, '') for t in str(tags).split(','))
     text = (f'{icon} ' if icon else '') + f'<b>{html.escape(title)}</b>\n{html.escape(body)}'
     msg = dict(text=text[:4000], parse_mode='HTML', disable_web_page_preview=True)
     if click and click.startswith('https://'): msg['reply_markup'] = {'inline_keyboard': [[{'text': 'Open in DownerStuff', 'url': click}]]}
     for chat in [c.strip() for c in os.environ['TELEGRAM_CHAT_ID'].split(',') if c.strip()]:
         req = urllib.request.Request(f'{api}/bot{token}/sendMessage', data=json.dumps(dict(msg, chat_id=chat)).encode(), headers={'Content-Type': 'application/json'}, method='POST')
-        urllib.request.urlopen(req, timeout=20).read()
+        try: urllib.request.urlopen(req, timeout=20).read()
+        except urllib.error.HTTPError as ex: raise RuntimeError(f'HTTP {ex.code}: ' + TELEGRAM_HINTS.get(ex.code, ex.reason)) from None
 
 def post(base, topic, title, body, tags, click):
     """Send to every configured channel (ntfy and/or Telegram). Fails only if every channel failed."""
@@ -53,6 +60,7 @@ def post(base, topic, title, body, tags, click):
         except Exception as ex: errs.append(f'telegram: {ex}')
     if not ok: raise RuntimeError('; '.join(errs) or 'no channel configured')
     if errs: print('  ' + '; '.join(errs), file=sys.stderr)
+    return [c for c, on in (('ntfy', bool(topic)), ('Telegram', telegram_ready())) if on and not any(e.startswith(c.lower()) for e in errs)]
 
 from urllib.parse import quote
 def deep(click, **q):
@@ -90,7 +98,10 @@ def main():
     topic = os.environ.get('NTFY_TOPIC', '').strip(); click = os.environ.get('PAGE_URL', '').strip(); base = os.environ.get('NTFY_URL', 'https://ntfy.sh').rstrip('/')
     if not topic and not telegram_ready(): print('Neither NTFY_TOPIC nor TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID is set, skipping alerts.'); return 1 if a.test else 0
     if a.test:
-        try: post(base, topic, 'DownerStuffScreener: test', 'If you see this, pushes work. You will get one when a setup triggers (score 6 or more) and when a scan finishes.', 'white_check_mark', click); print('test alert sent to ' + ' and '.join(x for x, on in (('ntfy', bool(topic)), ('Telegram', telegram_ready())) if on)); return 0
+        try:
+            sent = post(base, topic, 'DownerStuffScreener: test', 'If you see this, pushes work. You will get one when a setup triggers (score 6 or more) and when a scan finishes.', 'white_check_mark', click)
+            missed = [c for c, on in (('ntfy', bool(topic)), ('Telegram', telegram_ready())) if on and c not in sent]
+            print('test alert sent to ' + ' and '.join(sent) + (f" (FAILED: {', '.join(missed)}: see the error above)" if missed else '')); return 1 if missed else 0
         except Exception as ex: print(f'test alert failed: {ex}', file=sys.stderr); return 1
     min_score = int(os.environ.get('NTFY_MIN_SCORE', '6') or 6); updates = os.environ.get('NTFY_UPDATES', 'swing').strip().lower() or 'swing'
     statuses = tuple(x.strip().upper() for x in os.environ.get('NTFY_STATUSES', 'TRIGGER').split(',') if x.strip()); now = ist_now(); today = now.strftime('%Y-%m-%d')

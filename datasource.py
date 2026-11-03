@@ -74,7 +74,7 @@ def build_tokens(rows, today):
 
 class AngelError(Exception): pass
 
-WORKERS = 4                                      # requests in flight at once: hides the India <-> GitHub (US) round trip
+WORKERS = 8                                      # requests in flight at once: hides the ~3 s India <-> GitHub (US) round trip; starts stay paced by GAP
 
 class Angel:
     GAP = 0.36                                   # seconds between request starts (Angel allows about 3 a second)
