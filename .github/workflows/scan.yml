@@ -42,10 +42,19 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Keep the daily-candle cache between runs
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: scan-cache-${{ github.run_id }}
+          restore-keys: scan-cache-
+
       - name: Send a test alert
         if: ${{ inputs.test_alert }}
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PAGE_URL: ${{ vars.PAGE_URL }}
         run: python notify.py --test
 
@@ -65,6 +74,11 @@ jobs:
           echo "START=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Scan
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
         run: python strategy_scanner.py --mode ${{ steps.m.outputs.mode }} --out pub/data --state-dir .cache
 
       - name: Push alerts to the phone
@@ -75,6 +89,8 @@ jobs:
           NTFY_STATUSES: ${{ vars.NTFY_STATUSES || 'TRIGGER' }}
           NTFY_UPDATES: ${{ vars.NTFY_UPDATES || 'swing' }}
           NTFY_EVENTS: ${{ vars.NTFY_EVENTS || 'on' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python notify.py --dir pub/data --state pub/state/notified.json
 
       - name: Publish to GitHub Pages (gh-pages branch)

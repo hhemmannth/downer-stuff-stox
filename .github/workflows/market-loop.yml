@@ -37,6 +37,13 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Keep the daily-candle cache between runs
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: scan-cache-${{ github.run_id }}
+          restore-keys: scan-cache-
+
       - name: Scan every 5 minutes until the session ends
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,4 +53,10 @@ jobs:
           NTFY_STATUSES: ${{ vars.NTFY_STATUSES || 'TRIGGER' }}
           NTFY_UPDATES: ${{ vars.NTFY_UPDATES || 'swing' }}
           NTFY_EVENTS: ${{ vars.NTFY_EVENTS || 'on' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
         run: python loop.py --pub pub

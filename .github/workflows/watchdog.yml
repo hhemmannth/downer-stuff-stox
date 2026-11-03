@@ -1,0 +1,36 @@
+name: watchdog
+
+# Keeps the 5-minute market loop alive. Every 10 minutes in market hours it checks the market-loop runs and the loop's
+# heartbeat: if no loop is running it starts one; if the running loop has gone silent for 20 minutes it restarts it.
+# GitHub sometimes skips scheduled runs, so also point cron-job.org at this workflow (see README). Running it extra times is
+# harmless: it only acts when the loop is down, and does nothing outside 09:10-15:25 IST, on weekends and NSE holidays.
+on:
+  schedule:
+    - cron: '*/10 3-9 * * 1-5'         # every 10 minutes, 08:30-15:20 IST
+  workflow_dispatch:
+
+permissions:
+  actions: write                       # to read, start and cancel market-loop runs
+  contents: read
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check the market loop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+        run: python watchdog.py
