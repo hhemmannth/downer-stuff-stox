@@ -37,6 +37,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.headers.get('Authorization') != 'Bearer JWT1': return self._j(dict(status=False, message='Invalid Token', errorcode='AG8001'))
         if 'getCandleData' in self.path:
             LOG['candles'].append((body['symboltoken'], body['interval']))
+            if LOG.get('slow'): import time as _t; _t.sleep(LOG['slow'])
             if body['symboltoken'] == '11536': return self._j(dict(status=False, message='Something went wrong', errorcode='AB2001'))
             return self._j(dict(status=True, message='SUCCESS', errorcode='', data=bars(body['symboltoken'], body['interval'])))
         if '/quote' in self.path:
@@ -99,6 +100,14 @@ check("today's candle has the quote's open, high, low, last price and volume", d
 check('history is kept and not duplicated', len(d3['RELIANCE']) in (len(d1['RELIANCE']), len(d1['RELIANCE']) + 1) and d3['RELIANCE'].index.is_unique)
 d4, _ = ds.daily_cached(syms + ['STKNEW'], '1y', fake_yahoo, now=dt.datetime.combine(TODAY, dt.time(12, 25), IST))
 check('a stock new to the universe is downloaded on its own; the rest stay cached', 'STKNEW' in d4)
+
+# --- speed: several requests in flight, still paced to Angel's limit
+import time as _time
+ds.reset(); LOG['slow'] = 0.4; LOG['candles'].clear(); t0 = _time.time()
+o, _ = ds.fetch([f'STK{i}' for i in range(20)], '5d', '5m', fake_yahoo); took = _time.time() - t0; LOG['slow'] = 0
+check('20 stocks with a 0.4 s round trip take about 20 x 0.36 s (requests overlap), not 20 x 0.76 s', len(o) == 20 and took < 11, f'{took:.1f}s')
+starts = len(LOG['candles'])
+check('requests stay paced at about 3 a second (Angel limit)', starts == 20 and took >= 19 * ds.Angel.GAP * 0.95, f'{starts} calls in {took:.1f}s')
 
 # --- live option prices
 ds.reset(); q = ds.option_quotes(EXP.isoformat(), [23700, 23750, 23800], 'CE')
