@@ -1,0 +1,17 @@
+{
+  "_about": "Edit this file to add your own events. Dates are IST (YYYY-MM-DD). Verify exchange holidays on the NSE circular. Weekly Nifty expiry (Tuesday) is computed automatically from the holidays below.",
+  "holidays": [
+    {"date": "2026-10-20", "name": "Dussehra"},
+    {"date": "2026-11-10", "name": "Diwali Balipratipada"},
+    {"date": "2026-11-24", "name": "Guru Nanak Jayanti"},
+    {"date": "2026-12-25", "name": "Christmas"}
+  ],
+  "events": [
+    {"date": "2026-10-28", "time": "23:30", "title": "US Fed (FOMC) rate decision", "type": "global", "impact": "high", "note": "Announced 2:00 pm New York time, about 11:30 pm IST. Expect a volatile gap or whipsaw on the next morning."},
+    {"date": "2026-11-08", "time": "evening", "title": "Diwali Muhurat trading (Sunday, timings by NSE circular)", "type": "market", "impact": "medium", "note": "Special one-hour session on a Sunday. The market is closed on Monday and also on Tuesday 10 Nov."},
+    {"date": "2026-11-14", "title": "Last date for Q2 results (SEBI limit)", "type": "results", "impact": "medium", "note": "Most companies report their July-September quarter before this date: check each stock's board-meeting notice."},
+    {"date": "2026-12-04", "title": "RBI MPC policy decision", "type": "india", "impact": "high", "note": "MPC meets 2 to 4 December. Banks, NBFCs, realty and autos react most."},
+    {"date": "2026-12-10", "time": "00:30", "title": "US Fed (FOMC) rate decision with projections", "type": "global", "impact": "high", "note": "Announced 2:00 pm New York time on 9 December, about 12:30 am IST on 10 December."},
+    {"date": "2027-02-05", "title": "RBI MPC policy decision", "type": "india", "impact": "high", "note": "MPC meets 3 to 5 February 2027."}
+  ]
+}
