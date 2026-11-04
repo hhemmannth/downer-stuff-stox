@@ -20,7 +20,7 @@ FR = {
   '1h': {'PBK': PBH, 'AAA': mk(H, pd.date_range('2026-02-04 03:45', periods=len(H), freq='h', tz='UTC')), 'BBB': mk(H[:14], pd.date_range('2026-02-04 03:45', periods=14, freq='h', tz='UTC'))},
   '5m': {'AAA': mk(D + H, idx5), 'BBB': mk(flip(D + H), idx5), 'CCC': rnd(n5, idx5, 3), 'DDD': rnd(n5, idx5, 4), '^NSEI': mk(D + H, idx5).assign(Volume=0)},
   '15m': {'PBK': PBM, 'AAA': mk(D15, idx15), 'BBB': mk(flip(D15), idx15), 'CCC': rnd(len(D15), idx15, 5), 'DDD': rnd(len(D15), idx15, 6), '^NSEI': mk(D15, idx15)}}
-def fake_download(symbols, period, interval, chunk=50, pause=1.0):
+def fake_download(symbols, period, interval, chunk=50, pause=1.0, source="auto"):
     out = {s: FR[interval][s].copy() for s in symbols if s in FR[interval]}; return out, [s for s in symbols if s not in out]
 sc.download_many = fake_download
 import datetime as _dt
@@ -115,7 +115,7 @@ FR['1d']['^CNXIT'] = rnd(260, long_idx, 7, 0.004, 30000, 0.004)
 
 print('--- run rhythm: Nifty and intraday every 5 minutes, 15m candles only when a new one closes ---')
 calls15 = []; orig_dm = sc.download_many
-def counting(symbols, period, interval, chunk=50, pause=1.0):
+def counting(symbols, period, interval, chunk=50, pause=1.0, source="auto"):
     if interval == '15m': calls15.append(len(symbols))
     return orig_dm(symbols, period, interval, chunk, pause)
 sc.download_many = counting; sd = tempfile.mkdtemp(); args_i = argparse.Namespace(out=out, watchlist='watchlist.txt', universe_csv=None, events='events.json', min_score=4, top=60, intraday_top=100, state_dir=sd)

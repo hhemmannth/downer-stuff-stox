@@ -334,10 +334,10 @@ def _extract(d, t, multi):
     if f.empty: raise ValueError('no data returned')
     return f
 
-def download_many(symbols, period, interval, chunk=50, pause=1.0):
+def download_many(symbols, period, interval, chunk=50, pause=1.0, source='auto'):
     """Every download goes through here: Angel One first (official data, when its secrets are set), Yahoo for the rest.
     Returns ({symbol: frame}, [failed symbols]). See datasource.py."""
-    return datasource.fetch(symbols, period, interval, yahoo=lambda sy, pe, iv: yahoo_many(sy, pe, iv, chunk, pause))
+    return datasource.fetch(symbols, period, interval, yahoo=lambda sy, pe, iv: yahoo_many(sy, pe, iv, chunk, pause), source=source)
 
 def yahoo_many(symbols, period, interval, chunk=50, pause=1.0):
     """Chunked yfinance download with one-by-one retries. Returns ({symbol: frame}, [failed symbols])."""
@@ -674,8 +674,12 @@ def run_intraday(args, now):
     liq = read_json(args.out, 'liquid.json')
     if liq: syms = liq['top'][:args.intraday_top]; note = f'Most liquid {len(syms)} of the Nifty 500 (from the last swing scan)'
     else: syms = [x.strip() for x in open(args.watchlist) if x.strip() and not x.startswith('#')][:args.intraday_top]; note = f'Starter list of {len(syms)} (run the swing scan once to rank the Nifty 500 by liquidity)'
-    d5, failed = download_many(syms, '5d', '5m'); d15 = cached_15m(list(d5), now, args.state_dir)
-    if d15 is None and d5: d15, _ = download_many(list(d5), '10d', '15m'); save_15m(d15, now, args.state_dir)
+    # 100 stocks x 2 timeframes every 5 minutes is too many calls for Angel One's candle API (it throttles at random), so the
+    # intraday universe uses Yahoo's batch download by default. ANGEL_INTRADAY=on sends it to Angel One instead.
+    src = 'auto' if os.environ.get('ANGEL_INTRADAY', '').strip().lower() in ('on', '1', 'true', 'yes') else 'yahoo'
+    if src == 'yahoo': datasource._note('intraday stocks: Yahoo by design (set the ANGEL_INTRADAY variable to on to use Angel One)')
+    d5, failed = download_many(syms, '5d', '5m', source=src); d15 = cached_15m(list(d5), now, args.state_dir)
+    if d15 is None and d5: d15, _ = download_many(list(d5), '10d', '15m', source=src); save_15m(d15, now, args.state_dir)
     if not d5: print('No data downloaded. Nothing written.', file=sys.stderr); sys.exit(2)
     rows, states, frames = [], {}, {}
     for s, f in d5.items():
@@ -742,6 +746,7 @@ def main():
     p.add_argument('--out', default='_site/data'); p.add_argument('--watchlist', default='watchlist.txt'); p.add_argument('--universe-csv', default=None); p.add_argument('--events', default='events.json'); p.add_argument('--state-dir', default='.state')
     p.add_argument('--min-score', type=int, default=4); p.add_argument('--top', type=int, default=60); p.add_argument('--intraday-top', type=int, default=100)
     args = p.parse_args(); now = pd.Timestamp.now(tz=IST); datasource.configure(args.state_dir)
+    if args.mode == 'live': datasource.set_budget(float(os.environ.get('ANGEL_LIVE_BUDGET_S', 90)))   # a 5-minute tick must finish well inside 5 minutes
     news_due = minutes_since(os.path.join(args.out, 'news.json'), now) >= 25
     modes = {'swing': ['swing'] + ([] if market_open(now) else ['market', 'news']), 'options': ['options'], 'intraday': ['intraday'], 'market': ['market'], 'news': ['news'], 'all': ['swing', 'options', 'intraday', 'market', 'news']}.get(args.mode)
     if args.mode == 'live': modes = ['options', 'intraday', 'market'] + (['news'] if news_due else [])         # Nifty and intraday stocks every 5 minutes, news about every 30

@@ -28,11 +28,16 @@ INDEX_NAMES = {'^NSEI': ['NIFTY 50', 'NIFTY'], '^NSEBANK': ['NIFTY BANK', 'BANKN
                '^CNXREALTY': ['NIFTY REALTY'], '^CNXENERGY': ['NIFTY ENERGY'], '^CNXMEDIA': ['NIFTY MEDIA'], '^CNXINFRA': ['NIFTY INFRA', 'NIFTY INFRASTRUCTURE'],
                '^CNXPSUBANK': ['NIFTY PSU BANK'], '^CNXFIN': ['NIFTY FIN SERVICE', 'NIFTY FINANCIAL SERVICES']}
 COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
-STATE = dict(dir='.cache')
+STATE = dict(dir='.cache', deadline=None)
 STATS = dict(angel=dict(configured=False, ok=None, error=None), by_interval={}, xcheck=[], option_quotes=None, source={})
 
 def configure(state_dir):
     STATE['dir'] = state_dir or '.cache'; os.makedirs(STATE['dir'], exist_ok=True)
+
+def set_budget(seconds):
+    """Angel One time limit for this run (the 5-minute live scan uses ~90 s): after it, whatever is left goes to Yahoo, so one
+    slow day at Angel One can never make a tick overrun the next one."""
+    STATE['deadline'] = time.time() + seconds if seconds else None
 
 def _count(interval, src, n=1):
     if n: d = STATS['by_interval'].setdefault(interval, {}); d[src] = d.get(src, 0) + n
@@ -41,7 +46,7 @@ def report():
     """What the System health page shows under 'Data sources'."""
     a = STATS['angel']
     return dict(primary='Angel One' if a.get('ok') else 'Yahoo Finance', angel=a, by_interval=STATS['by_interval'], xcheck=STATS['xcheck'][:12],
-                option_quotes=STATS['option_quotes'])
+                option_quotes=STATS['option_quotes'], notes=STATS.get('notes', []))
 
 def period_days(period):
     if period in PERIOD_DAYS: return PERIOD_DAYS[period]
@@ -80,7 +85,7 @@ class AngelRateLimit(AngelError): pass             # 'exceeding access rate': sl
 WORKERS = 4                                      # requests in flight at once (8 tripped Angel's rate limit on 4 Nov); starts stay paced by GAP
 
 class Angel:
-    GAP = 0.36                                   # seconds between request starts (Angel allows about 3 a second)
+    GAP = 0.40                                   # seconds between request starts (Angel allows 3 a second and 180 a minute)
     def __init__(self, env=None):
         e = env or os.environ
         self.key, self.client, self.mpin, self.secret = (str(e.get(k, '')).strip() for k in ('ANGEL_API_KEY', 'ANGEL_CLIENT_CODE', 'ANGEL_MPIN', 'ANGEL_TOTP_SECRET'))
@@ -100,7 +105,12 @@ class Angel:
         return json.loads(raw)
 
     def login(self):
-        with self._login_lock: return self._login()
+        with self._login_lock:
+            if self.jwt or fcntl is None: return self._login()
+            with open(self.session_file + '.lock', 'a+') as lk:          # the other scanner may be logging in right now: wait, then reuse
+                fcntl.flock(lk, fcntl.LOCK_EX)
+                try: return self._login()
+                finally: fcntl.flock(lk, fcntl.LOCK_UN)
 
     def _login(self):
         if self.jwt: return self.jwt
@@ -108,7 +118,11 @@ class Angel:
             s = json.load(open(self.session_file))
             if time.time() - s['at'] < 5 * 3600: self.jwt = s['jwt']; return self.jwt
         except Exception: pass
-        js = self._post('/rest/auth/angelbroking/user/v1/loginByPassword', dict(clientcode=self.client, password=self.mpin, totp=totp(self.secret)), auth=False)
+        for attempt in range(3):                                          # Angel allows one login a second
+            try: js = self._post('/rest/auth/angelbroking/user/v1/loginByPassword', dict(clientcode=self.client, password=self.mpin, totp=totp(self.secret)), auth=False); break
+            except urllib.error.HTTPError as ex:
+                if ex.code in (403, 429) and attempt < 2: time.sleep(1.5 * (attempt + 1)); continue
+                raise AngelError(f'login failed: HTTP {ex.code}')
         d = js.get('data') or {}
         if not js.get('status') or not d.get('jwtToken'): raise AngelError(f"login failed: {js.get('message') or js.get('errorcode') or 'no session token'}")
         self.jwt = d['jwtToken']
@@ -226,17 +240,20 @@ def angel():
     return a if a is not None and not a.dead else None
 
 def reset():                                     # tests
-    _A.update(obj=None, init=False); STATS.update(angel=dict(configured=False, ok=None, error=None), by_interval={}, xcheck=[], option_quotes=None, source={})
+    _A.update(obj=None, init=False); STATE['deadline'] = None
+    STATS.update(angel=dict(configured=False, ok=None, error=None), by_interval={}, xcheck=[], option_quotes=None, source={}, notes=[])
 
 # ------------------------------------------------------------------ fetching
-def fetch(symbols, period, interval, yahoo):
-    """Same answer as the old Yahoo-only download: ({symbol: OHLCV frame}, [failed symbols])."""
+def fetch(symbols, period, interval, yahoo, source='auto'):
+    """Same answer as the old Yahoo-only download: ({symbol: OHLCV frame}, [failed symbols]). source='yahoo' skips Angel One."""
     symbols = list(dict.fromkeys(symbols))
     if interval == '1d' and period in ('1y', '2y') and len(symbols) >= 30: return daily_cached(symbols, period, yahoo)
-    return _fetch(symbols, period, interval, yahoo)
+    return _fetch(symbols, period, interval, yahoo, source)
 
-def _fetch(symbols, period, interval, yahoo):
-    out, rest, a = {}, [], angel()
+def _fetch(symbols, period, interval, yahoo, source='auto'):
+    out, rest, a = {}, [], (angel() if source != 'yahoo' else None)
+    if a is not None and STATE.get('deadline') and time.time() > STATE['deadline']:
+        a = None; _note(f'{interval}: Angel One time limit for this run reached, Yahoo used')
     if a is not None and interval in INTERVAL:
         days, todo = period_days(period), []
         for i, s in enumerate(symbols):
@@ -260,6 +277,9 @@ def _fetch(symbols, period, interval, yahoo):
                             a.dead = True; STATS['angel'].update(ok=False, error=f'stopped after 12 errors in a row ({e})'[:200])
                             print(f'  Angel One stopped for this run after 12 errors in a row ({e}); using Yahoo', file=sys.stderr, flush=True); break
                     if len(todo) >= 50 and (done % 100 == 0 or done == len(todo)): print(f'  Angel One {interval}: {done}/{len(todo)} in {time.time() - t0:.0f}s', flush=True)
+                    if STATE.get('deadline') and time.time() > STATE['deadline'] and done < len(todo):
+                        last = last or 'time limit'; _note(f'{interval}: Angel One time limit reached after {done}/{len(todo)}, rest via Yahoo')
+                        print(f'  Angel One {interval}: time limit for this run reached after {done}/{len(todo)}; the rest via Yahoo', file=sys.stderr, flush=True); break
             finally:
                 ex.shutdown(wait=True, cancel_futures=True)
             got = sum(1 for s, _ in todo if s in out)
@@ -279,6 +299,10 @@ def _fetch(symbols, period, interval, yahoo):
         for s in y: STATS['source'][s] = 'yahoo'
         out.update(y); _count(interval, 'Yahoo', len(y))
     return out, failed
+
+def _note(msg):
+    n = STATS.setdefault('notes', [])
+    if msg not in n: n.append(msg)
 
 def _naive_daily(f):
     f = f.copy(); idx = pd.DatetimeIndex(f.index)

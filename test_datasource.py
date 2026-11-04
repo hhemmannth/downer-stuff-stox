@@ -131,6 +131,29 @@ check('the log says how many came from Angel, how many went to Yahoo and why', '
 o2, _ = ds.fetch([f'STK{i}' for i in range(5)], '5d', '5m', fake_yahoo)
 check('once the limit clears, Angel serves again in the same run', all(ds.STATS['source'][f'STK{i}'] == 'angel' for i in range(5)))
 
+# --- intraday by design on Yahoo: source='yahoo' never touches Angel One
+ds.reset(); LOG['candles'].clear(); Y.clear()
+o, _ = ds.fetch(['RELIANCE', 'STK1'], '5d', '5m', fake_yahoo, source='yahoo')
+check("source='yahoo' (the intraday universe) uses Yahoo only, no Angel candle calls", set(o) == {'RELIANCE', 'STK1'} and not LOG['candles'] and Y)
+
+# --- time limit per live tick: when it runs out, the rest goes to Yahoo and the tick ends on time
+ds.reset(); LOG['slow'] = 0.5; LOG['candles'].clear(); Y.clear(); ds.set_budget(3.0); t0 = _time.time()
+o, _ = ds.fetch([f'STK{i}' for i in range(30)], '5d', '5m', fake_yahoo); took = _time.time() - t0; LOG['slow'] = 0
+n_ang = sum(1 for i in range(30) if ds.STATS['source'].get(f'STK{i}') == 'angel')
+check('the time limit stops Angel One requests and sends the rest to Yahoo', len(o) == 30 and 0 < n_ang < 30 and took < 8, f'{n_ang} from Angel in {took:.1f}s')
+o2, _ = ds.fetch(['STK31'], '5d', '5m', fake_yahoo)
+check('after the time limit, later downloads in the same run go straight to Yahoo', ds.STATS['source'].get('STK31') == 'yahoo' and any('time limit' in n for n in ds.report()['notes']))
+ds.set_budget(None)
+
+# --- two scanners starting together log in once and share the session
+for x in os.listdir(tempfile.gettempdir()):
+    if x.startswith('angel_session_') and not x.endswith('.lock'): os.remove(os.path.join(tempfile.gettempdir(), x))
+LOG['login'] = 0
+code = "import datasource as ds, tempfile; ds.configure(tempfile.mkdtemp()); a = ds.angel(); print('ok' if a else 'fail')"
+ps = [subprocess.Popen([_sys.executable, '-c', code], env=dict(os.environ, ANGEL_MPIN='1234'), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) for _ in range(2)]
+outs = [p_.communicate()[0].strip() for p_ in ps]
+check('two scanners starting at once: one login, both connected', outs == ['ok', 'ok'] and LOG['login'] == 1, f'{outs}, logins {LOG["login"]}')
+
 # --- live option prices
 ds.reset(); q = ds.option_quotes(EXP.isoformat(), [23700, 23750, 23800], 'CE')
 check('live Nifty option prices: last, best bid and ask for each strike', set(q) == {23700, 23750, 23800} and q[23700]['bid'] == 99.5 and q[23700]['ask'] == 100.5 and q[23700]['ltp'] > 0, str(q.get(23700)))
