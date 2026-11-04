@@ -13,6 +13,8 @@ System health page.
 
 Secrets (all four are needed to use Angel One): ANGEL_API_KEY, ANGEL_CLIENT_CODE, ANGEL_MPIN, ANGEL_TOTP_SECRET."""
 import base64, datetime as dt, hashlib, hmac, json, os, pickle, random, struct, sys, tempfile, threading, time, urllib.error, urllib.request
+try: import fcntl                                    # Linux / macOS: lets the live scan and the background swing scan share one pace
+except ImportError: fcntl = None
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
@@ -119,12 +121,25 @@ class Angel:
         """Angel said 'too fast': space requests further apart for the rest of this run."""
         with self._pace_lock: self.gap = min(1.2, self.gap * 1.5)
 
+    PACE_FILE = os.path.join(tempfile.gettempdir(), 'angel_pace')
+
     def _pace(self, gap):
-        """Space request STARTS by `gap` seconds across all threads; the requests themselves may overlap."""
+        """Space request STARTS by `gap` seconds across all threads AND all scanner processes on this runner (the loop runs the
+        live scan and the hourly swing scan at the same time; each pacing alone would together exceed Angel's limit)."""
         with self._pace_lock:
-            wait = self._last + gap - time.time()
-            if wait > 0: time.sleep(wait)
-            self._last = time.time()
+            if fcntl is None:
+                wait = self._last + gap - time.time()
+                if wait > 0: time.sleep(wait)
+                self._last = time.time(); return
+            with open(self.PACE_FILE, 'a+') as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+                try:
+                    fh.seek(0); raw = fh.read().strip()
+                    last = float(raw) if raw else 0.0
+                    wait = last + gap - time.time()
+                    if wait > 0: time.sleep(wait)
+                    now = time.time(); fh.seek(0); fh.truncate(); fh.write(f'{now:.4f}'); fh.flush(); self._last = now
+                finally: fcntl.flock(fh, fcntl.LOCK_UN)
 
     def _forget_session(self, used=None):
         with self._login_lock:

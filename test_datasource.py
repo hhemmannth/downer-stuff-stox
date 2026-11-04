@@ -110,6 +110,15 @@ check('20 stocks with a 0.4 s round trip take about 20 x 0.36 s (requests overla
 starts = len(LOG['candles'])
 check('requests stay paced at about 3 a second (Angel limit)', starts == 20 and took >= 19 * ds.Angel.GAP * 0.95, f'{starts} calls in {took:.1f}s')
 
+# --- two scanner processes at once (live scan + background swing) share ONE pace
+import subprocess, sys as _sys
+LOG['candles'].clear(); env = dict(os.environ, ANGEL_MPIN='1234'); code = (
+    "import datasource as ds, tempfile; ds.configure(tempfile.mkdtemp());"
+    "y=lambda s,p,i:({},list(s)); o,_=ds.fetch(['STK%d' % i for i in range(12)], '5d', '5m', y); print(len(o))")
+t0 = _time.time(); ps = [subprocess.Popen([_sys.executable, '-c', code], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) for _ in range(2)]
+outs = [p_.communicate()[0].strip() for p_ in ps]; took = _time.time() - t0
+check('two scanner processes together keep to one pace (about 3 requests a second in total)', outs == ['12', '12'] and len(LOG['candles']) == 24 and took >= 23 * ds.Angel.GAP * 0.9, f'{len(LOG["candles"])} calls in {took:.1f}s, results {outs}')
+
 # --- rate limit: Angel says 'too fast' for a while -> slow down and keep going, never switch Angel off
 import io, contextlib
 ds.reset(); LOG['rate'] = 30; buf = io.StringIO()
