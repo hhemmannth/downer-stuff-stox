@@ -73,8 +73,9 @@ def build_tokens(rows, today):
     return dict(date=today, eq=eq, idx=idx, opt=opt)
 
 class AngelError(Exception): pass
+class AngelRateLimit(AngelError): pass             # 'exceeding access rate': slow down and retry, never a reason to give up on Angel
 
-WORKERS = 8                                      # requests in flight at once: hides the ~3 s India <-> GitHub (US) round trip; starts stay paced by GAP
+WORKERS = 4                                      # requests in flight at once (8 tripped Angel's rate limit on 4 Nov); starts stay paced by GAP
 
 class Angel:
     GAP = 0.36                                   # seconds between request starts (Angel allows about 3 a second)
@@ -84,7 +85,7 @@ class Angel:
         self.base = str(e.get('ANGEL_BASE', 'https://apiconnect.angelone.in')).rstrip('/')
         self.master = str(e.get('ANGEL_MASTER_URL', 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'))
         self.configured = all((self.key, self.client, self.mpin, self.secret)); self.jwt = None; self.dead = False; self._last = 0.0; self._tok = None
-        self._pace_lock, self._login_lock = threading.Lock(), threading.RLock()
+        self._pace_lock, self._login_lock = threading.Lock(), threading.RLock(); self.gap = self.GAP
         # the session token lives in the runner's temp folder, never in .cache (which is saved to GitHub's cache storage)
         self.session_file = os.path.join(tempfile.gettempdir(), 'angel_session_' + hashlib.sha1((self.client + self.key).encode()).hexdigest()[:10] + '.json')
 
@@ -114,6 +115,10 @@ class Angel:
         except Exception: pass
         return self.jwt
 
+    def slow_down(self):
+        """Angel said 'too fast': space requests further apart for the rest of this run."""
+        with self._pace_lock: self.gap = min(1.2, self.gap * 1.5)
+
     def _pace(self, gap):
         """Space request STARTS by `gap` seconds across all threads; the requests themselves may overlap."""
         with self._pace_lock:
@@ -140,13 +145,15 @@ class Angel:
             except urllib.error.HTTPError as ex:
                 err = f'HTTP {ex.code}'
                 if ex.code in (401,) and attempt == 0: self._forget_session(used); self.login(); continue
-                if ex.code in (403, 429, 500, 502, 503) and attempt < 3: time.sleep(1.0 + attempt); continue
-                raise AngelError(err)
+                if ex.code in (403, 429, 500, 502, 503) and attempt < 3: time.sleep(1.5 * (attempt + 1)); continue
+                raise (AngelRateLimit if ex.code in (403, 429) else AngelError)(err)
             if js.get('status'): return js.get('data')
             code, msg = str(js.get('errorcode') or ''), str(js.get('message') or ''); err = f'{code} {msg}'.strip()
             if code in ('AG8001', 'AG8002', 'AG8003') or ('token' in msg.lower() and 'invalid' in msg.lower()):
                 self._forget_session(used); self.login(); continue
-            if 'rate' in msg.lower() or 'exceed' in msg.lower(): time.sleep(1.0 + attempt); continue
+            if 'rate' in msg.lower() or 'exceed' in msg.lower():
+                if attempt < 3: time.sleep(1.5 * (attempt + 1)); continue
+                raise AngelRateLimit(err)
             raise AngelError(err or 'request failed')
         raise AngelError(err)
 
@@ -176,7 +183,7 @@ class Angel:
         now = dt.datetime.now(IST); start = now - dt.timedelta(days=min(days, MAX_DAYS[interval]))
         start = start.replace(hour=0, minute=0) if interval == '1d' else start.replace(hour=9, minute=15)
         data = self.call('/rest/secure/angelbroking/historical/v1/getCandleData', dict(exchange=exchange, symboltoken=str(token), interval=INTERVAL[interval],
-                         fromdate=start.strftime('%Y-%m-%d %H:%M'), todate=now.strftime('%Y-%m-%d %H:%M')), gap=self.GAP)
+                         fromdate=start.strftime('%Y-%m-%d %H:%M'), todate=now.strftime('%Y-%m-%d %H:%M')), gap=self.gap)
         if not data: raise AngelError('no candles returned')
         df = pd.DataFrame(data, columns=['t'] + COLS); t = pd.to_datetime(df['t'])
         idx = pd.DatetimeIndex(t.dt.tz_localize(None) if t.dt.tz is not None else t).normalize() if interval == '1d' else pd.DatetimeIndex(t if t.dt.tz is not None else t.dt.tz_localize(IST))
@@ -196,6 +203,7 @@ def angel():
     """The logged-in Angel One client, or None (secrets missing, login failed, or too many errors this run)."""
     if not _A['init']:
         _A['init'] = True; a = Angel(); STATS['angel']['configured'] = a.configured
+        if not a.configured: print('  Angel One not set up (ANGEL_ secrets missing): using Yahoo', flush=True)
         if a.configured:
             try: a.login(); a.tokens(); _A['obj'] = a; STATS['angel'].update(ok=True, error=None)
             except Exception as ex: STATS['angel'].update(ok=False, error=str(ex)[:200]); print(f'  Angel One unavailable, using Yahoo: {ex}', file=sys.stderr)
@@ -222,20 +230,29 @@ def _fetch(symbols, period, interval, yahoo):
             if tk is None: rest.append(s)
             else: todo.append((s, tk))
         if todo:
-            t0, streak, done = time.time(), 0, 0
+            t0, streak, done, limited, last = time.time(), 0, 0, 0, ''
             ex = ThreadPoolExecutor(max_workers=min(WORKERS, len(todo)))
             futs = {ex.submit(a.candles, tk, interval, days): s for s, tk in todo}
             try:
                 for f in as_completed(futs):
                     s = futs[f]; done += 1
                     try: out[s] = f.result(); streak = 0; STATS['source'][s] = 'angel'; _count(interval, 'Angel One')
+                    except AngelRateLimit as e:                      # too fast: slow down, this stock goes to Yahoo this time
+                        rest.append(s); limited += 1; a.slow_down(); last = f'{s}: {e}'; STATS['angel']['last_error'] = last[:200]
                     except Exception as e:
-                        rest.append(s); streak += 1; STATS['angel']['last_error'] = f'{s}: {e}'[:200]
+                        rest.append(s); streak += 1; last = f'{s}: {e}'; STATS['angel']['last_error'] = last[:200]
                         if streak >= 12:
-                            a.dead = True; STATS['angel'].update(ok=False, error=f'stopped after 12 errors in a row ({e})'[:200]); break
+                            a.dead = True; STATS['angel'].update(ok=False, error=f'stopped after 12 errors in a row ({e})'[:200])
+                            print(f'  Angel One stopped for this run after 12 errors in a row ({e}); using Yahoo', file=sys.stderr, flush=True); break
                     if len(todo) >= 50 and (done % 100 == 0 or done == len(todo)): print(f'  Angel One {interval}: {done}/{len(todo)} in {time.time() - t0:.0f}s', flush=True)
             finally:
                 ex.shutdown(wait=True, cancel_futures=True)
+            got = sum(1 for s, _ in todo if s in out)
+            if got < len(todo) or len(todo) >= 20:              # always say where the candles came from, and why when not Angel
+                msg = f'  Angel One {interval}: {got}/{len(todo)} served'
+                if got < len(todo):
+                    msg += f', {len(todo) - got} via Yahoo' + (f' ({limited} rate-limited, now pacing {a.gap:.2f}s)' if limited else '') + (f'; last error: {last}' if last else '')
+                print(msg, file=sys.stderr if got < len(todo) else sys.stdout, flush=True)
             for f, s in futs.items():                    # anything cancelled or still unread after a stop goes to Yahoo
                 if s not in out and s not in rest:
                     try: out[s] = f.result(timeout=0); STATS['source'][s] = 'angel'; _count(interval, 'Angel One')

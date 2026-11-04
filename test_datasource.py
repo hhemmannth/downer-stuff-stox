@@ -39,6 +39,7 @@ class H(http.server.BaseHTTPRequestHandler):
             LOG['candles'].append((body['symboltoken'], body['interval']))
             if LOG.get('slow'): import time as _t; _t.sleep(LOG['slow'])
             if body['symboltoken'] == '11536': return self._j(dict(status=False, message='Something went wrong', errorcode='AB2001'))
+            if LOG.get('rate', 0) > 0: LOG['rate'] -= 1; return self._j(dict(status=False, message='Access denied because of exceeding access rate', errorcode=''))
             return self._j(dict(status=True, message='SUCCESS', errorcode='', data=bars(body['symboltoken'], body['interval'])))
         if '/quote' in self.path:
             ex, toks = list(body['exchangeTokens'].items())[0]; LOG['quote'].append((ex, len(toks)))
@@ -108,6 +109,18 @@ o, _ = ds.fetch([f'STK{i}' for i in range(20)], '5d', '5m', fake_yahoo); took = 
 check('20 stocks with a 0.4 s round trip take about 20 x 0.36 s (requests overlap), not 20 x 0.76 s', len(o) == 20 and took < 11, f'{took:.1f}s')
 starts = len(LOG['candles'])
 check('requests stay paced at about 3 a second (Angel limit)', starts == 20 and took >= 19 * ds.Angel.GAP * 0.95, f'{starts} calls in {took:.1f}s')
+
+# --- rate limit: Angel says 'too fast' for a while -> slow down and keep going, never switch Angel off
+import io, contextlib
+ds.reset(); LOG['rate'] = 30; buf = io.StringIO()
+with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+    o, _ = ds.fetch([f'STK{i}' for i in range(30)], '5d', '5m', fake_yahoo)
+a = ds.angel(); log = buf.getvalue(); LOG['rate'] = 0
+check('a burst of rate-limit answers does not switch Angel off for the run', a is not None and not a.dead and ds.report()['primary'] == 'Angel One', ds.report()['angel'].get('error') or '')
+check('after a rate limit the pace slows down', a.gap > ds.Angel.GAP, f'{a.gap:.2f}s')
+check('the log says how many came from Angel, how many went to Yahoo and why', 'Angel One 5m:' in log and 'rate-limited' in log and len(o) == 30, log.strip().splitlines()[-1][:120] if log.strip() else '')
+o2, _ = ds.fetch([f'STK{i}' for i in range(5)], '5d', '5m', fake_yahoo)
+check('once the limit clears, Angel serves again in the same run', all(ds.STATS['source'][f'STK{i}'] == 'angel' for i in range(5)))
 
 # --- live option prices
 ds.reset(); q = ds.option_quotes(EXP.isoformat(), [23700, 23750, 23800], 'CE')
