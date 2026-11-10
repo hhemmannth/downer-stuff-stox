@@ -59,4 +59,11 @@ jobs:
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
           ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          ALERTS_STATE: pub/state/alerts.json
+          HOLDING_SYMBOLS: ${{ vars.HOLDING_SYMBOLS }}
+          ACCOUNT_CAPITAL: ${{ vars.ACCOUNT_CAPITAL }}
+          RISK_PCT: ${{ vars.RISK_PCT }}
+          RISK_PCT_APLUS: ${{ vars.RISK_PCT_APLUS }}
+          REGIME_FILTER: ${{ vars.REGIME_FILTER }}
+          ALERT_CHARTS: ${{ vars.ALERT_CHARTS }}
         run: python loop.py --pub pub

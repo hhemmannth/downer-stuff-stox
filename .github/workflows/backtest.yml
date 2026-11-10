@@ -1,0 +1,64 @@
+name: backtest
+
+# Backtesting lab: replays your swing playbook on about two years of history with the live engine and the live trade tracker, then
+# publishes data/backtest.json for the Backtest lab page. Runs every Saturday morning, or by hand from the Actions tab.
+# The 250 most liquid Nifty 500 stocks take roughly 30-45 minutes; all 500 take about twice that.
+on:
+  schedule:
+    - cron: '30 1 * * 6'               # Saturday 07:00 IST
+  workflow_dispatch:
+    inputs:
+      top:
+        description: How many of the most liquid Nifty 500 stocks (0 = all)
+        default: '250'
+      variants:
+        description: Also test the rule variants (volume, stop buffer, zone width) on the 120 most liquid stocks
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backtest
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Prepare
+        run: |
+          python publish.py prepare pub
+          echo "START=$(date +%s)" >> "$GITHUB_ENV"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Replay
+        env:
+          PYTHONWARNINGS: ignore
+          TOP_IN: ${{ inputs.top }}
+          VAR_IN: ${{ inputs.variants }}
+        run: |
+          top="${TOP_IN:-250}"; extra="--variants"
+          if [ "$VAR_IN" = "false" ]; then extra=""; fi
+          python backtest.py --out pub/data --top "$top" $extra
+      - name: Publish
+        run: python publish.py push pub "$START" "backtest"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tell the phone
+        if: always()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          STATUS: ${{ job.status }}
+        run: python backtest.py --out pub/data --notify "$STATUS"

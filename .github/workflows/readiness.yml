@@ -1,0 +1,61 @@
+name: readiness
+
+# 08:50 IST on trading days: checks Angel One, Yahoo, the Nifty 500 list, your alert channels, that the outside timer (cron-job.org)
+# fired yesterday and how many days are left on its token, then sends one message ("Ready" or what to fix) and updates the System
+# health page. cron-job.org can start it too; running it twice is harmless.
+on:
+  schedule:
+    - cron: '20 3 * * 1-5'            # 08:50 IST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Run even on a holiday or weekend
+        type: boolean
+        default: false
+
+permissions:
+  contents: write                      # publishes health/readiness.json to gh-pages
+  actions: read                        # reads the watchdog's run history
+
+concurrency:
+  group: readiness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Prepare
+        run: |
+          python publish.py prepare pub
+          echo "START=$(date +%s)" >> "$GITHUB_ENV"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          CRON_TOKEN_EXPIRES: ${{ vars.CRON_TOKEN_EXPIRES }}
+          CRON_JOB_EXPECTED: ${{ vars.CRON_JOB_EXPECTED }}
+          FORCE_IN: ${{ inputs.force }}
+        run: |
+          extra=""; if [ "$FORCE_IN" = "true" ]; then extra="--force"; fi
+          python readiness.py --out pub/data $extra
+      - name: Publish
+        run: python publish.py push pub "$START" "readiness"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

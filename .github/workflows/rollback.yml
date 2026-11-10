@@ -1,0 +1,53 @@
+name: rollback
+
+# One-click undo for a bad upload: reverts the last commit(s) on main. Run it from the Actions tab, type "yes" to confirm.
+# If the commit touched files under .github/workflows, GitHub does not allow a workflow to change those files: the run then
+# stops with a message and you undo those files by hand (edit the file on GitHub and paste the previous version).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type yes to undo the last upload
+        required: true
+        default: 'no'
+      commits:
+        description: How many of the latest uploads to undo (1-5)
+        required: true
+        default: '1'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rollback
+  cancel-in-progress: false
+
+jobs:
+  revert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          N: ${{ inputs.commits }}
+        run: |
+          if [ "$CONFIRM" != "yes" ]; then echo "Nothing done: type yes in the confirm box to roll back."; exit 1; fi
+          case "$N" in 1|2|3|4|5) ;; *) echo "commits must be a number from 1 to 5"; exit 1;; esac
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 8
+      - name: Revert
+        env:
+          N: ${{ inputs.commits }}
+        run: |
+          git config user.name "rollback"
+          git config user.email "rollback@users.noreply.github.com"
+          echo "Undoing:"; git log -n "$N" --format='  %h %s'
+          if git diff --name-only "HEAD~$N" HEAD | grep -q '^\.github/workflows/'; then
+            echo "::error::These commits changed files under .github/workflows. GitHub does not let a workflow edit those, so undo those files by hand."
+            exit 1
+          fi
+          git revert --no-edit "HEAD~$N..HEAD"
+          git push origin HEAD:main
+          echo "Done. The previous version of your files is back on main."

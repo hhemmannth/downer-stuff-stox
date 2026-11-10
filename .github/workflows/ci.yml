@@ -1,0 +1,40 @@
+name: ci
+
+# Safety net: every time you upload files to main, all the tests run (about 4 minutes). If anything fails you get a phone alert
+# that says which check and how to undo the upload (the `rollback` workflow). Nothing here changes your live data.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt pyyaml
+      - name: Run all tests
+        run: python run_tests.py
+        env:
+          PYTHONWARNINGS: ignore
+      - name: Phone alert if the tests failed
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python ci_alert.py

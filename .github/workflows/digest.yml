@@ -1,0 +1,58 @@
+name: digest
+
+# A pre-market brief at 08:45 IST and an end-of-day recap at 15:45 IST (phone push through ntfy and/or Telegram).
+# GitHub can run schedules late, so cron-job.org can also start this workflow (see README); a repeat is harmless apart from a
+# second message. Does nothing on weekends and NSE holidays.
+on:
+  schedule:
+    - cron: '15 3 * * 1-5'            # 08:45 IST
+    - cron: '15 10 * * 1-5'           # 15:45 IST
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Which digest
+        type: choice
+        options: [morning, evening]
+        default: morning
+      force:
+        description: Send even on a holiday or weekend
+        type: boolean
+        default: false
+
+permissions:
+  contents: write                      # publish.py prepare reads the gh-pages branch
+
+concurrency:
+  group: digest
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python publish.py prepare pub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Send the digest
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          MODE_IN: ${{ inputs.mode }}
+          FORCE_IN: ${{ inputs.force }}
+        run: |
+          mode="$MODE_IN"
+          if [ -z "$mode" ]; then
+            hour=$(TZ=Asia/Kolkata date +%H)
+            if [ "$hour" -lt 12 ]; then mode=morning; else mode=evening; fi
+          fi
+          extra=""; if [ "$FORCE_IN" = "true" ]; then extra="--force"; fi
+          python digest.py --mode "$mode" --dir pub/data $extra

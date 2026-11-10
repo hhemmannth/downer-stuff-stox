@@ -75,6 +75,12 @@ jobs:
 
       - name: Scan
         env:
+          ALERTS_STATE: pub/state/alerts.json
+          HOLDING_SYMBOLS: ${{ vars.HOLDING_SYMBOLS }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
@@ -92,6 +98,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python notify.py --dir pub/data --state pub/state/notified.json
+
+      - name: Answer Telegram commands
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACCOUNT_CAPITAL: ${{ vars.ACCOUNT_CAPITAL }}
+          RISK_PCT: ${{ vars.RISK_PCT }}
+          RISK_PCT_APLUS: ${{ vars.RISK_PCT_APLUS }}
+        run: python bot.py --dir pub/data --state pub/state/bot.json
 
       - name: Publish to GitHub Pages (gh-pages branch)
         env:
