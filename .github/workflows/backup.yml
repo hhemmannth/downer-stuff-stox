@@ -1,0 +1,70 @@
+name: backup
+
+# Every night at 23:00 IST: your journal is read (as the read-only scanner user), encrypted with your passphrase and saved into your
+# PRIVATE backup repo. It also keeps your Supabase project active. A failed backup alerts your phone.
+# One-time setup: see README "Journal backup". Needs: variable BACKUP_REPO (owner/name of the private repo), secrets BACKUP_TOKEN,
+# BACKUP_PASSPHRASE, SUPABASE_BOT_EMAIL, SUPABASE_BOT_PASSWORD.
+on:
+  schedule:
+    - cron: '30 17 * * *'              # 23:00 IST
+  workflow_dispatch:
+
+permissions:
+  contents: write                      # publishes only the backup time and size (no journal content) to gh-pages
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Open the private backup repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.BACKUP_REPO }}
+          token: ${{ secrets.BACKUP_TOKEN }}
+          path: vault
+      - name: Prepare
+        run: |
+          python publish.py prepare pub
+          echo "START=$(date +%s)" >> "$GITHUB_ENV"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Back up the journal
+        env:
+          SUPABASE_BOT_EMAIL: ${{ secrets.SUPABASE_BOT_EMAIL }}
+          SUPABASE_BOT_PASSWORD: ${{ secrets.SUPABASE_BOT_PASSWORD }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+        run: python backup.py --vault vault --health pub/data/health/backup.json
+      - name: Save the encrypted file in the private repo
+        run: |
+          cd vault
+          git config user.name "backup"
+          git config user.email "backup@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "Nothing new to save."; else git commit -m "journal backup $(date -u +%Y-%m-%d)" && git push; fi
+      - name: Publish the backup time
+        run: python publish.py push pub "$START" "backup"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Alert if anything above failed
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+        run: python backup.py --failed "The nightly backup did not finish. Open the backup run in GitHub Actions to see which step failed (often the BACKUP_REPO variable or the BACKUP_TOKEN)."

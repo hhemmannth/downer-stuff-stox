@@ -1,0 +1,49 @@
+name: tradebook
+
+# Experimental. After the close (15:50 IST) the day's fills are read from Angel One and saved to your broker_fills table; the app's
+# Journal page then offers to import them as trades. Nothing is written into your journal automatically.
+# Needs the ANGEL_* secrets and SUPABASE_BOT_EMAIL / SUPABASE_BOT_PASSWORD (see README "Tradebook import").
+on:
+  schedule:
+    - cron: '20 10 * * 1-5'            # 15:50 IST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Run even on a holiday or weekend
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tradebook
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Read the tradebook
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          SUPABASE_BOT_EMAIL: ${{ secrets.SUPABASE_BOT_EMAIL }}
+          SUPABASE_BOT_PASSWORD: ${{ secrets.SUPABASE_BOT_PASSWORD }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          FORCE_IN: ${{ inputs.force }}
+        run: |
+          extra=""; if [ "$FORCE_IN" = "true" ]; then extra="--force"; fi
+          python tradebook.py $extra
