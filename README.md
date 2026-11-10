@@ -77,6 +77,30 @@ Every push (triggers, scan updates, T1/T2/T3, stops, expiry, watchdog restarts) 
 - **Telegram:** open Telegram, message **@BotFather**, send `/newbot` and follow the steps; copy the **bot token**. Open your new bot and send it any message. Then open `https://api.telegram.org/bot<YOUR TOKEN>/getUpdates` in a browser and copy the number after `"chat":{"id":`. Add the secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (several chat ids can be separated by commas). Messages come with an **Open in DownerStuff** button that goes straight to the trade.
 - Test both: Actions → scan → tick **test_alert** → Run workflow.
 
+## Supabase: backup, tradebook import and two-factor (final steps)
+Your journal stays in your Supabase project (table `journal_state`, one row for you, readable only by you). These add three things. **Run in this order.**
+
+**A. One-time Supabase setup**
+1. Authentication > Users > Add user > Create new user: email `hhemmannth+scanner@gmail.com` (Gmail delivers it to you; Supabase sees a separate user), a long random password (`openssl rand -base64 24` in Terminal), tick **Auto Confirm User**. This second login is only for the GitHub jobs, so your own password never goes into GitHub.
+2. SQL Editor > New query > paste the whole of `supabase/setup.sql` > Run. (If your scanner email differs, change it in the first function before running.) It gives the scanner read-only access to your journal row and creates the `broker_fills` table. It leaves your three existing policies alone.
+3. Run `supabase/verify.sql` the same way: the first query must show `true` for both tables, the second 4 policies, the third 4 policies.
+
+**B. Nightly encrypted backup (workflow `backup`)**
+1. Create a **private** GitHub repo, for example `downerstuff-vault` (empty is fine).
+2. GitHub > your profile > Settings > Developer settings > Fine-grained tokens > Generate: only that repo, permission **Contents: Read and write**, longest expiry. Copy the token.
+3. In the main repo: Settings > Secrets and variables > Actions. Secrets: `SUPABASE_BOT_EMAIL` (the scanner email), `SUPABASE_BOT_PASSWORD`, `BACKUP_TOKEN` (the token), `BACKUP_PASSPHRASE` (a long passphrase, at least 12 characters, from a password manager: **without it the backups cannot be opened**). Variable: `BACKUP_REPO` = `your-username/downerstuff-vault`.
+4. Actions > backup > Run workflow. A `.dsbk` file appears in the private repo, and System health shows the Journal backup card. It then runs every night at 23:00 IST and also keeps your Supabase project from pausing. Files are encrypted (AES-256-GCM) before they leave the job; only a time and a size are published.
+5. To restore: download a `.dsbk` file, `pip install cryptography`, `python restore.py FILE` (asks for the passphrase). It writes one `.restore.json` per journal; in the app use Journal > Import. Nothing is overwritten.
+
+**C. Angel One tradebook import (workflow `tradebook`, experimental)**
+Needs A and the `ANGEL_*` secrets. Actions > tradebook > Run workflow (tick force if the market is closed). The day's fills are saved to `broker_fills`; the Journal page then shows a **From Angel One** card: Import opens the trade form with entry, exit and quantity filled in (add your stop, grade and charges), Close in journal sets the exit when you sold something you already hold, and the x dismisses. Limits: only the current day, no brokerage in the tradebook, and Angel One may require a static IP for this endpoint (the run says so if it refuses).
+
+**D. Two-factor sign-in**
+1. Settings > Two-factor sign-in > Turn on. Scan the QR code with an authenticator app **and save the secret key** (password manager). Enter the 6-digit code.
+2. Sign out, sign in again: after the password you are asked for the code. Nothing loads until it is entered.
+3. Optional, stronger: once step 2 works, run `supabase/require_2fa.sql` once in the SQL Editor. The database itself then refuses your journal without a verified code (the scanner user is exempt). To undo, run the two `drop policy` lines at the bottom of that file.
+Lost phone: Supabase > Authentication > Users > your user > remove the factor, then sign in with your password.
+
 ## Backtest lab, new pages and alert upgrades (final bundle)
 **Backtest lab (Research > Backtest lab).** The `backtest` workflow replays your swing playbook on about two years of history with the live engine (`swing.analyse`) and the live trade tracker (`signals.walk`), every Saturday 07:00 IST or by hand (Actions > backtest > Run workflow; 30 to 45 minutes for the 250 most liquid stocks, set `top` to 0 for all 500). The page shows expectancy after costs, win rate, profit factor, drawdown, an equity curve, results by grade, score, confirmation, zone, context, market regime, sector, weekday, month, volume and stop width, a first-60% / last-40% split, rule variants (volume 1.2x / 2.0x, stop buffer 0.15 / 0.40 ATR, narrow zones) that only count as better when they win in both halves, a Monte Carlo of what a year can look like at 0.5%, 0.75% and 1% risk, and a live forward test that compares tracked signals with the backtest.
 What it cannot replay, also stated on the page: the 15m precision entry (the entry is the 1H confirmation close), results-date and sector hold-backs, and stocks that left the Nifty 500. The window is about two years because free hourly history stops there.
@@ -102,7 +126,7 @@ What it cannot replay, also stated on the page: the 15m precision entry (the ent
 | `ALERT_CHARTS`, `NTFY_ACTIONS` | `off` switches off chart pictures or action alerts |
 | `CRON_TOKEN_EXPIRES`, `CRON_JOB_EXPECTED` | see the readiness check above |
 
-**Not in this bundle** (each needs something outside this repo, so it could not be tested here): results behind your login and a nightly journal backup (need a table and policies in your Supabase project), importing your Angel One tradebook, two-factor sign-in, and second-by-second live prices or a real-time engine (need an always-on server). The journal's own Export button remains the way to back it up.
+**Not included:** scan results behind your login (your repo is public, so the strategy code is public anyway), and second-by-second live prices or a real-time engine (they need an always-on machine). Use Angel One's own price alerts and your stop-loss orders for second-level protection.
 
 ## Your daily routine and safety net (batch 1)
 | Time (IST) | What runs | What you get |
@@ -130,7 +154,7 @@ What it cannot replay, also stated on the page: the 15m precision entry (the ent
 **Market data.** The year of daily candles comes from Yahoo (about a minute for the whole Nifty 500, and it matched Angel One on every close we compared). Each morning a sample of stocks plus Nifty is checked against Angel One and shown under System health > Data sources. Angel One serves the Nifty candles, the hourly candles for swing candidates and the live option prices. Intraday stocks use Yahoo by design.
 
 ## Tests (no internet needed)
-`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`
+`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`
 
 ## Limits
 Without the Angel One secrets, data is Yahoo Finance (unofficial, can be delayed) and option premiums are model prices. With them, premiums at your stop and targets are still model estimates around the live price. Results dates come from Yahoo and can be missing (check NSE). Rules-based candidates, not investment advice.

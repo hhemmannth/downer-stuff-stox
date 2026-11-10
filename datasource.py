@@ -96,11 +96,11 @@ class Angel:
         # the session token lives in the runner's temp folder, never in .cache (which is saved to GitHub's cache storage)
         self.session_file = os.path.join(tempfile.gettempdir(), 'angel_session_' + hashlib.sha1((self.client + self.key).encode()).hexdigest()[:10] + '.json')
 
-    def _post(self, path, body, auth=True, timeout=30):
+    def _post(self, path, body, auth=True, timeout=30, method='POST'):
         h = {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-UserType': 'USER', 'X-SourceID': 'WEB', 'X-ClientLocalIP': '127.0.0.1',
              'X-ClientPublicIP': '127.0.0.1', 'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': self.key}
         if auth: h['Authorization'] = 'Bearer ' + str(self.jwt)
-        with urllib.request.urlopen(urllib.request.Request(self.base + path, data=json.dumps(body).encode(), headers=h, method='POST'), timeout=timeout) as r:
+        with urllib.request.urlopen(urllib.request.Request(self.base + path, data=json.dumps(body).encode() if method == 'POST' else None, headers=h, method=method), timeout=timeout) as r:
             raw = r.read().decode() or '{}'
         return json.loads(raw)
 
@@ -165,12 +165,12 @@ class Angel:
         try: os.remove(self.session_file)
         except Exception: pass
 
-    def call(self, path, body, gap=0.0):
+    def call(self, path, body, gap=0.0, method='POST'):
         """Authenticated POST at a polite pace: one re-login if the session expired, short waits on rate limits."""
         self.login(); err = 'no answer'
         for attempt in range(4):
             self._pace(gap); used = self.jwt
-            try: js = self._post(path, body)
+            try: js = self._post(path, body, method=method)
             except urllib.error.HTTPError as ex:
                 err = f'HTTP {ex.code}'
                 if ex.code in (401,) and attempt == 0: self._forget_session(used); self.login(); continue

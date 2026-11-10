@@ -63,6 +63,8 @@ R = readiness.run_checks(dict(ENV, CRON_JOB_EXPECTED='off'), RN, is_td, P, lambd
 tk = lambda v: readiness.check_token(dict(CRON_TOKEN_EXPIRES=v) if v is not None else {}, RN)
 check('readiness: token expiry: 70 days ok, 10 days warn, 2 days fail, expired fail, none info, bad text warn', [tk('2027-01-20')[0], tk('2026-11-21')[0], tk('2026-11-13')[0], tk('2026-11-01')[0], tk(None)[0], tk('soon')[0]] == ['ok', 'warn', 'fail', 'fail', 'info', 'warn'])
 check('readiness: old swing data warns, recent is fine', readiness.check_data('2026-11-08T16:20:00+05:30', RN)[0] == 'warn' and readiness.check_data('2026-11-10T16:20:00+05:30', RN)[0] == 'ok' and readiness.check_data('', RN)[0] == 'warn')
+BK = lambda h, ok=True: dict(at=(RN - dt.timedelta(hours=h)).isoformat(), ok=ok, changed=True, files=3, bytes=2048)
+check('readiness: journal backup: last night ok, 40 hours ago warns, failed run is a failure, not set up is information only', [readiness.check_backup(BK(10), RN)[0], readiness.check_backup(BK(40), RN)[0], readiness.check_backup(BK(5, False), RN)[0], readiness.check_backup(None, RN)[0]] == ['ok', 'warn', 'fail', 'info'])
 check('readiness: no alert channel at all is a failure', readiness.check_channels({})[0] == 'fail')
 check('readiness: Angel One not set up is information only', readiness.check_angel({}, lambda: (True, ''))[0] == 'info')
 od = tempfile.mkdtemp(); readiness.probe_yahoo = P['yahoo']; readiness.probe_universe = P['universe']; readiness.probe_angel = P['angel']; readiness.gh_runs = lambda: runs

@@ -79,12 +79,21 @@ def check_data(swing_iso, now):
     h = (now - g).total_seconds() / 3600
     return (OK if h <= 30 else WARN, 'Last swing scan', f'{g:%a %d %b %H:%M} IST' + ('' if h <= 30 else ' (older than expected: the 16:17 scan may have been skipped)'))
 
-def run_checks(env, now, is_trading, probes=None, fetch_runs=None, swing_iso=None):
+def check_backup(bk, now):
+    """The nightly encrypted journal backup (published as health/backup.json: a time and a size, never content)."""
+    if not bk: return (INFO, 'Journal backup', 'not set up yet (optional): see "Journal backup" in the README')
+    try: g = dt.datetime.fromisoformat(bk['at']).astimezone(IST)
+    except Exception: return (WARN, 'Journal backup', 'the backup status file is unreadable')
+    h = (now - g).total_seconds() / 3600
+    if not bk.get('ok', True): return (FAIL, 'Journal backup', f'the last backup run failed ({g:%a %d %b %H:%M})')
+    return (OK if h <= 36 else WARN, 'Journal backup', f'last run {g:%a %d %b %H:%M} IST' + ('' if h <= 36 else ' (more than 36 hours ago: check the backup workflow)'))
+
+def run_checks(env, now, is_trading, probes=None, fetch_runs=None, swing_iso=None, backup=None):
     P = dict(angel=probe_angel, yahoo=probe_yahoo, universe=probe_universe); P.update(probes or {})
     R = [check_angel(env, P['angel'])]
     ok, msg = P['yahoo'](); R.append((OK if ok else FAIL, 'Yahoo Finance', msg if ok else 'not reachable: ' + msg))
     ok, msg = P['universe'](); R.append((OK if ok else WARN, 'Nifty 500 list', msg if ok else 'live list unavailable, the local fallback list will be used (' + msg + ')'))
-    R.append(check_channels(env)); R.append(check_cron(env, now, is_trading, fetch_runs or (lambda: []))); R.append(check_token(env, now)); R.append(check_data(swing_iso or '', now))
+    R.append(check_channels(env)); R.append(check_cron(env, now, is_trading, fetch_runs or (lambda: []))); R.append(check_token(env, now)); R.append(check_data(swing_iso or '', now)); R.append(check_backup(backup, now))
     return R
 
 def summarize(R):
@@ -108,7 +117,10 @@ def main(argv=None):
     swing_iso = ''
     try: swing_iso = json.load(open(os.path.join(a.out, 'swing.json'))).get('generated_at', '')
     except Exception: pass
-    R = run_checks(dict(os.environ), now, is_trading, fetch_runs=gh_runs if os.environ.get('GITHUB_TOKEN') else None, swing_iso=swing_iso)
+    bk = None
+    try: bk = json.load(open(os.path.join(a.out, 'health', 'backup.json')))
+    except Exception: pass
+    R = run_checks(dict(os.environ), now, is_trading, fetch_runs=gh_runs if os.environ.get('GITHUB_TOKEN') else None, swing_iso=swing_iso, backup=bk)
     level, title, body = summarize(R)
     print(title); print(body)
     os.makedirs(os.path.join(a.out, 'health'), exist_ok=True)
