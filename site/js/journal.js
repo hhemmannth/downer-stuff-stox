@@ -123,7 +123,7 @@ JR.openForm = function (id, prefill) {
     <div class="calc" id="fcalc"></div>
     <div class="fsec">Exit and review</div><div class="fgrid">${f('exit', 'Exit price', 'number')}${s('xt', 'Exit type', XTYPES)}${f('mae', 'Worst price (MAE)', 'number')}${f('mfe', 'Best price (MFE)', 'number')}${f('ovr', 'P/L override (₹)', 'number')}${s('emo', 'Emotion', EMOS)}${s('brk', 'Rule break', BREAKS, 'w2')}
     <div class="field w4"><label for="f-note">Notes / lesson</label><textarea id="f-note" data-k="note">${esc(t.note || '')}</textarea></div></div>
-    <datalist id="instList">${[...new Set(JR.J().trades.map(x => x.inst).filter(Boolean))].slice(-60).map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
+    ${JR.extraForm(t)}<datalist id="instList">${[...new Set(JR.J().trades.map(x => x.inst).filter(Boolean))].slice(-60).map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
     <div class="mf">${ex ? '<button class="btn danger" data-del>Delete</button><span style="flex:1"></span>' : ''}<button class="btn" data-x>Cancel</button><button class="btn primary" data-save>${ex ? 'Save changes' : 'Save trade'}</button></div></div>`;
   document.body.appendChild(bg);
   const read = () => { const o = { ...t }; $$('[data-k]', bg).forEach(el => o[el.dataset.k] = el.value); return normTrade(o); };
@@ -137,12 +137,58 @@ JR.openForm = function (id, prefill) {
     if (e.target.closest('[data-del]') && confirm('Delete this trade?')) { const J = JR.J(); J.trades = J.trades.filter(x => x.id !== id); JR.touch(); JR.persist(); close(); App.render(); App.toast('Trade deleted'); }
     if (e.target.closest('[data-save]')) {
       const o = read(); if (!o.d || !o.inst) { App.toast('Add at least a date and an instrument'); return; }
+      if (!ex && !bg._gate) { JR.gate(o, r => { bg._gate = true; t.chk = r; $('[data-save]', bg).click(); }); return; }       // pre-trade checklist (item 19)
       const J = JR.J(); if (ex) J.trades[J.trades.findIndex(x => x.id === id)] = o; else J.trades.push(o);
       if (o.setup && !J.lists.setups.includes(o.setup)) J.lists.setups.push(o.setup);
       JR.touch(); JR.persist(); close(); App.render(); App.toast(ex ? 'Trade updated' : 'Trade saved to your journal');
     }
   });
   setTimeout(() => $(ex && !ex.exit ? '#f-exit' : '#f-entry', bg)?.focus(), 30);
+};
+
+/* Item 19: the pre-trade checklist. Your own rules, per segment. What you do not tick is saved with the trade and shows up in the weekly review. */
+JR.weekStart = weekStart;
+JR.RULES = {
+  Swing: ['Weekly trend is up, or price is at weekly support', 'Daily CHoCH and BOS, with an FVG or order-block zone', 'Price pulled back into the zone', '1H rejection, then a close above the 9 EMA on at least 1.5x volume', '15m entry trigger fired (no chasing)',
+    'Sector index is not falling', 'No results within 14 days', 'At least 2R of room to resistance', 'Risk is within my per-trade limit'],
+  Options: ['1H agrees with the direction', '15m bias agrees', '5m CHoCH, BOS, FVG and order block', 'Pullback into the 5m zone', '5m close beyond the 9 EMA', 'Delta between 0.40 and 0.60', 'Not an expiry-day afternoon', 'Fewer than 2 losses today', 'Risk is within my per-trade limit'],
+  Intraday: ['15m bias agrees', '5m structure: CHoCH, BOS and a zone', 'Volume at least 1.5x', 'Before 15:00, with the exit planned by 15:10', 'Fewer than 2 intraday trades today', 'Risk is within my per-trade limit'] };
+JR.gate = function (o, done) {
+  const rules = JR.RULES[o.cat] || JR.RULES.Swing, bg = document.createElement('div'); bg.className = 'modal-bg gate-bg';
+  bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="Pre-trade checklist" style="max-width:560px"><div class="mh"><h2>Pre-trade checklist</h2><span class="pill info">${esc(o.cat || 'Swing')}</span></div><div class="mb">
+    <p class="help" style="margin:0 0 10px">Tick what is true for <b>${esc(o.inst)}</b>. Anything left unticked is saved with the trade as a skipped rule, so your weekly review can show what skipping costs you.</p>
+    <div class="gate-list">${rules.map((r, i) => `<label class="gate-row"><input type="checkbox" data-g="${i}"><span>${esc(r)}</span></label>`).join('')}</div><p class="help" id="gateMsg" style="margin:10px 0 0"></p></div>
+    <div class="mf"><button class="btn ghost" data-skip title="For trades you are entering after the fact">Logging an old trade: skip</button><span style="flex:1"></span><button class="btn" data-back>Back</button><button class="btn primary" data-go>Save trade</button></div></div>`;
+  document.body.appendChild(bg);
+  const upd = () => { const n = $$('[data-g]:checked', bg).length, miss = rules.length - n; $('#gateMsg', bg).innerHTML = miss ? `<b class="warn">${miss} of ${rules.length} not ticked.</b> You can still save: it will be recorded.` : `<b class="good">All ${rules.length} ticked.</b>`; };
+  bg.addEventListener('change', upd); upd();
+  bg.addEventListener('click', e => {
+    if (e.target.closest('[data-back]')) bg.remove();
+    if (e.target.closest('[data-skip]')) { bg.remove(); done({ bypass: true, at: new Date().toISOString() }); }
+    if (e.target.closest('[data-go]')) { const on = $$('[data-g]', bg).map(x => x.checked); bg.remove(); done({ n: rules.length, ok: on.filter(Boolean).length, skipped: rules.filter((r, i) => !on[i]), at: new Date().toISOString() }); }
+  });
+};
+/* Item 23: a small picture of the chart as it was when the trade was logged from the scanner. */
+JR.snapOf = function (it) {
+  const ch = ((App.lazyNow('swing_charts') || {}).charts || {})[it.symbol] || it.charts || null; let tf = null, C = null;
+  if (ch) for (const k of ['15m', '1H', '1D']) if (ch[k] && ch[k].candles && ch[k].candles.length) { tf = k; C = ch[k].candles; break; }
+  if (!C && it.candles && it.candles.length) { tf = it.tf_trigger || '5m'; C = it.candles; }
+  if (!C) return null;
+  return { tf, at: new Date().toISOString(), c: C.slice(-60).map(r => r.slice(0, 4).map(x => +(+x).toFixed(2))), lv: { e: it.entry, s: it.sl, t1: it.t1, t2: it.t2, zb: it.zone_bot, zt: it.zone_top } };
+};
+JR.snapSvg = function (sn, W = 520, H = 190) {
+  if (!sn || !sn.c || sn.c.length < 5) return ''; const C = sn.c, lv = sn.lv || {}, ys = C.flatMap(c => [c[1], c[2]]).concat([lv.e, lv.s, lv.t1].filter(isNum));
+  const lo = Math.min(...ys), hi = Math.max(...ys), PL = 6, PR = 74, PT = 8, PB = 8, X = i => PL + (i + .5) * (W - PL - PR) / C.length, Y = v => PT + (hi - v) / ((hi - lo) || 1) * (H - PT - PB), bw = Math.max(2, (W - PL - PR) / C.length * .6), g = [];
+  if (isNum(lv.zb) && isNum(lv.zt)) g.push(`<rect x="${PL}" y="${Y(Math.min(hi, lv.zt))}" width="${W - PL - PR}" height="${Math.max(1, Y(Math.max(lo, lv.zb)) - Y(Math.min(hi, lv.zt)))}" fill="var(--ink)" opacity=".07"/>`);
+  C.forEach((c, i) => g.push(`<line x1="${X(i)}" x2="${X(i)}" y1="${Y(c[1])}" y2="${Y(c[2])}" stroke="var(--ink)"/><rect x="${X(i) - bw / 2}" y="${Y(Math.max(c[0], c[3]))}" width="${bw}" height="${Math.max(1, Math.abs(Y(c[0]) - Y(c[3])))}" fill="${c[3] >= c[0] ? 'var(--bg)' : 'var(--ink)'}" stroke="var(--ink)"/>`));
+  [['e', 'Entry', 'var(--ink)', ''], ['s', 'Stop', 'var(--bad)', '5 3'], ['t1', 'T1', 'var(--good)', '2 3']].forEach(([k, n, col, dash]) => { if (isNum(lv[k]) && lv[k] <= hi && lv[k] >= lo) g.push(`<line x1="${PL}" x2="${W - PR}" y1="${Y(lv[k])}" y2="${Y(lv[k])}" stroke="${col}" stroke-dasharray="${dash}"/><text x="${W - PR + 4}" y="${Y(lv[k]) + 4}" font-size="11" font-weight="700" fill="${col}">${n} ${fmt(lv[k])}</text>`); });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Chart when the trade was logged">${g.join('')}</svg>`;
+};
+JR.extraForm = function (t) {
+  let h = '';
+  if (t.chk && !t.chk.bypass) h += `<div class="fsec">Checklist when you entered</div><p class="help" style="margin:0 0 8px"><b class="${t.chk.skipped && t.chk.skipped.length ? 'warn' : 'good'}">${t.chk.ok} of ${t.chk.n} rules ticked.</b>${t.chk.skipped && t.chk.skipped.length ? ' Skipped: ' + t.chk.skipped.map(esc).join('; ') + '.' : ''}</p>`;
+  if (t.snap) h += `<div class="fsec">Chart when you logged it (${esc(t.snap.tf || '')})</div>${JR.snapSvg(t.snap)}`;
+  return h;
 };
 
 /* Scanner -> journal: build a pre-filled trade from a setup or a tracked signal. */
@@ -260,3 +306,6 @@ App.binds.journal = () => {
   const m = $('#jMore'); if (m) m.onclick = () => { u.n += 100; rr_(); };
 };
 })();
+
+/* keep a chart snapshot with every trade logged from the scanner (item 23) */
+(() => { const J = App.journal, base = J.fromScanner; J.fromScanner = function (it, sig) { const o = base(it, sig); try { const s = J.snapOf(it); if (s) o.snap = s; } catch (e) { } return o; }; })();

@@ -4,7 +4,7 @@
 const JR = App.journal, SC = App.scanner;
 
 /* ---------- system health ---------- */
-const HEALTH_FILES = ['live', 'swing', 'all', 'options', 'intraday', 'market', 'news'];
+const HEALTH_FILES = ['live', 'swing', 'all', 'options', 'intraday', 'market', 'news'], HEALTH_LAZY = HEALTH_FILES.concat(['readiness']);
 const FRESH = [['swing', 'Swing', 'hourly at :25 in market hours, plus 08:37 and 16:17', 100], ['options', 'Nifty options', 'every 5 minutes', 12], ['intraday', 'Intraday', 'every 5 minutes', 12],
   ['market', 'Market', 'every 5 minutes', 12], ['news', 'News & events', 'about every 30 minutes', 45]];
 App.pages.health = () => {
@@ -23,6 +23,9 @@ App.pages.health = () => {
     ${FRESH.map(([k, name, every, lim]) => { const d = App.data[k], g = d && d.generated_at, a = g ? (Date.now() - new Date(g)) / 6e4 : null, late = live && (a == null || a > lim);
       return `<tr><td><b>${name}</b></td><td>${g ? `${dateIST(g)} ${hmIST(g)} <small class="muted">${esc(ago(g))}</small>` : '-'}</td><td><small>${every}</small></td><td class="n"><span class="pill ${late ? 'bad' : g ? 'ok' : ''}">${late ? 'Late' : g ? 'OK' : 'No data'}</span></td></tr>`; }).join('')}
     </tbody></table></div></div></div>`;
+  const rd = App.lazyNow('health/readiness'), RP = { ok: ['ok', 'OK'], warn: ['warn', 'Check'], fail: ['bad', 'Fix'], info: ['info', 'Info'] };
+  h += `<div class="card"><div class="hd"><h2>Morning readiness</h2><span class="cap">checked at 08:50 on trading days</span><span class="sp"></span>${rd ? `<span class="pill ${({ ok: 'ok', warn: 'warn', fail: 'bad' })[rd.level] || 'info'}">${esc(rd.title)}</span>` : ''}</div><div class="bd">${rd && rd.checks ? `<p class="help" style="margin:0 0 8px">${esc(dateIST(rd.at))} ${esc(hmIST(rd.at))} <small class="muted">${esc(ago(rd.at))}</small></p><div class="tbl-wrap"><table class="tbl"><tbody>
+    ${rd.checks.map(c => `<tr><td><b>${esc(c.name)}</b></td><td><span class="pill ${(RP[c.status] || RP.info)[0]}">${(RP[c.status] || RP.info)[1]}</span></td><td><small>${esc(c.detail)}</small></td></tr>`).join('')}</tbody></table></div>` : App.ui.empty('Runs at 08:50 on trading days', 'The first result appears after the next trading morning.')}</div></div>`;
   const runs = HEALTH_FILES.map(n => App.lazyNow('health/' + n)).filter(Boolean).sort((a, b) => (b.finished_at || '').localeCompare(a.finished_at || ''));
   h += `<div class="card"><div class="hd"><h2>Last scans</h2><span class="cap">one row per kind of run</span></div><div class="bd">${runs.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Run</th><th>Finished</th><th class="n">Took</th><th>Sections</th></tr></thead><tbody>
     ${runs.map(r => `<tr><td><b>${esc(r.mode)}</b>${r.run_url ? ` <a href="${esc(r.run_url)}" target="_blank" rel="noopener"><small>log</small></a>` : ''}</td><td>${t(r.finished_at)}</td><td class="n">${r.seconds}s</td>
@@ -41,11 +44,12 @@ App.pages.health = () => {
   h += `<div class="card"><div class="hd"><h2>What keeps it running</h2></div><div class="bd"><ul class="ins">
     <li><i></i><span><b>market-loop</b> scans every 5 minutes from about 09:05 to 15:40 and runs the swing scan hourly at :25.</span></li>
     <li><i></i><span><b>watchdog</b> checks every 10 minutes in market hours: it starts the loop if none is running and restarts it if it goes silent for 20 minutes. It pushes a phone alert only when it acts.</span></li>
+    <li><i></i><span><b>readiness</b> (08:50), <b>digest</b> (08:45 and 15:45) and <b>ci</b> (tests on every upload, with a <b>rollback</b> button) keep you informed and protected. Problems with a scan or a data source reach your phone with a cool-down so they never flood it.</span></li>
     <li><i></i><span>GitHub sometimes skips scheduled runs. For on-time starts, point a cron-job.org job at the <b>watchdog</b> workflow every 10 minutes from 09:05 to 15:25 (setup in the README).</span></li></ul></div></div>`;
   return h + `</div></div>`;
 };
 App.binds.health = () => {
-  const need = HEALTH_FILES.filter(n => App.lazyAge('health/' + n) > 60000);
+  const need = HEALTH_LAZY.filter(n => App.lazyAge('health/' + n) > 60000);
   if (need.length) Promise.all(need.map(n => App.lazy('health/' + n))).then(() => { if (App.route().page === 'health') App.render(); });
 };
 

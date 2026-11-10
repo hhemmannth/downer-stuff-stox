@@ -24,7 +24,7 @@ function card(sec, it) {
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="st ${stCls(it)}">${esc(it.status)}</span>${tracked ? '<span class="pill ok">tracked</span>' : ''}${App.journal.findByTag(key(sec, it)) ? '<span class="pill info">in journal</span>' : ''}</div>
     ${stage ? `<div class="stages${stage === 5 ? ' s5' : ''}" title="Playbook stage ${stage} of 5">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= stage ? 'on' : ''}"></i>`).join('')}</div>` : ''}
     ${spark}<div class="lv">${lv.map(([c, l, v]) => `<div class="${c}"><small>${l}</small><b>${fmt(v, d)}</b></div>`).join('')}</div>
-    <div style="display:flex;gap:5px;flex-wrap:wrap">${(it.ticks || []).map(t => `<span class="tick">✓ ${esc(t)}</span>`).join('')}${it.risk_pct != null ? `<span class="tick off">risk ${it.risk_pct.toFixed(1)}%</span>` : ''}${it.room_r != null ? `<span class="tick ${it.room_r >= 2 ? 'off' : ''}" style="${it.room_r < 2 ? 'background:var(--warn-soft);color:var(--warn)' : ''}">room ${it.room_r.toFixed(1)}R</span>` : ''}</div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap">${(it.ticks || []).map(t => `<span class="tick">✓ ${esc(t)}</span>`).join('')}${it.rs_rank != null ? `<span class="tick ${it.rs_rank >= 70 ? '' : 'off'}" title="Relative strength: 20-day move against Nifty, ranked within the Nifty 500 (100 = strongest)">RS ${it.rs_rank}</span>` : ''}${it.risk_pct != null ? `<span class="tick off">risk ${it.risk_pct.toFixed(1)}%</span>` : ''}${it.room_r != null ? `<span class="tick ${it.room_r >= 2 ? 'off' : ''}" style="${it.room_r < 2 ? 'background:var(--warn-soft);color:var(--warn)' : ''}">room ${it.room_r.toFixed(1)}R</span>` : ''}</div>
     ${warn.map(w => `<div class="warnline">⚠ ${esc(w)}</div>`).join('')}</a>`;
 }
 
@@ -52,6 +52,7 @@ App.pages.swing = () => {
   if (u.view !== 'setups') return h + ledgerView('swing', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'The swing scan runs before the open, every hour at :25 and after the close.')}</div></div>`;
   const S = d.setups, cnt = k => S.filter(s => s.stage === k).length;
+  h += SC.heat(d);
   h += `<div class="pipeline" style="margin-bottom:14px">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${STG[k][1]}</div></button>`).join('')}</div>`;
   const short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
   if (short.length) h += App.ui.callout('good', `<b>Today's shortlist (max 5, pick 1 or 2):</b> ${short.map(s => `<a href="#/trade?s=swing&id=${encodeURIComponent(s.symbol + '|long')}"><b>${esc(s.symbol)}</b></a> <small>${STG[s.stage][0]} · ${s.grade} ${s.score}/10</small>`).join(' &nbsp;·&nbsp; ')}`) + '<div style="height:12px"></div>';
@@ -99,7 +100,7 @@ App.pages.options = () => {
   const p = d.snapshot || {};
   h += `<div class="kpis" style="margin-bottom:14px">${App.ui.kpi('Nifty', fmt(p.spot, 1), `${sg(p.change_pct)}% · VIX ${fmt(p.vix, 1)}`, cls(p.change_pct))}${App.ui.kpi('1H alignment', p.above_1h == null ? '-' : p.above_1h ? 'Above 9 EMA' : 'Below 9 EMA', p.above_1h == null ? '' : p.above_1h ? 'calls only' : 'puts only', p.above_1h ? 'good' : p.above_1h === false ? 'bad' : '')}
     ${App.ui.kpi('15m bias', p.bias_up ? 'Up (calls)' : p.bias_down ? 'Down (puts)' : 'None', p.bias_up || p.bias_down ? 'CHoCH intact' : 'no intact CHoCH', p.bias_up ? 'good' : p.bias_down ? 'bad' : '')}${App.ui.kpi('5m / 15m 9 EMA', `${fmt(p.ema_5m, 1)} / ${fmt(p.ema_15m, 1)}`, `price ${p.above_5m ? 'above' : 'below'} / ${p.above_15m ? 'above' : 'below'}`)}
-    ${App.ui.kpi('Prev day H / L', (p.pdh_pdl || []).map(x => fmt(x, 0)).join(' / ') || '-', `today ${fmt(p.day_low, 0)}–${fmt(p.day_high, 0)}`)}${App.ui.kpi('Losses today', p.losses_today || 0, p.losses_today >= 2 ? 'stop for the day' : 'stop after two', p.losses_today >= 2 ? 'bad' : '')}</div>`;
+    ${App.ui.kpi('Prev day H / L', (p.pdh_pdl || []).map(x => fmt(x, 0)).join(' / ') || '-', `today ${fmt(p.day_low, 0)}–${fmt(p.day_high, 0)}`)}${p.vix_pct != null ? App.ui.kpi('VIX percentile', p.vix_pct, p.vix_pct >= 80 ? 'options are expensive: smaller size' : p.vix_pct <= 20 ? 'options are cheap' : 'within its 1-year range', p.vix_pct >= 80 ? 'bad' : '') : ''}${App.ui.kpi('Losses today', p.losses_today || 0, p.losses_today >= 2 ? 'stop for the day' : 'stop after two', p.losses_today >= 2 ? 'bad' : '')}</div>`;
   if (p.expiry_afternoon) h += App.ui.callout('warn', '<b>Expiry afternoon:</b> your rule is to skip new option buys now.') + '<div style="height:10px"></div>';
   if (p.losses_today >= 2) h += App.ui.callout('bad', '<b>Two losing trades today:</b> your rule says stop for the day.') + '<div style="height:10px"></div>';
   h += d.setups.length ? `<div class="cards">${d.setups.map(s => card('options', s)).join('')}</div>` : `<div class="card"><div class="bd">${App.ui.empty('No setup on Nifty right now', Object.entries(p.why_none || {}).map(([k, v]) => `<div><b style="display:inline;font-size:14px">${k}:</b> ${esc(v)}</div>`).join(''))}</div></div>`;
@@ -188,6 +189,47 @@ function planCard(it) {
     ${(p.execution || []).length ? `<div class="fsec" style="margin-top:14px">Execution</div><ol class="steps">${p.execution.map(x => `<li>${typeof x === 'string' ? esc(x) : esc(x.action || '')}</li>`).join('')}</ol>` : ''}
     ${trail.length ? `<div class="fsec">Managing it</div><ol class="steps">${trail.map(x => `<li>${typeof x === 'string' && !x.startsWith('<b>') ? esc(x) : x}</li>`).join('')}</ol>` : ''}</div></div>`;
 }
+/* Item 11: are the candidates and open trades really one bet? Sector clusters and correlated pairs from the scan, plus your open journal trades. */
+SC.heat = function (d) {
+  const ht = d && d.heat; if (!ht) return '';
+  const map = (App.lazyNow('sectors') || {}).map || {}, open = App.journal.enrich().filter(t => t.open), mine = {};
+  open.forEach(t => { const sec = map[(t.inst || '').toUpperCase()]; if (sec) (mine[sec] = mine[sec] || []).push(t.inst.toUpperCase()); });
+  const lines = [];
+  (ht.clusters || []).forEach(c => lines.push(`<b>${esc(c.sector)}</b>: ${c.n} candidates or tracked trades (${c.symbols.map(esc).join(', ')}). Taking several is one sector bet: pick the best one or split your risk.`));
+  Object.entries(mine).forEach(([sec, v]) => { const also = (d.setups || []).filter(s => s.stage >= 3 && s.sector === sec && !v.includes(s.symbol)).map(s => s.symbol);
+    if (also.length) lines.push(`You already hold <b>${v.map(esc).join(', ')}</b> in ${esc(sec)}; ${also.map(esc).join(', ')} ${also.length > 1 ? 'are' : 'is'} in the same sector.`); });
+  (ht.pairs || []).slice(0, 4).forEach(p => lines.push(`<b>${esc(p.a)}</b> and <b>${esc(p.b)}</b> have moved together (correlation ${p.corr.toFixed(2)} over 60 sessions): treat them as one position for risk.`));
+  if (!lines.length) return '';
+  return `<div class="card" style="margin-bottom:14px"><div class="hd"><h2>Portfolio heat</h2><span class="cap">are these separate bets?</span></div><div class="bd"><ul class="ins">${lines.map(l => `<li class="warn"><i></i><span>${l}</span></li>`).join('')}</ul></div></div>`;
+};
+
+/* Item 20: a ready-to-copy order ticket (you place the order yourself), and item 17: the levels as a TradingView Pine script. */
+function ticketText(it) {
+  const ot = it.options_trade, sz = App.journal.sizeFor(ot ? ot.premium : it.entry, ot ? ot.premium_sl : it.sl, it.grade), d = dec(it);
+  let qty = sz.qty; if (ot) { const lot = ot.lot_size || 65, per = Math.max(ot.premium - ot.premium_sl, .01); qty = Math.max(1, Math.floor(sz.risk / (per * lot))) * lot; }
+  const L = ot ? [`BUY ${ot.instrument}`, `Quantity: ${qty} (${qty / (ot.lot_size || 65)} lot${qty / (ot.lot_size || 65) > 1 ? 's' : ''})`, `Entry (limit): around ${fmt(ot.live && ot.live.ltp ? ot.live.ltp : ot.premium)} premium`, `Stop-loss (SL-M): ${fmt(ot.premium_sl)} premium`, `Targets: ${(ot.premium_targets || []).map(x => fmt(x)).join(' / ')}`, `Index levels: entry ${fmt(it.entry, d)}, stop ${fmt(it.sl, d)}`, 'Product: MIS, square off by 15:10']
+    : [`${it.direction === 'long' ? 'BUY' : 'SELL'} ${it.symbol}`, `Quantity: ${qty}`, `Entry: ${fmt(it.entry, d)}`, `Stop-loss (SL-M): ${fmt(it.sl, d)}`, `T1 ${fmt(it.t1, d)} (book half) · T2 ${fmt(it.t2, d)} (book a quarter, stop to entry) · T3 ${fmt(it.t3, d)}`, `Product: ${it.section === 'intraday' ? 'MIS, square off by 15:10' : 'CNC (delivery)'}`];
+  L.push(`Risk: ${inr(sz.risk)} (${pct(sz.rp, 2)} of capital) · ${it.grade} ${it.score}/10`);
+  return L.join('\n');
+}
+function pineText(it) {
+  const d = dec(it), n = v => (+v).toFixed(d), L = ['//@version=5', `indicator("DownerStuff ${it.symbol} levels", overlay=true)`];
+  if (isNum(it.zone_bot) && isNum(it.zone_top)) L.push(`zb = hline(${n(it.zone_bot)}, "Zone low", color=color.gray, linestyle=hline.style_dotted)`, `zt = hline(${n(it.zone_top)}, "Zone high", color=color.gray, linestyle=hline.style_dotted)`, 'fill(zb, zt, color=color.new(color.gray, 88))');
+  [['entry', 'Entry', 'color.black', 'hline.style_solid'], ['sl', 'Stop', 'color.red', 'hline.style_dashed'], ['t1', 'T1', 'color.green', 'hline.style_dashed'], ['t2', 'T2', 'color.green', 'hline.style_dashed'], ['t3', 'T3', 'color.green', 'hline.style_dotted']]
+    .forEach(([k, name, c, st]) => { if (isNum(it[k])) L.push(`hline(${n(it[k])}, "${name}", color=${c}, linestyle=${st}, linewidth=${k === 'entry' || k === 'sl' ? 2 : 1})`); });
+  return L.join('\n');
+}
+function ticketCard(it) {
+  if (!isNum(it.entry) || !isNum(it.sl)) return '';
+  return `<div class="card"><div class="hd"><h2>Order ticket</h2><span class="cap">you place it yourself</span></div><div class="bd"><pre class="ticket" id="tkt">${esc(ticketText(it))}</pre>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn sm" type="button" id="tktCopy">Copy ticket</button><button class="btn sm" type="button" id="pineCopy">Copy TradingView levels (Pine)</button></div>
+    <p class="help" style="margin-top:8px">The quantity uses your capital and risk per trade from Settings. For TradingView: open the Pine Editor, paste, and click Add to chart.</p></div></div>`;
+}
+function copyText(t, okMsg) { const done = () => App.toast(okMsg);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, () => App.toast('Could not copy: select the text and copy it'));
+  else { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); done(); } catch (e) { App.toast('Could not copy'); } a.remove(); } }
+SC.copyText = copyText;
+
 function sizeCard(it) {
   const ot = it.options_trade; if (!isNum(it.entry) || !isNum(it.sl)) return '';
   const sz = App.journal.sizeFor(ot ? ot.premium : it.entry, ot ? ot.premium_sl : it.sl, it.grade);
@@ -229,13 +271,16 @@ App.pages.trade = q => {
     <div class="bd" id="chBox">${chartFor(it, tf, sig, 700)}</div><div class="bd legend" style="padding-top:0"><span><i style="background:var(--c6)"></i>9 EMA</span><span><i style="background:var(--good)"></i>FVG</span><span><i style="background:var(--c1)"></i>OB</span><span><i style="background:var(--sun)"></i>Fib</span><span><i style="background:var(--brand)"></i>Entry / zone</span><span><i style="background:var(--bad)"></i>Stop</span></div></div>
     ${it.checklist ? checklistCard(it) : `<div class="card"><div class="hd"><h2>Why this setup</h2></div><div class="bd"><ul class="checks">${(it.logic || []).map(l => `<li><span class="mk ${l.ok === false ? 'n' : 'y'}">${l.ok === false ? '✗' : '✓'}</span><span class="tf"></span><div><b>${esc(l.title)}</b><p>${esc(l.text)}</p></div></li>`).join('')}</ul></div></div>`}
     ${news.length ? `<div class="card"><div class="hd"><h2>News for ${esc(it.symbol)}</h2></div><div class="bd"><ul class="news">${news.slice(0, 6).map(n => `<li><span class="imp ${n.impact || ''}"></span><div><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><br><small>${esc(n.source || '')}${n.published ? ' · ' + esc(ago(n.published)) : ''}</small></div></li>`).join('')}</ul></div></div>` : ''}</div>
-    <div class="stack">${sig ? trackCard(sig, it) : ''}${scoreCard(it)}${planCard(it)}${optionCard(it)}${sizeCard(it)}
+    <div class="stack">${sig ? trackCard(sig, it) : ''}${scoreCard(it)}${planCard(it)}${optionCard(it)}${sizeCard(it)}${ticketCard(it)}
       ${(it.notes || []).length ? `<div class="card"><div class="hd"><h2>Cautions</h2></div><div class="bd"><ul class="ins">${it.notes.map(n => `<li class="warn"><i></i><span>${esc(n)}</span></li>`).join('')}</ul></div></div>` : ''}</div></div>`;
   return h;
 };
 App.binds.trade = q => {
   const R = resolve(q); if (!R.it) return;
   $('#logT').onclick = () => App.journal.openForm(null, App.journal.fromScanner(R.it, R.sig));
+  if ($('#tktCopy')) $('#tktCopy').onclick = () => copyText(ticketText(R.it), 'Order ticket copied');
+  if ($('#pineCopy')) $('#pineCopy').onclick = () => copyText(pineText(R.it), 'Pine script copied: paste it in TradingView\'s Pine Editor');
+  if (q && q.get && q.get('log') === '1') { try { history.replaceState(null, '', location.href.replace(/[&?]log=1/, '')); } catch (e) { } setTimeout(() => { const b = $('#logT'); if (b && !$('.modal-bg')) b.click(); }, 350); }   // "Log this trade" button in the phone alert
   $$('[data-tf]').forEach(b => b.onclick = () => { App.ui.tf = b.dataset.tf; App.render(); });
   const draw = () => { const b = $('#chBox'); if (b) b.innerHTML = chartFor(R.it, App.ui.tfCur, R.sig, b.clientWidth - 32); };
   draw();

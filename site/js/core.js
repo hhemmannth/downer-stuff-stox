@@ -44,11 +44,12 @@ const ic = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k] || ''}</
 const NAV = [
   ['Today', [['dashboard', 'Dashboard', 'home']]],
   ['Scanner', [['swing', 'Swing', 'swing', 'primary'], ['options', 'Nifty options', 'options'], ['intraday', 'Intraday', 'intraday']]],
-  ['Journal', [['journal', 'Trades', 'journal'], ['analytics', 'Analytics', 'analytics']]],
+  ['Journal', [['journal', 'Trades', 'journal'], ['analytics', 'Analytics', 'analytics'], ['review', 'Weekly review', 'playbook'], ['invest', 'Investments', 'market']]],
+  ['Research', [['backtest', 'Backtest lab', 'analytics']]],
   ['Context', [['market', 'Market', 'market'], ['news', 'News & events', 'news']]],
   ['You', [['playbook', 'Playbook & rules', 'playbook'], ['health', 'System health', 'pulse'], ['settings', 'Settings', 'settings']]]];
 const TABS = [['dashboard', 'Today', 'home'], ['swing', 'Swing', 'swing'], ['journal', 'Journal', 'journal'], ['analytics', 'Stats', 'analytics']];
-const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade' };
+const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade', backtest: 'Backtest lab', review: 'Weekly review', invest: 'Investments' };
 
 App.route = () => { const h = location.hash.replace(/^#\/?/, ''); const [p, q] = h.split('?'); return { page: p || 'dashboard', q: new URLSearchParams(q || '') }; };
 App.go = (page, q) => { location.hash = '#/' + page + (q ? '?' + new URLSearchParams(q).toString() : ''); };
@@ -117,6 +118,24 @@ App.staleBanner = () => {
   return `<div class="stale" role="alert"><span class="ic">!</span><div><b>${age == null ? 'No live data yet today.' : `Live data is ${Math.round(age)} min old.`}</b> The 5-minute market loop isn't running, so options, intraday and tracked trades are not updating.
     The watchdog restarts it within about 10 minutes, or <a href="${wf}" target="_blank" rel="noopener">start it now on GitHub</a> (Run workflow). <a href="#/health">System health</a></div></div>`;
 };
+/* Item 5: risk-limit banner. Your journal lives on your device and in your Supabase account, so the limits from Settings are checked here,
+   on every page, as soon as a trade closes. A pop-up and a short vibration fire the first time a limit is hit each day. */
+function notifyRisk(rs) {
+  const key = 'ds_risk_seen_' + todayIST(); let seen = []; try { seen = JSON.parse(localStorage.getItem(key) || '[]'); } catch (e) { }
+  const fresh = rs.msgs.filter(([l, m]) => l === 'bad' && !seen.includes(m)); if (!fresh.length) return;
+  try { localStorage.setItem(key, JSON.stringify(seen.concat(fresh.map(x => x[1])))); } catch (e) { }
+  setTimeout(() => { App.toast(fresh[0][1]); if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    if (window.Notification && Notification.permission === 'granted') { try { new Notification('DownerStuff: risk limit', { body: fresh[0][1] }); } catch (e) { } } }, 60);
+}
+App.askNotify = () => { if (window.Notification) Notification.requestPermission().then(() => App.render()); return false; };
+App.riskBanner = () => {
+  const J = App.journal; if (!J || !J.riskStatus) return '';
+  let rs; try { rs = J.riskStatus(); } catch (e) { return ''; }
+  if (!rs || rs.level === 'ok' || !rs.msgs.length) return '';
+  notifyRisk(rs); const bad = rs.level === 'bad', can = window.Notification && Notification.permission === 'default';
+  return `<div class="stale risk${bad ? '' : ' warn'}" role="alert"><span class="ic">${bad ? '!' : 'i'}</span><div><b>${bad ? 'Risk limit reached' : 'Risk check'}</b><ul>${rs.msgs.map(([l, m]) => `<li>${esc(m)}</li>`).join('')}</ul>
+    ${can ? '<small><a href="#" onclick="return App.askNotify()">Turn on pop-up alerts on this device</a></small>' : ''}</div></div>`;
+};
 App.LED = k => App.data['signals_' + k] || { signals: [], dropped: [], watch: {} };
 App.actionsUrl = () => actionsUrl();
 function actionsUrl() { const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/').filter(Boolean)[0]; return m && repo ? `https://github.com/${m[1]}/${repo}/actions` : 'https://github.com'; }
@@ -141,7 +160,7 @@ App.render = () => {
   $$('[data-tab]').forEach(a => a.classList.toggle('on', a.dataset.tab === page));
   $('#ttl').textContent = TITLES[page] || 'DownerStuff';
   const keep = App._lastPage === page ? window.scrollY : 0;
-  try { el.innerHTML = App.staleBanner() + fn(App.route().q); } catch (e) { console.error(e); el.innerHTML = `<div class="callout bad"><span class="ic">!</span><div><b>This page hit an error.</b> ${esc(e.message)}</div></div>`; }
+  try { el.innerHTML = App.staleBanner() + App.riskBanner() + fn(App.route().q); } catch (e) { console.error(e); el.innerHTML = `<div class="callout bad"><span class="ic">!</span><div><b>This page hit an error.</b> ${esc(e.message)}</div></div>`; }
   if (App.binds[page]) try { App.binds[page](App.route().q); } catch (e) { console.error(e); }
   if (App._lastPage !== page) window.scrollTo(0, 0); else window.scrollTo(0, keep);
   App._lastPage = page; paintChrome();
