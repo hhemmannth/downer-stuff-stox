@@ -444,3 +444,8 @@ a{color:var(--ink);text-decoration-thickness:1px;text-underline-offset:2px}
 .gate-row:hover{background:var(--panel-2)} .gate-row input{width:18px;height:18px;margin-top:1px;flex:none;accent-color:var(--ink)}
 code{font:500 12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--panel-2);padding:1px 5px;border-radius:4px}
 select.inp{padding:6px 8px}
+
+/* two-factor and fills */
+.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:14px} .steps li{line-height:1.5}
+.qr{margin-top:8px;display:inline-block;background:#fff;padding:10px;border:1px solid var(--line);border-radius:8px} .qr img{display:block;width:180px;height:180px}
+.secret{display:inline-block;margin-top:6px;padding:6px 10px;font-size:14px;letter-spacing:.06em;word-break:break-all}
