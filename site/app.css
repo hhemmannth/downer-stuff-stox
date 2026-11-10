@@ -424,3 +424,23 @@ a{color:var(--ink);text-decoration-thickness:1px;text-underline-offset:2px}
 .stale{border:1.5px dashed var(--bad);background:var(--bad-soft);border-radius:8px}
 .back svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .back:hover{color:var(--ink)}
+
+/* risk banner (item 5) */
+.stale.warn{border-color:var(--warn);background:var(--warn-soft)} .stale.warn .ic{background:var(--warn)} .stale.warn a{color:var(--warn)}
+.stale.risk ul{margin:4px 0 2px;padding-left:18px} .stale.risk li{margin:2px 0} .stale.risk small{display:block;margin-top:4px}
+
+/* batch 2-5: backtest lab, weekly review, investments, order ticket, checklist gate */
+.grid.g2x{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media (max-width:980px){ .grid.g2x{grid-template-columns:minmax(0,1fr)} }
+.ticket{margin:0;padding:12px 14px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;font:500 13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.coach{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.coach li{border:1px solid var(--line);border-left:3px solid var(--good);border-radius:6px;padding:10px 12px;cursor:pointer}
+.coach li.warn{border-left-color:var(--warn)} .coach li.bad{border-left-color:var(--bad)} .coach li:hover{border-color:var(--ink);border-left-width:3px}
+.coach .ch{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px} .coach .ch small{color:var(--ink-3)} .coach .ch .sp{flex:1}
+.coach p{margin:2px 0 0;color:var(--ink-2);font-size:13.5px;line-height:1.45}
+.gate-bg{z-index:120}
+.gate-list{display:flex;flex-direction:column;gap:2px}
+.gate-row{display:flex;gap:10px;align-items:flex-start;padding:9px 8px;border-radius:6px;cursor:pointer;line-height:1.4}
+.gate-row:hover{background:var(--panel-2)} .gate-row input{width:18px;height:18px;margin-top:1px;flex:none;accent-color:var(--ink)}
+code{font:500 12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--panel-2);padding:1px 5px;border-radius:4px}
+select.inp{padding:6px 8px}
