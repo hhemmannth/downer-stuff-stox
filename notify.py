@@ -25,7 +25,8 @@ def ist_now(): return datetime.datetime.now(datetime.timezone.utc) + datetime.ti
 def fmt(v): return '-' if v is None else f'{v + 1e-9:,.1f}'
 
 EMOJI = {'star': '⭐', 'chart_with_upwards_trend': '📈', 'chart_with_downwards_trend': '📉', 'white_check_mark': '✅', 'trophy': '🏆', 'x': '❌', 'lock': '🔒',
-         'hourglass': '⏳', 'arrows_counterclockwise': '🔄', 'rotating_light': '🚨', 'bell': '🔔'}
+         'hourglass': '⏳', 'arrows_counterclockwise': '🔄', 'rotating_light': '🚨', 'bell': '🔔',
+         'warning': '⚠️', 'sunrise': '🌅', 'city_sunset': '🌇', 'bar_chart': '📊', 'calendar': '📅', 'moneybag': '💰', 'mag': '🔎'}
 
 def telegram_ready(): return bool(os.environ.get('TELEGRAM_BOT_TOKEN', '').strip() and os.environ.get('TELEGRAM_CHAT_ID', '').strip())
 
@@ -33,21 +34,38 @@ TELEGRAM_HINTS = {404: 'bot token is wrong (check TELEGRAM_BOT_TOKEN: only the t
                   400: 'chat not found (check TELEGRAM_CHAT_ID, and send your bot a message first)', 401: 'bot token was revoked: get a new one from @BotFather',
                   403: 'the bot cannot message this chat (you blocked it, or it is not in the group)'}
 
-def telegram(title, body, tags, click):
-    """One Telegram message per chat id: bold title, the body, and an Open button that goes straight to the trade."""
+def _multipart(fields, name, filename, blob):
+    b = 'ds' + os.urandom(8).hex(); out = []
+    for k, v in fields.items(): out.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    out.append(f'--{b}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: image/png\r\n\r\n'.encode() + blob + b'\r\n')
+    out.append(f'--{b}--\r\n'.encode()); return b''.join(out), f'multipart/form-data; boundary={b}'
+
+def telegram(title, body, tags, click, photo=None, buttons=None):
+    """One Telegram message per chat id: bold title, the body, an Open button that goes straight to the trade, any extra buttons
+    (for example "Log this trade"), and a chart picture when one is given (falls back to a text message if the photo fails)."""
     token = os.environ['TELEGRAM_BOT_TOKEN'].strip().strip('"\'').strip()
     if token.lower().startswith('bot') and token[3:4].isdigit(): token = token[3:]          # pasted with the "bot" from the URL in front
     api = os.environ.get('TELEGRAM_API', 'https://api.telegram.org').rstrip('/')
     icon = ''.join(EMOJI.get(t, '') for t in str(tags).split(','))
     text = (f'{icon} ' if icon else '') + f'<b>{html.escape(title)}</b>\n{html.escape(body)}'
-    msg = dict(text=text[:4000], parse_mode='HTML', disable_web_page_preview=True)
-    if click and click.startswith('https://'): msg['reply_markup'] = {'inline_keyboard': [[{'text': 'Open in DownerStuff', 'url': click}]]}
+    msg = dict(text=text[:4000], parse_mode='HTML', disable_web_page_preview=True); rows = []
+    if click and click.startswith('https://'): rows.append([{'text': 'Open in DownerStuff', 'url': click}])
+    for label, url in (buttons or []):
+        if url and url.startswith('https://'): rows.append([{'text': label, 'url': url}])
+    if rows: msg['reply_markup'] = {'inline_keyboard': rows}
     for chat in [c.strip() for c in os.environ['TELEGRAM_CHAT_ID'].split(',') if c.strip()]:
+        if photo:
+            try:
+                f = dict(chat_id=chat, caption=text[:1000], parse_mode='HTML')
+                if rows: f['reply_markup'] = json.dumps(msg['reply_markup'])
+                data, ctype = _multipart(f, 'photo', 'chart.png', photo)
+                urllib.request.urlopen(urllib.request.Request(f'{api}/bot{token}/sendPhoto', data=data, headers={'Content-Type': ctype}, method='POST'), timeout=30).read(); continue
+            except Exception as ex: print(f'  telegram photo failed ({ex}), sending text instead', file=sys.stderr)
         req = urllib.request.Request(f'{api}/bot{token}/sendMessage', data=json.dumps(dict(msg, chat_id=chat)).encode(), headers={'Content-Type': 'application/json'}, method='POST')
         try: urllib.request.urlopen(req, timeout=20).read()
         except urllib.error.HTTPError as ex: raise RuntimeError(f'HTTP {ex.code}: ' + TELEGRAM_HINTS.get(ex.code, ex.reason)) from None
 
-def post(base, topic, title, body, tags, click):
+def post(base, topic, title, body, tags, click, photo=None, buttons=None):
     """Send to every configured channel (ntfy and/or Telegram). Fails only if every channel failed."""
     ok, errs = 0, []
     if topic:
@@ -56,7 +74,7 @@ def post(base, topic, title, body, tags, click):
         try: urllib.request.urlopen(urllib.request.Request(f'{base}/{topic}', data=body.encode('utf-8'), headers=headers, method='POST'), timeout=20).read(); ok += 1
         except Exception as ex: errs.append(f'ntfy: {ex}')
     if telegram_ready():
-        try: telegram(title, body, tags, click); ok += 1
+        try: telegram(title, body, tags, click, photo, buttons); ok += 1
         except Exception as ex: errs.append(f'telegram: {ex}')
     if not ok: raise RuntimeError('; '.join(errs) or 'no channel configured')
     if errs: print('  ' + '; '.join(errs), file=sys.stderr)
@@ -72,10 +90,47 @@ def alert_body(s):
     return '\n'.join([f"Zone {fmt(s['zone_bot'])}-{fmt(s['zone_top'])}   Entry {fmt(s['entry'])}   SL {fmt(s['sl'])}", f"T1 {fmt(s['t1'])} ({fmt(s.get('r_t1'))}R)   T2 {fmt(s['t2'])}   T3 {fmt(s['t3'])}",
                       'Ticks: ' + (', '.join(s['ticks']) or 'none'), ' / '.join(s['notes'][:2]) or 'Check the chart before trading.'])
 
-def send_alert(base, topic, s, section, click):
+def alert_chart(s, charts):
+    """PNG for the alert (item 15): the setup's most precise timeframe with zone, entry, stop, T1 and T2. None if anything is missing."""
+    if os.environ.get('ALERT_CHARTS', 'on').strip().lower() == 'off' or not telegram_ready(): return None
+    try:
+        import chartimg
+        tfs = (charts or {}).get(s['symbol']) or ({'5m': dict(candles=s['candles'], times=s.get('times'), ema=s.get('ema'))} if s.get('candles') else None)
+        name, tf = chartimg.pick_tf(tfs)
+        return chartimg.render(tf, s, f"{s['symbol']} · {name} · {s['grade']} {s['score']}/10") if tf else None
+    except Exception as ex: print(f'  alert chart failed: {ex}', file=sys.stderr); return None
+
+def send_alert(base, topic, s, section, click, charts=None, log_url=None):
     what = s.get('label', s['direction'].upper())
     post(base, topic, f"{section}: {s['status'].split(' ')[0]} {s['grade']} {s['symbol']} {what} ({s['score']}/10)", alert_body(s),
-         ('star,' if s['grade'] == 'A+' else '') + ('chart_with_upwards_trend' if s['direction'] == 'long' else 'chart_with_downwards_trend'), click)
+         ('star,' if s['grade'] == 'A+' else '') + ('chart_with_upwards_trend' if s['direction'] == 'long' else 'chart_with_downwards_trend'), click,
+         photo=alert_chart(s, charts), buttons=[('Log this trade', log_url)] if log_url else None)
+
+def action_alerts(base, topic, click, data_dir, state, today, min_score):
+    """Item 16: tell you when a watched swing setup changes in a way that needs you: an A+ setup (score 8 or more) enters its zone,
+    the 1H confirms, a setup you were waiting on is invalidated, or its sector index turns down. Once per setup and state per day,
+    and never more than 6 messages per scan."""
+    n = 0; seen = state.setdefault('actions', {})
+    try: led = json.load(open(os.path.join(data_dir, 'signals_swing.json'))); sw = json.load(open(os.path.join(data_dir, 'swing.json')))
+    except Exception: return 0
+    by = {f"{s['symbol']}|{s['direction']}": s for s in sw.get('setups', [])}
+    def push(key, title, body, tags, sym):
+        nonlocal n
+        if seen.get(key) == today or n >= 6: return                    # at most 6 action alerts per scan: the rest wait for the next one
+        try: post(base, topic, title, body, tags, deep(click, s='swing', id=f'{sym}|long')); seen[key] = today; n += 1
+        except Exception as ex: print(f'  could not send action alert: {ex}', file=sys.stderr)
+    for wid, w in (led.get('watch') or {}).items():
+        if (w.get('score') or 0) < min_score: continue
+        st = str(w.get('status', '')).upper(); sym = w['symbol']; z = f"{w.get('zone_bot')}-{w.get('zone_top')}"
+        if st.startswith('IN ZONE') and (w.get('score') or 0) >= 8: push(f'{wid}|zone', f'Swing: {sym} is in its zone', f"Price is inside the daily zone {z}. Nothing to do yet: wait for the 1H rejection and a close above the 9 EMA on volume.", 'mag', sym)
+        elif st.startswith('1H CONFIRMED'): push(f'{wid}|1h', f'Swing: {sym} confirmed on the 1H', f"The 1H confirmation is in. Watch the 15m for the precision entry (CHoCH, BOS, retest, close above the 9 EMA on volume). Planned stop {w.get('sl')}.", 'bell', sym)
+        it = by.get(f"{sym}|{w.get('direction', 'long')}")
+        if it and (it.get('index_check') or {}).get('state') == 'falling' and it.get('stage', 0) >= 3:
+            push(f'{wid}|sector', f'Swing: {sym} on hold, sector index falling', f"{it['index_check'].get('sector_index', 'The sector index')} has turned down. Your rule: wait for it to stabilise before taking the setup.", 'warning', sym)
+    for d in (led.get('dropped') or []):
+        if str(d.get('dropped', ''))[:10] != today or (d.get('score') or 0) < min_score or not str(d.get('status', '')).upper().startswith(('IN ZONE', '1H CONFIRMED')): continue   # only setups you were actively waiting on
+        push(f"{d.get('id')}|dropped", f"Swing: {d['symbol']} setup is off", f"{d.get('reason') or 'The setup is no longer valid.'} Remove any price alert or pending order for it.", 'x', d['symbol'])
+    return n
 
 def fresh(data, now):
     try: t = datetime.datetime.fromisoformat(data['generated_at'])
@@ -109,13 +164,17 @@ def main():
     except Exception: state = {}
     if state.get('date') != today: state = {'date': today, 'sent': [], 'updated': {}}
     state.setdefault('updated', {}); sent = ups = 0
+    try: charts = json.load(open(os.path.join(a.dir, 'swing_charts.json'))).get('charts', {})
+    except Exception: charts = {}
     for key, title in SECTIONS:
         try: data = json.load(open(os.path.join(a.dir, key + '.json')))
         except Exception: continue
         for s in data.get('setups', []):
             k = f"{key}|{s['symbol']}|{s['direction']}|{s['bos_date']}|{s['status'].split(' ')[0]}"
             if s['score'] < min_score or not s['status'].upper().startswith(statuses) or k in state['sent']: continue
-            try: send_alert(base, topic, s, title, deep(click, s=key, id=f"{s['symbol']}|{s['direction']}")); state['sent'].append(k); sent += 1
+            try:
+                link = deep(click, s=key, id=f"{s['symbol']}|{s['direction']}")
+                send_alert(base, topic, s, title, link, charts if key == 'swing' else None, (link + '&log=1') if link else None); state['sent'].append(k); sent += 1
             except Exception as ex: print(f"  could not send {s['symbol']}: {ex}", file=sys.stderr)
         if updates == 'off' or (updates == 'swing' and key != 'swing') or state['updated'].get(key) == data.get('generated_at') or not fresh(data, datetime.datetime.now(datetime.timezone.utc)): continue
         try: post(base, topic, f'DownerStuffScreener: {title} scan updated', update_text(key, data), 'arrows_counterclockwise', click); state['updated'][key] = data['generated_at']; ups += 1
@@ -133,7 +192,8 @@ def main():
                     what = sig.get('instrument') or f"{sig['symbol']} {sig.get('label', '')}"
                     try: post(base, topic, f"{title}: {what} {ev['kind'].upper()}", ev['text'], icon.get(ev['kind'], 'bell'), deep(click, s=key, sig=sig['id'])); state['sent'].append(k); evs += 1
                     except Exception as ex: print(f'  could not send event: {ex}', file=sys.stderr)
-    os.makedirs(os.path.dirname(a.state) or '.', exist_ok=True); json.dump(state, open(a.state, 'w')); print(f'alerts sent: {sent}, updates sent: {ups}, trade events sent: {evs}'); return 0
+    acts = action_alerts(base, topic, click, a.dir, state, today, min_score) if os.environ.get('NTFY_ACTIONS', 'on').strip().lower() != 'off' else 0
+    os.makedirs(os.path.dirname(a.state) or '.', exist_ok=True); json.dump(state, open(a.state, 'w')); print(f'alerts sent: {sent}, updates sent: {ups}, trade events sent: {evs}, action alerts sent: {acts}'); return 0
 
 if __name__ == '__main__':
     sys.exit(main())

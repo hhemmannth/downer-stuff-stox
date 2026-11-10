@@ -28,7 +28,7 @@ INDEX_NAMES = {'^NSEI': ['NIFTY 50', 'NIFTY'], '^NSEBANK': ['NIFTY BANK', 'BANKN
                '^CNXREALTY': ['NIFTY REALTY'], '^CNXENERGY': ['NIFTY ENERGY'], '^CNXMEDIA': ['NIFTY MEDIA'], '^CNXINFRA': ['NIFTY INFRA', 'NIFTY INFRASTRUCTURE'],
                '^CNXPSUBANK': ['NIFTY PSU BANK'], '^CNXFIN': ['NIFTY FIN SERVICE', 'NIFTY FINANCIAL SERVICES']}
 COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
-STATE = dict(dir='.cache', deadline=None)
+STATE = dict(dir='.cache', deadline=None, budget_s=None)
 STATS = dict(angel=dict(configured=False, ok=None, error=None), by_interval={}, xcheck=[], option_quotes=None, source={})
 
 def configure(state_dir):
@@ -37,7 +37,7 @@ def configure(state_dir):
 def set_budget(seconds):
     """Angel One time limit for this run (the 5-minute live scan uses ~90 s): after it, whatever is left goes to Yahoo, so one
     slow day at Angel One can never make a tick overrun the next one."""
-    STATE['deadline'] = time.time() + seconds if seconds else None
+    STATE['budget_s'] = float(seconds) if seconds else None; STATE['deadline'] = None      # the clock starts at the first Angel One request
 
 def _count(interval, src, n=1):
     if n: d = STATS['by_interval'].setdefault(interval, {}); d[src] = d.get(src, 0) + n
@@ -240,7 +240,7 @@ def angel():
     return a if a is not None and not a.dead else None
 
 def reset():                                     # tests
-    _A.update(obj=None, init=False); STATE['deadline'] = None
+    _A.update(obj=None, init=False); STATE['deadline'] = None; STATE['budget_s'] = None
     STATS.update(angel=dict(configured=False, ok=None, error=None), by_interval={}, xcheck=[], option_quotes=None, source={}, notes=[])
 
 # ------------------------------------------------------------------ fetching
@@ -252,6 +252,7 @@ def fetch(symbols, period, interval, yahoo, source='auto'):
 
 def _fetch(symbols, period, interval, yahoo, source='auto'):
     out, rest, a = {}, [], (angel() if source != 'yahoo' else None)
+    if a is not None and STATE.get('budget_s') and STATE.get('deadline') is None: STATE['deadline'] = time.time() + STATE['budget_s']
     if a is not None and STATE.get('deadline') and time.time() > STATE['deadline']:
         a = None; _note(f'{interval}: Angel One time limit for this run reached, Yahoo used')
     if a is not None and interval in INTERVAL:
@@ -322,9 +323,10 @@ def daily_cached(symbols, period, yahoo, now=None):
     frames = dict(c['frames']) if fresh else {}
     need = [s for s in symbols if s not in frames]; failed = []
     if need:
-        got, failed = _fetch(need, period, '1d', yahoo)
+        got, failed = _fetch(need, period, '1d', yahoo, source='yahoo')      # ~500 stocks in about a minute; Angel One's candle API is far slower
         frames.update({s: _naive_daily(f) for s, f in got.items()})
-        if not fresh: xcheck(got, yahoo)
+        _note('daily history: Yahoo (fast), with a sample checked against Angel One each morning')
+        if not fresh: xcheck(frames, yahoo)
     reused = [s for s in symbols if s in frames and s not in need]; _count('1d', 'cache (no download)', len(reused))
     if reused and after_close(now): top_up(frames, reused, yahoo, now.date())
     try:
@@ -359,21 +361,26 @@ def top_up(frames, syms, yahoo, today):
         for s, f in y.items(): frames[s] = _merge(frames[s], f)
         _count('1d', "Yahoo (today's candle)", len(y))
 
-def xcheck(got, yahoo, n=8):
-    """Compare recent closes from Angel One with Yahoo for Nifty and a few stocks. Large gaps usually mean Yahoo is off."""
-    ang = [s for s in got if STATS['source'].get(s) == 'angel']
-    if not ang: return
-    sample = [s for s in ang if s == '^NSEI'][:1] + random.sample([s for s in ang if s != '^NSEI'], min(n, len([s for s in ang if s != '^NSEI'])))
-    try: y, _ = yahoo(sample, '1mo', '1d')
-    except Exception as ex: STATS['xcheck'] = [dict(symbol='-', error=str(ex)[:120])]; return
-    rows = []
+def xcheck(frames, yahoo, n=8):
+    """Accuracy check: compare recent closes from Yahoo (what the scan uses) with Angel One's exchange data for Nifty and a few stocks.
+    Gaps over 0.5% in the app's Data sources card mean Yahoo is off that day."""
+    a = angel()
+    if a is None or not frames: return
+    pool = [s for s in frames if not s.startswith('^')]; sample = ['^NSEI'] + random.sample(pool, min(n, len(pool))); rows, yn = [], {}
+    try: yn, _ = yahoo(['^NSEI'], '1mo', '1d')
+    except Exception: pass
+    today = dt.datetime.now(IST).date()
     for s in sample:
-        if s not in y: continue
-        a, b = _naive_daily(got[s]).Close, _naive_daily(y[s]).Close
-        common = [d for d in a.index.intersection(b.index) if d.date() < dt.datetime.now(IST).date()][-5:]
-        if not common: continue
-        diffs = [abs(float(a[d]) - float(b[d])) / float(b[d]) * 100 for d in common if float(b[d])]
-        d = common[-1]; rows.append(dict(symbol=s, date=str(d.date()), angel=round(float(a[d]), 2), yahoo=round(float(b[d]), 2), max_diff_pct=round(max(diffs), 2) if diffs else None, days=len(common)))
+        if STATE.get('deadline') and time.time() > STATE['deadline']: break
+        try:
+            tk = a.token_for(s); ang = _naive_daily(a.candles(tk, '1d', 45)).Close if tk else None
+            yh = (_naive_daily(frames[s]) if s in frames else (_naive_daily(yn['^NSEI']) if s in yn else None))
+            if ang is None or yh is None: continue
+            yh = yh.Close; common = [d for d in ang.index.intersection(yh.index) if d.date() < today][-5:]
+            if not common: continue
+            diffs = [abs(float(ang[d]) - float(yh[d])) / float(yh[d]) * 100 for d in common if float(yh[d])]; d = common[-1]
+            rows.append(dict(symbol=s, date=str(d.date()), angel=round(float(ang[d]), 2), yahoo=round(float(yh[d]), 2), max_diff_pct=round(max(diffs), 2) if diffs else None, days=len(common)))
+        except Exception as ex: STATS['angel']['last_error'] = f'accuracy check {s}: {ex}'[:200]
     STATS['xcheck'] = rows
 
 def option_quotes(expiry_iso, strikes, kind):

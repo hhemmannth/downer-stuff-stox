@@ -13,11 +13,11 @@ Plus market (regime, breadth, sectors) and news (headlines and events).
 Usage: python strategy_scanner.py --mode swing | options | intraday | market | news | live | all   [--out _site/data]
 Writes swing.json, options.json, intraday.json, market.json, news.json for the web pages. Not investment advice.
 """
-import argparse, io, json, math, os, pickle, sys, time, urllib.request
+import argparse, bisect, io, json, math, os, pickle, sys, time, urllib.request
 import datetime as dt
 import numpy as np
 import pandas as pd
-import datasource, explain, greeks, market, newsfeed, sector_index, signals
+import datasource, dataquality, explain, greeks, market, newsfeed, sector_index, signals
 import warnings
 warnings.filterwarnings('ignore')                     # yfinance + pandas 3 print thousands of deprecation lines
 
@@ -386,6 +386,32 @@ def with_today(daily, hourly):
     row = pd.DataFrame([[today.Open.iloc[0], today.High.max(), today.Low.min(), today.Close.iloc[-1], today.Volume.sum()]], columns=COLS, index=[pd.Timestamp(today.index[-1].date())])
     return pd.concat([daily, row]), ltp
 
+def ex_dividend_info(sym, now):
+    """Next ex-dividend date from Yahoo's calendar (item 12), or None. Only asked for setups at stage 4 or 5."""
+    try:
+        import yfinance as yf
+        cal = yf.Ticker(_yahoo(sym)).calendar; x = cal.get('Ex-Dividend Date') if isinstance(cal, dict) else None
+        if x is None: return None
+        d = x.date() if hasattr(x, 'date') else dt.date.fromisoformat(str(x)[:10])
+        return dict(date=d.isoformat(), days=(d - now.date()).days, source='Yahoo') if d >= now.date() else None
+    except Exception: return None
+
+def portfolio_heat(items, active, daily, industries, min_corr=0.75):
+    """Item 11: are today's candidates and open tracked trades really the same bet? Sector clusters (3 or more in one sector) and pairs
+    whose daily returns moved together (correlation 0.75 or more over 60 sessions)."""
+    names = list(dict.fromkeys([i['symbol'] for i in items if i['stage'] >= 3] + list(active))); sec = {}
+    for n in names: sec.setdefault(industries.get(n) or 'Other', []).append(n)
+    clusters = [dict(sector=k, n=len(v), symbols=v) for k, v in sec.items() if len(v) >= 3 and k != 'Other']
+    rets = {n: daily[n].Close.pct_change().tail(60) for n in names if n in daily and len(daily[n]) >= 61}; pairs = []
+    ks = list(rets)
+    for a in range(len(ks)):
+        for b in range(a + 1, len(ks)):
+            j = pd.concat([rets[ks[a]], rets[ks[b]]], axis=1).dropna()
+            if len(j) >= 40:
+                c = float(j.iloc[:, 0].corr(j.iloc[:, 1]))
+                if c >= min_corr: pairs.append(dict(a=ks[a], b=ks[b], corr=round(c, 2)))
+    return dict(clusters=sorted(clusters, key=lambda x: -x['n']), pairs=sorted(pairs, key=lambda x: -x['corr'])[:12], names=len(names))
+
 def results_info(sym, now):
     """Next results date from Yahoo's calendar. Often missing for NSE stocks: then it is None and you must check the NSE notice."""
     try:
@@ -490,7 +516,8 @@ def run_swing(args, now):
     nd, _ = download_many(['^NSEI'], '1y', '1d'); nifty = tidy_daily(nd['^NSEI'], now) if '^NSEI' in nd else None; n_up = index_ok(nifty)
     b_sum, b_sec, per = market.breadth(daily, industries, nifty) if nifty is not None else (None, [], {})
     write_json(args.out, 'breadth.json', dict(generated_at=now.isoformat(timespec='seconds'), summary=b_sum, sectors=b_sec))
-    turnover, states, res = {}, {}, {}
+    turnover, states, res, dflags = {}, {}, {}, {}
+    latest_day = dataquality.market_latest(daily.values())                               # the session most stocks have as their last candle
     why = {x: (0, 'nodata', 'No data from Yahoo for this symbol in this scan') for x in failed}
     for s, f in daily.items():
         f = f.dropna(subset=['Open', 'High', 'Low', 'Close'])
@@ -498,6 +525,9 @@ def run_swing(args, now):
         if len(f) < CFG['min_bars']: why[s] = (0, 'history', f"Only {len(f)} daily candles: the scan needs {CFG['min_bars']}"); states[(s, 'long')] = None; continue
         if not liquid(f, CFG): why[s] = (0, 'liquidity', f"Below the liquidity filter: price under ₹{CFG['min_price']:.0f} or 20-day turnover under ₹{CFG['min_turnover_cr']:.0f} Cr"); states[(s, 'long')] = None; continue
         if bool((f.High.tail(5) == f.Low.tail(5)).any()): why[s] = (0, 'locked', 'Locked at a circuit in the last 5 sessions: skipped'); states[(s, 'long')] = None; continue
+        dq = dataquality.flags(f, latest_day)
+        if dq: dflags[s] = dq
+        if dataquality.skip_reason(dq): why[s] = (0, 'data', dataquality.skip_reason(dq)); states[(s, 'long')] = None; continue
         try: r = swing.analyse(f)
         except Exception as ex: print(f'  error {s}: {ex}', file=sys.stderr); why[s] = (0, 'error', f'The engine hit an error on this stock: {ex}'); continue
         states[(s, 'long')] = state_of(r, args.min_score) if r and 'stage' not in r else ('OK' if r else None)
@@ -536,8 +566,26 @@ def run_swing(args, now):
         elif k >= 2 and r['score'] < args.min_score: why[x] = (k, 'score', f"Stage {k} ({swing.STAGE_SHORT[k]}), but the score {r['score']}/10 is below your minimum {args.min_score}/10", r['score'])
         else: why[x] = (k, 'ranked', f"Stage {k} ({swing.STAGE_SHORT[k]}), score {r['score']}/10, but ranked below the top {args.top if k >= 2 else 25} shown", r['score'])
     items = []
+    rs_all = sorted(v['rs20'] for v in per.values() if v.get('rs20') is not None)
+    edge = None
+    try:
+        import backtest
+        label = market.classify_daily(nifty).get('label') if nifty is not None else None
+        edge = backtest.regime_edge(read_json(args.out, 'backtest.json'), label) if label else None
+    except Exception as ex_: print(f'  regime edge not available: {ex_}', file=sys.stderr)
     for s, r in keep:
         ex = dict(per.get(s, {}))
+        if ex.get('rs20') is not None and len(rs_all) > 1: ex['rs_rank'] = int(round(100 * bisect.bisect_left(rs_all, ex['rs20']) / (len(rs_all) - 1)))   # 100 = strongest 20-day move against Nifty in the universe
+        if s in dflags:
+            ex['data_flags'] = dflags[s]; r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + 'data check: ' + dflags[s][0]['text']
+        if edge and r['stage'] >= 3:
+            ex['regime_edge'] = edge
+            if edge['verdict'] == 'weak':
+                r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"backtest: in a \"{edge['label']}\" market this playbook averaged {edge['avg']:+.2f}R over {edge['n']} trades: smaller size or skip"
+                if os.environ.get('REGIME_FILTER', '').strip().lower() == 'hold' and r['status'] == 'TRIGGERED': r['status'] = 'WATCH (weak regime in backtest)'; r['holds'] = r.get('holds', []) + ['weak regime in backtest']
+        if r['stage'] >= 4:
+            xd = ex_dividend_info(s, now)
+            if xd and xd['days'] <= 7: ex['ex_dividend'] = xd; r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"ex-dividend on {xd['date']}: the price drops by the dividend that morning, which can touch a tight stop"
         if s in checks:
             chk = checks[s]; ex['index_check'] = chk
             if chk['state'] == 'falling':
@@ -561,7 +609,10 @@ def run_swing(args, now):
     for x in syms: why.setdefault(x, (0, 'nodata', 'No data from Yahoo for this symbol in this scan'))
     light, charts = split_charts(items)
     write_json(args.out, 'swing_charts.json', dict(generated_at=now.isoformat(timespec='seconds'), charts=charts))
-    write_json(args.out, 'swing.json', meta('swing', now, len(syms), len(daily), failed, note, light, nifty_trend=bool(n_up), stages=counts))
+    try: heat = portfolio_heat(items, active, daily, industries)
+    except Exception as ex_: heat = None; print(f'  portfolio heat failed: {ex_}', file=sys.stderr)
+    write_json(args.out, 'swing.json', meta('swing', now, len(syms), len(daily), failed, note, light, nifty_trend=bool(n_up), stages=counts, heat=heat, regime_edge=edge))
+    write_json(args.out, 'sectors.json', dict(generated_at=now.isoformat(timespec='seconds'), map={s: industries.get(s) for s in syms if industries.get(s)}))
     px = {x: round(float(f.Close.iloc[-1]), 2) for x, f in daily.items() if len(f)}
     write_json(args.out, 'explain.json', dict(generated_at=now.isoformat(timespec='seconds'), min_score=args.min_score, top=args.top,
                rows={x: [w[0], w[1], w[2], w[3] if len(w) > 3 else None, px.get(x), industries.get(x)] for x, w in why.items()}))
@@ -641,6 +692,10 @@ def run_options(args, now):
     late_cut(rows, now)
     follow(args, 'options', rows, states, {'NIFTY 50': df5}, now, market_open(now))
     snap = snapshot(df5, df15, vix, h1); snap['why_none'] = why; snap['losses_today'] = lost; snap['expiry_afternoon'] = expiry_pm
+    try:                                                  # item 13: where today's VIX sits in the last year (0 = calmest, 100 = most fearful)
+        vc = tidy_daily(dv['^INDIAVIX'], now).Close.dropna().tail(252)
+        if len(vc) >= 60 and vix: snap['vix_pct'] = int(round(100 * float((vc < vix).mean())))
+    except Exception: pass
     write_json(args.out, 'options.json', meta('options', now, 1, 1, [], 'Nifty 50 index only', rows, snapshot=snap, session_date=str(df5.index[-1].date()), lot_size=greeks.LOT_SIZE))
     return rows
 
@@ -654,6 +709,10 @@ def live_strike(side, spot, r, vix, now, hol):
     if iv: ot = greeks.pick_strike(side, spot, r['entry'], r['sl'], tg, iv * 100, now, hol, iv_label=f"implied from the live {atm} {ot['kind']} at {q[atm]['ltp']:.2f}")
     for c in ot['candidates']: c['live'] = q.get(c['strike'])
     ot['live'] = q.get(ot['strike']); ot['live_at'] = pd.Timestamp.now(tz=IST).isoformat(timespec='seconds')
+    L = ot['live'] or {}                                  # item 13: execution filter on the real bid-ask spread
+    if L.get('bid') and L.get('ask'):
+        ot['spread_pct'] = round(100 * (L['ask'] - L['bid']) / ((L['ask'] + L['bid']) / 2), 2); ot['spread_ok'] = ot['spread_pct'] <= 3.0
+        if not ot['spread_ok']: ot.setdefault('reasons', []).append(f"Bid-ask spread is {ot['spread_pct']:.1f}% of the premium: wide. Use a limit order near the mid price or skip.")
     return ot
 
 def quarter_index(ts): return (ts.hour * 60 + ts.minute - 555) // 15          # which 15-minute candle of the session we are in
@@ -716,7 +775,25 @@ def run_market(args, now):
     br = read_json(args.out, 'breadth.json') or {}
     payload = meta('market', now, 0, 0, [], 'Nifty 50, Bank Nifty, India VIX', [], indices=idx, daily=daily, intraday=intra, expected_move=market.expected_move(float(nifty.Close.iloc[-1]), vix),
                    playbook=market.playbook(daily, intra, vix), breadth=br.get('summary'), sectors=br.get('sectors') or [], breadth_time=br.get('generated_at'))
-    write_json(args.out, 'market.json', payload); return payload
+    write_json(args.out, 'market.json', payload)
+    try: holding_quotes(args, now)
+    except Exception as ex: print(f'  holding quotes failed: {ex}', file=sys.stderr)
+    return payload
+
+def holding_quotes(args, now):
+    """Item 25: last prices for your long-term holdings (repo variable HOLDING_SYMBOLS, for example NIFTYBEES,JUNIORBEES), for the
+    Investments page. Only the symbols and prices are published; your quantities stay in your journal."""
+    syms = [x.strip().upper() for x in os.environ.get('HOLDING_SYMBOLS', '').split(',') if x.strip()][:40]
+    if not syms: return
+    last = read_json(args.out, 'quotes.json') or {}
+    try:
+        if (now - pd.Timestamp(last.get('generated_at'))).total_seconds() < 25 * 60 and set(last.get('quotes', {})) >= set(syms): return     # every 30 minutes is plenty for long-term holdings
+    except Exception: pass
+    d, _ = download_many(syms, '5d', '1d', source='yahoo'); q = {}
+    for s, f in d.items():
+        f = f.dropna(subset=['Close'])
+        if len(f): q[s] = dict(price=round(float(f.Close.iloc[-1]), 2), prev=round(float(f.Close.iloc[-2]), 2) if len(f) > 1 else None, date=str(f.index[-1])[:10])
+    if q: write_json(args.out, 'quotes.json', dict(generated_at=now.isoformat(timespec='seconds'), quotes=q))
 
 def run_news(args, now):
     syms = []
@@ -746,7 +823,7 @@ def main():
     p.add_argument('--out', default='_site/data'); p.add_argument('--watchlist', default='watchlist.txt'); p.add_argument('--universe-csv', default=None); p.add_argument('--events', default='events.json'); p.add_argument('--state-dir', default='.state')
     p.add_argument('--min-score', type=int, default=4); p.add_argument('--top', type=int, default=60); p.add_argument('--intraday-top', type=int, default=100)
     args = p.parse_args(); now = pd.Timestamp.now(tz=IST); datasource.configure(args.state_dir)
-    if args.mode == 'live': datasource.set_budget(float(os.environ.get('ANGEL_LIVE_BUDGET_S', 90)))   # a 5-minute tick must finish well inside 5 minutes
+    datasource.set_budget(float(os.environ.get('ANGEL_LIVE_BUDGET_S', 90)) if args.mode == 'live' else float(os.environ.get('ANGEL_SWING_BUDGET_S', 150)))   # Angel One time limit per run: a 5-minute tick must finish well inside 5 minutes
     news_due = minutes_since(os.path.join(args.out, 'news.json'), now) >= 25
     modes = {'swing': ['swing'] + ([] if market_open(now) else ['market', 'news']), 'options': ['options'], 'intraday': ['intraday'], 'market': ['market'], 'news': ['news'], 'all': ['swing', 'options', 'intraday', 'market', 'news']}.get(args.mode)
     if args.mode == 'live': modes = ['options', 'intraday', 'market'] + (['news'] if news_due else [])         # Nifty and intraday stocks every 5 minutes, news about every 30
@@ -766,9 +843,12 @@ def write_health(args, now, sections, t0):
     for m, x in sections.items():
         js = read_json(args.out, m + '.json') or {}
         if 'scanned' in js: x.update(scanned=js.get('scanned'), universe=js.get('universe'), failed_n=len(js.get('failed') or []), failed=(js.get('failed') or [])[:20])
-    try: write_json(os.path.join(args.out, 'health'), args.mode + '.json', dict(mode=args.mode, started_at=now.isoformat(timespec='seconds'),
-                    finished_at=pd.Timestamp.now(tz=IST).isoformat(timespec='seconds'), seconds=round(time.time() - t0, 1), ok=all(x['ok'] for x in sections.values()), sections=sections, data=datasource.report(),
-                    run_url=run_url()))
+    try:
+        health = dict(mode=args.mode, started_at=now.isoformat(timespec='seconds'), finished_at=pd.Timestamp.now(tz=IST).isoformat(timespec='seconds'), seconds=round(time.time() - t0, 1),
+                      ok=all(x['ok'] for x in sections.values()), sections=sections, data=datasource.report(), run_url=run_url())
+        write_json(os.path.join(args.out, 'health'), args.mode + '.json', health)
+        import alerts                                   # item 28: tell the phone when a scan or a data source breaks (ALERTS_STATE=pub/state/alerts.json)
+        alerts.process(health, ((read_json(args.out, 'options.json') or {}).get('snapshot')), os.environ.get('ALERTS_STATE'))
     except Exception as ex: print(f'health not written: {ex}', file=sys.stderr)
 
 def run_url():

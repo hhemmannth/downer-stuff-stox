@@ -38,6 +38,17 @@ def heartbeat(pub, **kw):
     with open(path + '.tmp', 'w') as f: json.dump(kw, f, default=str)
     os.replace(path + '.tmp', path)
 
+def watch_loop(pub, hb):
+    """Item 28: two failed scans or three failed publishes in a row -> phone alert; one recovery note afterwards."""
+    try:
+        import alerts
+        sp = os.path.join(pub, 'state', 'alerts.json'); link = hb.get('run_url') or ''
+        alerts.watch('loop-scan', hb.get('bad_ticks', 0) >= 2, 'Live scan is failing', f"{hb.get('bad_ticks')} ticks in a row failed (exit code {hb.get('last_rc')}). Options and intraday may be stale. {link}", sp, 60,
+                     'Live scan recovered', 'Ticks are succeeding again.')
+        alerts.watch('loop-publish', hb.get('bad_publish', 0) >= 3, 'Publishing is failing', f"The last 3 publishes failed ({hb.get('publish')}). The site is not getting new data. {link}", sp, 60,
+                     'Publishing recovered', 'The site is updating again.')
+    except Exception as ex: print(f'  loop alerts failed: {ex}', file=sys.stderr)
+
 def run(args, log):
     r = subprocess.run(args, capture_output=True, text=True); log(f"$ {' '.join(args[1:4])} -> {r.returncode}\n{(r.stdout + r.stderr)[-1500:]}"); return r.returncode
 
@@ -69,17 +80,22 @@ def main(argv=None):
         t0 = time.time(); rc = run([py, 'strategy_scanner.py', '--mode', 'live', '--out', data, '--state-dir', '.cache'], log)
         if swing is not None and swing.poll() is not None: log(f'swing scan finished ({swing.returncode})'); swing = None
         run([py, 'notify.py', '--dir', data, '--state', state], log)
+        run([py, 'bot.py', '--dir', data, '--state', os.path.join(pub, 'state', 'bot.json')], log)       # answer Telegram commands (item 18)
         hb.update(ticks=hb['ticks'] + 1, last_tick=tick.isoformat(timespec='seconds'), last_scan_s=round(time.time() - t0, 1), last_rc=rc, swing_running=swing is not None)
+        hb['bad_ticks'] = 0 if rc == 0 else hb.get('bad_ticks', 0) + 1
         heartbeat(pub, **hb, next_tick=next_tick(now_ist() + dt.timedelta(seconds=1), a.every, a.offset).isoformat(timespec='seconds'))
         if not a.no_publish:
             mark = time.time()
             try: publish.publish(pub, last_pub, message=f'scan {tick:%Y-%m-%d %H:%M} IST'); last_pub = mark; hb['publish'] = 'ok'; log('published')
             except Exception as ex: hb['publish'] = f'failed: {str(ex)[:120]}'; log(f'publish failed: {ex}')
+            hb['bad_publish'] = hb.get('bad_publish', 0) + 1 if str(hb['publish']).startswith('failed') else 0
+        watch_loop(pub, hb)
         if a.once: break
     if swing is not None:
         try: swing.wait(timeout=600)
         except Exception: swing.kill()
         run([py, 'notify.py', '--dir', data, '--state', state], log)
+        run([py, 'bot.py', '--dir', data, '--state', os.path.join(pub, 'state', 'bot.json')], log)       # answer Telegram commands (item 18)
     hb.update(state='finished', swing_running=False); heartbeat(pub, **hb, next_tick=None)
     if not a.no_publish:
         try: publish.publish(pub, last_pub, message='final'); log('published final')

@@ -23,6 +23,7 @@ FR = {
 def fake_download(symbols, period, interval, chunk=50, pause=1.0, source="auto"):
     out = {s: FR[interval][s].copy() for s in symbols if s in FR[interval]}; return out, [s for s in symbols if s not in out]
 sc.download_many = fake_download
+sc.ex_dividend_info = lambda s, now: None           # no network in tests
 import datetime as _dt
 _we = sc.greeks.weekly_expiry                    # keep the test independent of the clock: never treat "now" as an expiry afternoon
 sc.greeks.weekly_expiry = lambda now, holidays=(): (lambda d: d + _dt.timedelta(days=7) if str(d) == str(pd.Timestamp(now).date()) else d)(_we(now, holidays))
@@ -55,7 +56,7 @@ check('swing: swing.json stays light (no candles), with the timeframe list and a
 EX = J('explain')['rows']
 check('explain: every symbol in the universe gets a reason', set(EX) >= {'AAA', 'BBB', 'CCC', 'DDD', 'PBK'}, str({k: v[1] for k, v in EX.items()}))
 check('explain: a listed setup says so, with its stage', EX['PBK'][1] == 'listed' and EX['PBK'][0] == 5 and 'stage 5' in EX['PBK'][2])
-check('explain: a stock that is not a setup gets a plain reason', all(EX[k][1] in ('structure', 'weekly', 'score', 'ranked', 'listed', 'liquidity', 'history', 'locked', 'nodata', 'error') and len(EX[k][2]) > 20 for k in EX))
+check('explain: a stock that is not a setup gets a plain reason', all(EX[k][1] in ('structure', 'weekly', 'score', 'ranked', 'listed', 'liquidity', 'history', 'locked', 'nodata', 'error', 'data') and len(EX[k][2]) > 20 for k in EX))
 HL = json.load(open(os.path.join(out, 'health', 'all.json')))
 check('health: the run records each section, its time and the scanned counts', HL['mode'] == 'all' and set(HL['sections']) >= {'swing', 'options', 'intraday', 'market', 'news'} and all('seconds' in x for x in HL['sections'].values()) and HL['sections']['swing'].get('universe') == 5, str(HL['sections'].get('swing')))
 check('news: carries the NSE holiday list for the app', isinstance(nw.get('holidays'), list))
