@@ -195,11 +195,36 @@ function gateView(msg, fatal) {
   </form>`;
   return g;
 }
+/* Two-factor: when an account has an authenticator app set up, a password alone is not enough. Supabase reports the session as "aal1" (password only)
+   and wants "aal2" (password and code). Until the code is entered, nothing in the app is built and no data is loaded. */
+async function needsCode() {
+  try { const { data } = await App.sb.auth.mfa.getAuthenticatorAssuranceLevel(); return !!data && data.nextLevel === 'aal2' && data.currentLevel !== 'aal2'; } catch (e) { return false; }
+}
+function stepUp() {
+  return new Promise(async done => {
+    let g = $('#gate'); if (!g) { g = document.createElement('div'); g.id = 'gate'; document.body.appendChild(g); }
+    let factor = null; try { const { data } = await App.sb.auth.mfa.listFactors(); factor = ((data && data.totp) || [])[0] || null; } catch (e) { }
+    const paint = msg => { g.innerHTML = `<form class="gate-card" id="gateM" novalidate><div class="gate-mark"><span class="logo">DS</span><div><b>DownerStuff</b><small>Private trading desk</small></div></div>
+      <h1>Two-factor code</h1><p class="gate-sub">Open your authenticator app and enter the 6-digit code for DownerStuff.</p>
+      <div class="field"><label for="gCode">Code</label><input id="gCode" inputmode="numeric" autocomplete="one-time-code" maxlength="9" required></div>
+      <p class="gate-msg" id="gMsg" role="alert">${msg ? esc(msg) : ''}</p><button class="btn primary gate-btn" id="gBtn" type="submit">Verify</button>
+      <p class="gate-sub" style="margin-top:12px"><a href="#" id="gOut">Use a different account</a></p></form>`; setTimeout(() => { const i = $('#gCode', g); if (i) i.focus(); }, 50); };
+    if (!factor) { paint('This account needs a code, but no authenticator app was found on it. Ask for help before signing out.'); $('#gBtn', g).disabled = true; }
+    else paint('');
+    g.onclick = async e => { if (e.target.id === 'gOut') { e.preventDefault(); try { await App.sb.auth.signOut(); } catch (x) { } location.reload(); } };
+    g.onsubmit = async ev => { ev.preventDefault(); if (!factor) return; const m = $('#gMsg', g), b = $('#gBtn', g), code = $('#gCode', g).value.replace(/\s+/g, '');
+      if (!/^\d{6}$/.test(code)) { m.textContent = 'Enter the 6 digits from your app.'; return; }
+      b.disabled = true; b.textContent = 'Checking…'; m.textContent = '';
+      try { const ch = await App.sb.auth.mfa.challenge({ factorId: factor.id }); if (ch.error) throw ch.error;
+        const v = await App.sb.auth.mfa.verify({ factorId: factor.id, challengeId: ch.data.id, code }); if (v.error) throw v.error; done(true); }
+      catch (e) { m.textContent = /invalid|expired|code/i.test(e.message || '') ? 'That code did not work. Wait for the next code in your app and try again. If it keeps failing, check the clock on your phone is set automatically.' : (e.message || 'Could not verify.'); b.disabled = false; b.textContent = 'Verify'; const i = $('#gCode', g); i.value = ''; i.focus(); } };
+  });
+}
 async function gate() {
   if (!window.supabase) { gateView('The sign-in service did not load. Check your connection and reload the page.', true); return null; }
   App.sb = window.supabase.createClient(App.SUPA.url, App.SUPA.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
   try { const { data } = await App.sb.auth.getSession(); const u = data && data.session && data.session.user;
-    if (allowedUser(u)) return u; if (u) await App.sb.auth.signOut(); } catch (e) { console.error(e); }
+    if (allowedUser(u)) { if (await needsCode()) { await stepUp(); const g0 = $('#gate'); if (g0) g0.remove(); } return u; } if (u) await App.sb.auth.signOut(); } catch (e) { console.error(e); }
   return new Promise(done => {
     const g = gateView(''); const f = $('#gateF', g); setTimeout(() => { const e = $('#gEm', g); if (e) e.focus(); }, 50);
     f.onsubmit = async ev => { ev.preventDefault(); const m = $('#gMsg', g), b = $('#gBtn', g), em = $('#gEm', g).value.trim(), pw = $('#gPw', g).value;
@@ -207,6 +232,7 @@ async function gate() {
       b.disabled = true; b.textContent = 'Signing in…'; m.textContent = '';
       try { const { data, error } = await App.sb.auth.signInWithPassword({ email: em, password: pw }); if (error) throw error;
         if (!allowedUser(data.user)) { await App.sb.auth.signOut(); throw new Error('This account does not have access.'); }
+        if (await needsCode()) { await stepUp(); }
         g.remove(); done(data.user); }
       catch (e) { m.textContent = /invalid/i.test(e.message || '') ? 'Wrong email or password.' : (e.message || 'Sign-in failed.'); b.disabled = false; b.textContent = 'Sign in'; $('#gPw', g).select(); } };
   });
