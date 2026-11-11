@@ -327,7 +327,7 @@ def _http_get(url):
     return urllib.request.urlopen(req, timeout=30).read().decode('utf-8-sig')
 
 # ------------------------------------------------------------------ data (yfinance)
-def _yahoo(sym): return sym if sym.startswith('^') or sym.endswith('.NS') else sym + '.NS'
+def _yahoo(sym): return sym if sym.startswith('^') or sym.endswith('.NS') or '=' in sym else sym + '.NS'      # '=': futures and FX (GC=F gold), not NSE stocks
 
 def _extract(d, t, multi):
     f = (d[t] if multi else d)[COLS].dropna()

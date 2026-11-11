@@ -4,6 +4,9 @@ No network. Run: python test_backtest_main.py"""
 import json, os, tempfile
 import numpy as np, pandas as pd
 import backtest as bt, backtest_tf as tf, strategy_scanner as sc, tf_fixture as fx
+import os
+os.environ['BACKTEST_FROM'] = 'all'; os.environ['MIN_SCORE'] = '4'      # these tests check the machinery on every grade and old dates;
+                                                                          # the A+ gate and the financial-year window have their own tests (test_rules.py)
 fails = []
 def check(name, cond, info=''):
     print(('PASS ' if cond else 'FAIL ') + name + (f'   {info}' if info else ''))

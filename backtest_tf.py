@@ -25,7 +25,8 @@ def _aware(df, tz=IST):
     df.index = df.index.tz_localize(tz) if df.index.tz is None else df.index.tz_convert(tz)
     df = df[~df.index.duplicated(keep='last')].sort_index(); return df.dropna(subset=['Open', 'High', 'Low', 'Close'])
 
-def _stamp(ts): return str(pd.Timestamp(ts).tz_localize(None) if pd.Timestamp(ts).tzinfo is not None else pd.Timestamp(ts))[:16]
+def _stamp(ts):                                           # every time on the page is IST, whatever clock the replay used (gold runs on its own session clock)
+    t = pd.Timestamp(ts); return str(t.tz_convert(IST).tz_localize(None) if t.tzinfo is not None else t)[:16]
 
 def _regime_lookup(regimes):
     keys = sorted(regimes or {})
@@ -36,9 +37,9 @@ def _regime_lookup(regimes):
 def _walk(section, item, ts, bars, now):
     sig = signals.new_signal(section, item, ts); signals.walk(sig, bars, now); return sig
 
-def _record(sig, base, risk, entry, entry_ts, cost_pct):
+def _record(sig, base, risk, entry, entry_ts, cost_pct, cost_abs=None):
     closed = sig['status'] == 'CLOSED'; t_out = pd.Timestamp(sig['closed']) if closed else None
-    r = float(sig.get('r_final', sig.get('r_now', 0.0))); cost_r = (cost_pct / 100.0) * entry / risk
+    r = float(sig.get('r_final', sig.get('r_now', 0.0))); cost_r = (cost_abs / risk) if cost_abs else (cost_pct / 100.0) * entry / risk
     return dict(base, entry_t=_stamp(entry_ts), exit_t=_stamp(t_out) if closed else _stamp(sig['checked_to']), outcome=sig['outcome'] if closed else 'OPEN', r=round(r, 2), r_net=round(r - cost_r, 2), hits=len(sig['hits']),
                 closed=closed, held=[]), t_out
 
@@ -52,7 +53,7 @@ def weekly_asof(daily, W, wk_pos, wk_first, i):
     cur = pd.DataFrame([[part.Open.iloc[0], part.High.max(), part.Low.min(), part.Close.iloc[-1], part.Volume.sum()]], columns=sc.COLS, index=[daily.index[i]])
     return pd.concat([W.iloc[:w], cur])
 
-def replay_positional(sym, daily, sector='', regimes=None, nifty_up=None, cfg=None, min_score=4, prefilter=True, start_at=None):
+def replay_positional(sym, daily, sector='', regimes=None, nifty_up=None, cfg=None, min_score=4, prefilter=True, start_at=None, stock=True, cost_abs=None):
     """All the positional trades the playbook would have opened on one stock. daily: OHLCV with a daily index."""
     cfg = cfg or CFG_P; d = daily.dropna(subset=['Open', 'High', 'Low', 'Close']).copy(); d.index = pd.DatetimeIndex(d.index).tz_localize(None) if d.index.tz is not None else pd.DatetimeIndex(d.index)
     d = d[~d.index.duplicated(keep='last')].sort_index(); trades = []
@@ -71,7 +72,7 @@ def replay_positional(sym, daily, sector='', regimes=None, nifty_up=None, cfg=No
         if busy_until is not None and day <= busy_until: continue
         if prefilter and not ok[max(0, i - cfg['trigger_age']):i + 1].any(): continue
         win = d.iloc[max(0, i + 1 - 240):i + 1]
-        if not sc.liquid(win, cfg) or bool((win.High.tail(5) == win.Low.tail(5)).any()): continue
+        if not sc.liquid(win, cfg) or (stock and bool((win.High.tail(5) == win.Low.tail(5)).any())): continue
         struct = weekly_asof(d, W, wk_pos, wk_first, i)
         if len(struct) < cfg['min_bars']: continue
         ex = ['Nifty trend'] if nifty_up is not None and nifty_up.get(str(day)[:10]) else []
@@ -88,7 +89,8 @@ def replay_positional(sym, daily, sector='', regimes=None, nifty_up=None, cfg=No
         end = min(last_ts, t_in + pd.Timedelta(days=life + 1)); sig = _walk('positional', item, t_in, fut, end + pd.Timedelta(days=1))
         base = dict(sym=sym, sector=sector or 'Other', side='long', grade=r['grade'], score=int(r['score']), structure=int(r['structure']), zone_q=int(r['zone_q']), confirm=int(r['confirm']), context=int(r['context']), entry=round(entry, 2), sl=round(sl, 2),
                     risk_pct=round(100 * risk / entry, 2), rvol=None if r.get('rvol') is None or (isinstance(r['rvol'], float) and math.isnan(r['rvol'])) else round(float(r['rvol']), 2), regime=get_regime(day), weekday=pd.Timestamp(day).strftime('%a'))
-        rec, t_out = _record(sig, base, risk, entry, t_in + pd.Timedelta(hours=15, minutes=30), COST_POSITIONAL_PCT)
+        if not stock: base['risk_usd'] = round(risk, 2)
+        rec, t_out = _record(sig, base, risk, entry, t_in + pd.Timedelta(hours=15, minutes=30), COST_POSITIONAL_PCT, cost_abs)
         rec['hold_days'] = int((pd.Timestamp(rec['exit_t']).normalize() - pd.Timestamp(day).normalize()).days); trades.append(rec)
         busy_until = pd.Timestamp(rec['exit_t']).normalize() if rec['closed'] else pd.Timestamp(d.index[-1]) + pd.Timedelta(days=1)
     return trades
@@ -112,21 +114,30 @@ def _day_bounds(f5):
         if b == len(f5) or d[b] != d[a]: out.append((a, b)); a = b
     return out
 
-def replay_intraday(sym, f5, f15, cfg=None, min_score=4, hist_bars=375, bias_bars=250, regimes=None, prefilter=True, cost_pct=None, first_day=None):
-    """All the intraday trades (long and short) the live engine would have opened on one stock. f5, f15: OHLCV frames; any timezone."""
-    cfg = cfg or sc.CFG_I; cost_pct = COST_INTRADAY_PCT if cost_pct is None else cost_pct; trades = []
+# Trading sessions, in minutes after midnight on the session's own clock. NSE stocks run on IST; gold runs on a UTC+2 clock, so its trading
+# day (COMEX: 23:00 UTC to 22:00 UTC, an hour later in US summer) never splits across two dates and the daily candle ends at midnight.
+NSE_SESSION = dict(tz=IST, first=9 * 60 + 30, last=15 * 60, square=15 * 60 + 15)
+GOLD_TZ = 'Etc/GMT-2'                                                 # = UTC+2 (the sign is reversed in these zone names)
+GOLD_SESSION = dict(tz=GOLD_TZ, first=9 * 60, last=21 * 60, square=22 * 60 + 30)    # London open to New York afternoon: 07:00-19:00 UTC, all closed 20:30 UTC (12:30-00:30 and 02:00 IST)
+
+def replay_intraday(sym, f5, f15, cfg=None, min_score=4, hist_bars=375, bias_bars=250, regimes=None, prefilter=True, cost_pct=None, first_day=None,
+                    session=None, bar_min=5, bias_min=15, cost_abs=None, stock=True):
+    """All the intraday trades (long and short) the live engine would have opened on one instrument. f5: 5m OHLCV (the trigger frame),
+    f15: 15m OHLCV (the bias frame); any timezone. session: the entry window and square-off (NSE by default, GOLD_SESSION for gold)."""
+    cfg = cfg or sc.CFG_I; cost_pct = COST_INTRADAY_PCT if cost_pct is None else cost_pct; trades = []; S = session or NSE_SESSION
     if f15 is None or len(f5) < cfg['min_bars']: return trades
-    f5, f15 = _aware(f5), _aware(f15)
+    f5, f15 = _aware(f5, S['tz']), _aware(f15, S['tz'])
     if not sc.has_volume(f5): return trades
     q_long, q_short = _qualifiers(f5, cfg, True) if prefilter else (np.ones(len(f5), bool), np.ones(len(f5), bool)); get_regime = _regime_lookup(regimes)
-    e15 = f15.index + pd.Timedelta(minutes=15); ts5 = f5.index; seen = set(); busy = {'long': None, 'short': None}      # when each 15m bar ENDS (compared as timestamps, never as raw integers: pandas 3 stores microseconds)
+    e15 = f15.index + pd.Timedelta(minutes=bias_min); ts5 = f5.index; seen = set(); busy = {'long': None, 'short': None}      # when each bias bar ENDS (compared as timestamps, never as raw integers: pandas 3 stores microseconds)
+    if first_day is not None: first_day = pd.Timestamp(first_day).tz_localize(S['tz']) if pd.Timestamp(first_day).tzinfo is None else pd.Timestamp(first_day).tz_convert(S['tz'])
     for a, b in _day_bounds(f5):
         day = ts5[a].normalize()
-        if first_day is not None and day < first_day: continue
-        sq = day + pd.Timedelta(hours=15, minutes=15); stop_at = day + pd.Timedelta(hours=15, minutes=0)
+        if first_day is not None and day < first_day.normalize(): continue
+        sq = day + pd.Timedelta(minutes=S['square']); stop_at = day + pd.Timedelta(minutes=S['last']); open_at = day + pd.Timedelta(minutes=S['first'])
         for p in range(a, b):
-            T = ts5[p] + pd.Timedelta(minutes=5)
-            if T < day + pd.Timedelta(hours=9, minutes=30) or T > stop_at: continue
+            T = ts5[p] + pd.Timedelta(minutes=bar_min)
+            if T < open_at or T > stop_at: continue
             lo = max(0, p + 1 - hist_bars)
             if p + 1 - lo < cfg['min_bars']: continue
             sides = [s for s, q in (('long', q_long[p]), ('short', q_short[p])) if q and (busy[s] is None or busy[s] <= T)]
@@ -145,10 +156,14 @@ def replay_intraday(sym, f5, f15, cfg=None, min_score=4, hist_bars=375, bias_bar
                 t1, t2, t3 = sc.r05(r['t1']), sc.r05(r['t2']), sc.r05(r['t3'])
                 if (long and t1 <= entry) or (not long and t1 >= entry): t1 = sc.r05(entry + risk if long else entry - risk)
                 seen.add(key); item = dict(symbol=sym, direction=side, label=side.upper(), grade=r['grade'], score=int(r['score']), entry=entry, sl=sl, t1=t1, t2=t2, t3=t3, bos_date=r['bos_date'], stage=None, status='TRIGGERED')
-                fut = f5.iloc[p + 1:b]; fut = fut[fut.index < sq]; sig = _walk('intraday', item, ts5[p], fut, sq)
+                end = sq
+                fut = f5.iloc[p + 1:b]; fut = fut[fut.index + pd.Timedelta(minutes=bar_min) <= end]; sig = _walk('intraday', item, ts5[p], fut, end)
+                if sig['status'] != 'CLOSED':                                      # still open at the square-off: out at the last close
+                    signals._close(sig, end, sig['last'], 'EXPIRED', 'Squared off.')
                 base = dict(sym=sym, sector='', side=side, grade=r['grade'], score=int(r['score']), structure=int(r['structure']), zone_q=int(r['zone_q']), confirm=int(r['confirm']), context=int(r['context']), entry=entry, sl=sl,
                             risk_pct=round(100 * risk / entry, 3), rvol=None if r.get('rvol') is None or (isinstance(r['rvol'], float) and math.isnan(r['rvol'])) else round(float(r['rvol']), 2), regime=get_regime(day), weekday=day.strftime('%a'), bias=r.get('b15_kind'))
-                rec, t_out = _record(sig, base, risk, entry, T, cost_pct)
+                if not stock: base['risk_usd'] = round(risk, 2)
+                rec, t_out = _record(sig, base, risk, entry, T, cost_pct, cost_abs)
                 rec['hold_min'] = int((t_out - T).total_seconds() // 60) if t_out is not None else None; trades.append(rec); busy[side] = t_out if t_out is not None else sq
     return trades
 
@@ -239,8 +254,45 @@ def _nifty_context(now, years='2y'):
     if nd is None: return None, {}, {}
     up = (nd.Close >= sc.ema(nd.Close, 21)); return nd, bt.regime_map(nd), {str(k)[:10]: bool(v) for k, v in up.items()}
 
-def _job_pos(job): sym, d, sector, regimes, up = job; return replay_positional(sym, d, sector, regimes, up)
-def _job_intra(job): sym, f5, f15, regimes, fd = job; return replay_intraday(sym, f5, f15, regimes=regimes, first_day=fd)
+def _job_pos(job): sym, d, sector, regimes, up, ms, st = job; return replay_positional(sym, d, sector, regimes, up, min_score=ms, start_at=st)
+def _job_intra(job): sym, f5, f15, regimes, fd, ms = job; return replay_intraday(sym, f5, f15, regimes=regimes, first_day=fd, min_score=ms)
+
+# ------------------------------------------------------------------ gold (XAUUSD) data
+CFG_GP = dict(CFG_P, min_price=0.0, min_turnover_cr=0.0)              # gold positional: no NSE liquidity floor
+GOLD_LABEL = 'XAUUSD'
+def gold_symbol(env=None): return str((env if env is not None else os.environ).get('GOLD_SYMBOL', '') or 'GC=F').strip()
+def gold_cost(env=None):
+    try: return max(0.0, float((env if env is not None else os.environ).get('GOLD_COST', '') or 0.35))
+    except ValueError: return 0.35
+
+def _bar_open(df, minutes, now):
+    """Drop the last candle when it has not finished yet (gold trades almost round the clock, so the NSE close cannot be used for this)."""
+    if len(df) and df.index[-1] + pd.Timedelta(minutes=minutes) > now: return df.iloc[:-1]
+    return df
+
+def gold_intraday(sym, period, interval, now, fetch=None):
+    """Gold candles (5m, 15m or 1h), tz-aware IST, the unfinished last candle removed."""
+    raw, _ = (fetch or sc.yahoo_many)([sym], period, interval); f = raw.get(sym)
+    if f is None or not len(f): return None
+    f = f.dropna(subset=['Open', 'High', 'Low', 'Close']).copy(); idx = pd.DatetimeIndex(f.index)
+    f.index = (idx.tz_localize('UTC') if idx.tz is None else idx).tz_convert(IST); f = f[~f.index.duplicated(keep='last')].sort_index()
+    return _bar_open(f, {'1m': 1, '5m': 5, '15m': 15, '1h': 60}[interval], now)
+
+def gold_daily(sym, period, now, fetch=None):
+    """Daily gold candles, one per session (dated by the day the session ends), without today's unfinished session."""
+    raw, _ = (fetch or sc.yahoo_many)([sym], period, '1d'); f = raw.get(sym)
+    if f is None or not len(f): return None
+    f = f.dropna(subset=['Open', 'High', 'Low', 'Close']).copy(); idx = pd.DatetimeIndex(f.index)
+    f.index = (idx.tz_convert(None) if idx.tz is not None else idx).normalize(); f = f[~f.index.duplicated(keep='last')].sort_index()
+    today = pd.Timestamp(now).tz_convert(GOLD_TZ).tz_localize(None).normalize()           # the session still trading now
+    return f[f.index < today]
+
+def _from(fd, rules):
+    """The first day a replay may open a trade: after the warm-up AND inside the window (1 April 2026 by default)."""
+    st = bt.start_stamp(rules)
+    if st is None: return fd
+    st = st.tz_localize(fd.tzinfo) if fd.tzinfo is not None else st
+    return max(fd, st)
 
 def _pool(fn, jobs, workers, label, every=25):
     out, t0 = [], time.time()
@@ -282,28 +334,58 @@ def _intraday_frames(syms, now, deep, minutes_budget):
             print(f'  --deep: {got} stocks got longer history from Angel One', flush=True)
     return f5, f15
 
+def _liquid_list(a, now):
+    try:
+        liq = json.load(open(os.path.join(a.out, 'liquid.json')))['top']
+        if liq: return liq
+    except Exception: pass
+    syms, _, _ = sc.load_nifty500('nifty500.csv', 'watchlist.txt'); raw, _ = sc.yahoo_many(syms, '3mo', '1d')
+    return _liquid_top(syms, {s: sc.tidy_daily(f, now) for s, f in raw.items() if len(f)}, 0)
+
+def _warm(frames, now, days):
+    day0 = min((f.index[0] for f in frames if f is not None and len(f)), default=now)
+    return (pd.Timestamp(day0).tz_convert(IST) if pd.Timestamp(day0).tzinfo else pd.Timestamp(day0).tz_localize(IST)).normalize() + pd.Timedelta(days=days)
+
 def main_segment(a):
     seg = a.segment; t0 = time.time(); now = pd.Timestamp.now(tz=IST); os.makedirs(a.out, exist_ok=True); acct = bt.account_from_env(segment=seg); workers = a.workers
-    print(f'backtest {seg}: starting', flush=True)
+    rules = bt.rules_from_env(); ms = rules['min_score']; start = bt.start_stamp(rules)
+    print(f'backtest {seg}: starting, {bt.rules_text(rules)}', flush=True)
     if seg == 'positional':
         syms, note, industries = sc.load_nifty500('nifty500.csv', 'watchlist.txt'); print(f'backtest: {note}', flush=True)
         raw, _ = sc.yahoo_many(syms, '10y', '1d'); daily = {s: sc.tidy_daily(f, now) for s, f in raw.items() if len(f) > 300}; pick = _liquid_top(syms, daily, a.top)
         nd, regimes, up = _nifty_context(now, '10y'); print(f'backtest: {len(pick)} stocks, replaying on {workers} cores', flush=True)
-        trades = _pool(_job_pos, [(s, daily[s], industries.get(s, ''), regimes, up) for s in pick], workers, 'positional')
+        trades = _pool(_job_pos, [(s, daily[s], industries.get(s, ''), regimes, up, ms, start) for s in pick], workers, 'positional')
         first = min((str(daily[s].index[0])[:10] for s in pick), default=''); window = dict(**{'from': first, 'to': str(max(daily[s].index[-1] for s in pick))[:10]}); params = dict(top=a.top, seconds=round(time.time() - t0)); universe = len(pick)
     elif seg == 'intraday':
-        prev = _load_prev(a.out, seg); liq = None
-        try: liq = json.load(open(os.path.join(a.out, 'liquid.json')))['top']
-        except Exception: pass
-        if not liq:
-            syms, _, _ = sc.load_nifty500('nifty500.csv', 'watchlist.txt'); raw, _ = sc.yahoo_many(syms, '3mo', '1d'); liq = _liquid_top(syms, {s: sc.tidy_daily(f, now) for s, f in raw.items() if len(f)}, 0)
+        prev = _load_prev(a.out, seg); liq = _liquid_list(a, now)
         pick = liq[:a.top or 100]; print(f'backtest: {len(pick)} most liquid stocks, downloading 5m and 15m candles', flush=True)
-        f5, f15 = _intraday_frames(pick, now, a.deep, a.deep_minutes); nd, regimes, up = _nifty_context(now)
-        day0 = min((f.index[0] for f in f5.values()), default=now); fd = (pd.Timestamp(day0).tz_convert(IST) if pd.Timestamp(day0).tzinfo else pd.Timestamp(day0).tz_localize(IST)).normalize() + pd.Timedelta(days=3)
-        print(f'backtest: replaying {len(f5)} stocks on {workers} cores from {str(fd)[:10]}', flush=True)
-        new = _pool(_job_intra, [(s, f5[s], f15[s], regimes, fd) for s in f5 if s in f15], workers, 'intraday', every=10)
+        fa, fb = _intraday_frames(pick, now, a.deep, a.deep_minutes)
+        nd, regimes, up = _nifty_context(now); fd = _from(_warm(fa.values(), now, 3), rules)
+        print(f'backtest: replaying {len(fa)} stocks on {workers} cores from {str(fd)[:10]}', flush=True)
+        new = _pool(_job_intra, [(s, fa[s], fb[s], regimes, fd, ms) for s in fa if s in fb], workers, seg, every=10)
         trades = bt.merge_trades(prev.get('trades', []), new); first = min([str(fd)[:10]] + ([prev['window']['from']] if prev.get('window', {}).get('from') else []))
-        window = {'from': first, 'to': str(max(f.index[-1] for f in f5.values()))[:10], 'note': 'grows every week'}; params = dict(top=len(pick), days=a.deep or 60, seconds=round(time.time() - t0)); universe = len(f5)
+        window = {'from': first, 'to': str(max((f.index[-1] for f in fa.values()), default=now))[:10], 'note': 'grows every week'}; params = dict(top=len(pick), days=a.deep or 60, seconds=round(time.time() - t0)); universe = len(fa)
+    elif seg.startswith('gold_'):
+        sym = gold_symbol(); cost = gold_cost(); style = seg[5:]; prev = _load_prev(a.out, seg) if style == 'intraday' else {}
+        gd = gold_daily(sym, '10y' if style == 'positional' else '3y', now)
+        if gd is None or len(gd) < 300: print(f'No gold daily data downloaded for {sym}.', file=sys.stderr); return 2
+        regimes = bt.regime_map(gd); print(f'backtest: gold from {sym}, {len(gd)} daily candles, cost {cost} dollars per ounce', flush=True)
+        if style == 'intraday':
+            fa = gold_intraday(sym, '60d', '5m', now); fb = gold_intraday(sym, '60d', '15m', now)
+            if fa is None or fb is None or not len(fa): print('No gold intraday data downloaded.', file=sys.stderr); return 2
+            fd = _from(_warm([fa], now, 3), rules); print(f'backtest: replaying gold intraday from {str(fd)[:10]}', flush=True)
+            new = replay_intraday(GOLD_LABEL, fa, fb, regimes=regimes, first_day=fd, min_score=ms, cost_abs=cost, stock=False, session=GOLD_SESSION)
+            trades = bt.merge_trades(prev.get('trades', []), new); first = min([str(fd)[:10]] + ([prev['window']['from']] if prev.get('window', {}).get('from') else []))
+            window = {'from': first, 'to': str(fa.index[-1])[:10], 'note': 'grows every week'}
+        elif style == 'swing':
+            h1 = gold_intraday(sym, '730d', '1h', now)
+            if h1 is None or len(h1) < 100: print('No gold hourly data downloaded.', file=sys.stderr); return 2
+            trades = bt.replay_symbol(GOLD_LABEL, gd, h1, 'Gold', regimes, min_score=ms, start_at=start, day_tz=GOLD_TZ, stock=False, cost_abs=cost)
+            window = {'from': str(h1.index[0])[:10], 'to': str(gd.index[-1])[:10]}
+        else:
+            trades = replay_positional(GOLD_LABEL, gd, 'Gold', regimes, None, CFG_GP, min_score=ms, start_at=start, stock=False, cost_abs=cost)
+            window = {'from': str(gd.index[0])[:10], 'to': str(gd.index[-1])[:10]}
+        params = dict(source=sym, cost_usd=cost, seconds=round(time.time() - t0)); universe = 1
     else:                                                                           # options
         prev = _load_prev(a.out, seg); raw5, _ = sc.yahoo_many(['^NSEI'], '60d', '5m'); raw15, _ = sc.yahoo_many(['^NSEI'], '60d', '15m'); raw1h, _ = sc.yahoo_many(['^NSEI'], '730d', '1h'); rawv, _ = sc.yahoo_many(['^INDIAVIX'], '2y', '1d')
         if '^NSEI' not in raw5 or '^NSEI' not in raw15: print('No Nifty data downloaded.', file=sys.stderr); return 2
@@ -317,9 +399,9 @@ def main_segment(a):
                 except Exception as ex: print(f'  --deep: {ex}', file=sys.stderr)
         vix = sc.tidy_daily(rawv['^INDIAVIX'], now).Close if '^INDIAVIX' in rawv else None; nd, regimes, up = _nifty_context(now)
         import argparse; hol = sc.holidays(argparse.Namespace(events='events.json'))
-        fd = _aware(f5).index[0].normalize() + pd.Timedelta(days=3); print(f'backtest: replaying Nifty options from {str(fd)[:10]}', flush=True)
-        new = replay_options(f5, f15, h1, vix, hol, regimes=regimes, first_day=fd)
+        fd = _from(_aware(f5).index[0].normalize() + pd.Timedelta(days=3), rules); print(f'backtest: replaying Nifty options from {str(fd)[:10]}', flush=True)
+        new = replay_options(f5, f15, h1, vix, hol, regimes=regimes, first_day=fd, min_score=ms)
         trades = bt.merge_trades(prev.get('trades', []), new); first = min([str(fd)[:10]] + ([prev['window']['from']] if prev.get('window', {}).get('from') else []))
         window = {'from': first, 'to': str(_aware(f5).index[-1])[:10], 'note': 'modelled premiums; grows every week'}; params = dict(days=a.deep or 60, seconds=round(time.time() - t0)); universe = 1
-    rep = bt.report(trades, (), window=window, universe=universe, params=params, acct=acct, segment=seg); _save(a.out, seg, rep, trades, window, universe, params)
+    rep = bt.report(trades, (), window=window, universe=universe, params=params, acct=acct, segment=seg, rules=rules); _save(a.out, seg, rep, trades, window, universe, params)
     s = rep['summary']['net']; print(f"backtest {seg}: {s['n']} trades, win {s['win']}%, expectancy {s['avg']}R net, profit factor {s['pf']}, max drawdown {s['max_dd']}R, {time.time() - t0:.0f}s"); return 0

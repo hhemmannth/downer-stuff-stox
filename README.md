@@ -20,6 +20,7 @@ Nothing else changes: the market loop still scans every 5 minutes during market 
 | **Intraday** | Liquid Nifty 500 stocks, long and short, MIS rules |
 | **Trade page** | 1D / 1H / 15m charts with the zone, fib, CHoCH/BOS, entry, stop and targets; the playbook checklist; scorecard; plan; position size from your capital and risk; tracking timeline; **Log trade** |
 | **Journal** | Your trades (same format and cloud as Trade Insight): add, edit, close, filter, CSV and backup export, import |
+| **XAUUSD Gold** | Gold backtests in three styles (intraday, swing, positional), sessions in IST and a lot-size calculator |
 | **Analytics** | Net P&L, win rate, expectancy, profit factor, drawdown, streaks, equity / drawdown / R curves, monthly and calendar views, R distribution, rolling progress, edge finder (setup, segment, grade, timeframe, weekday, hour, emotion, rule break, regime, event, exit, direction, source), discipline, MAE/MFE, signals vs your execution, insights |
 | **Market / News** | Regime, expected move, breadth, sector strength, playbook by segment; headlines by topic, events calendar, risk flags |
 | **Playbook & rules** | Your swing playbook walk-through, timeframe tables, scorecard and your 29 rules |
@@ -101,6 +102,21 @@ Needs A and the `ANGEL_*` secrets. Actions > tradebook > Run workflow (tick forc
 3. Optional, stronger: once step 2 works, run `supabase/require_2fa.sql` once in the SQL Editor. The database itself then refuses your journal without a verified code (the scanner user is exempt). To undo, run the two `drop policy` lines at the bottom of that file.
 Lost phone: Supabase > Authentication > Users > your user > remove the factor, then sign in with your password.
 
+## Round 6: A+ only, this financial year, 2 a day, and gold
+**Every backtest now counts A+ setups only (score 8 to 10), from 1 April 2026.** The replay itself skips anything below A+, so a weaker setup can never block an A+ one on the same stock. Repo variables: `BACKTEST_FROM` (a date, or `all` for every year the data has), `MIN_SCORE` (default 8).
+
+**Your daily rule: 2 trades a day, more only if A+.** In "With your rules" a 3rd or later trade that day is taken only when it is A+; anything below A+ past the limit is blocked. The open-risk ceiling (2%) and the loss limits still apply to every trade, so in practice the ceiling usually stops a 3rd overlapping trade. A "strict 2 a day" row sits beside it for comparison (`APLUS_OVERFLOW=off` makes strict the default). The same rule runs in the app: the risk banner, the dashboard ("Trades today"), the pre-trade checklist and the weekly-review coach count trades of every style, and flag a trade past the limit that is not A+.
+
+**Backtest lab: one view per style.** Intraday, Swing, Positional and Nifty options, each with its own KPIs and win rate, "With your rules" (the P&L of the way you trade, with an account curve), the equity curve in R, breakdown tables and a **trade log** (the trades your rules took, or every A+ signal; 25 at a time; CSV download).
+
+**XAUUSD Gold (sidebar > Gold).** Intraday, swing and positional on gold, each backtested on its own, in a gold-themed page with a lot-size calculator (1 lot = 100 oz; your gold account and risk are saved on the device). Data: COMEX gold futures from Yahoo (`GC=F`, change with `GOLD_SYMBOL`), the closest free intraday history; levels differ from spot by a few dollars. Intraday trades the London and New York sessions (12:30 to 00:30 IST, closed by 02:00 IST) on a session clock that never splits a trading day at midnight. Swing and positional are long only, like your stock swings. Costs 0.35 dollars per ounce per round trip (`GOLD_COST`); overnight swap is not modelled. Gold is not scanned live (it trades mostly outside the market loop's hours). Indian residents: XAUUSD CFDs on offshore platforms are not permitted under RBI/FEMA rules; MCX gold is the onshore route.
+
+**Pre-trade check.** Portfolio heat moved off the top of the Swing page into a small badge in the corner of the Order ticket: this stock's sector crowding, what you already hold in that sector, stocks that move with it, today's trade count against your rule, the grade and the open risk. Tap it before you place the order.
+
+**Removed:** the Investments page (your holdings stay inside your journal data, untouched; they are just not shown).
+
+**Workflows.** `backtest` adds gold swing and positional (input `gold`); `backtest-intraday` adds gold intraday (input `gold`). Scalping is not part of the playbook (your decision). A failure in a new style does not stop the others from publishing. Quick mode re-applies the rules to every saved style, gold included.
+
 ## Backtest lab, new pages and alert upgrades (final bundle)
 **Backtest lab (Research > Backtest lab).** The `backtest` workflow replays your swing playbook on about two years of history with the live engine (`swing.analyse`) and the live trade tracker (`signals.walk`), every Saturday 07:00 IST or by hand (Actions > backtest > Run workflow; 30 to 45 minutes for the 250 most liquid stocks, set `top` to 0 for all 500). The page shows expectancy after costs, win rate, profit factor, drawdown, an equity curve, results by grade, score, confirmation, zone, context, market regime, sector, weekday, month, volume and stop width, a first-60% / last-40% split, rule variants (volume 1.2x / 2.0x, stop buffer 0.15 / 0.40 ATR, narrow zones) that only count as better when they win in both halves, a Monte Carlo of what a year can look like at 0.5%, 0.75% and 1% risk, and a live forward test that compares tracked signals with the backtest.
 What it cannot replay, also stated on the page: the 15m precision entry (the entry is the 1H confirmation close), results-date and sector hold-backs, and stocks that left the Nifty 500. The window is about two years because free hourly history stops there.
@@ -138,7 +154,6 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 
 **Journal.** A pre-trade checklist appears before a new trade is saved (your rules for swing, options or intraday); unticked rules are saved with the trade. Trades logged from the scanner keep a small chart of the moment they were logged.
 **Weekly review (Journal > Weekly review).** Net result, R, rule breaks, a plain-language note on every trade from a rule-based coach (no AI service, nothing leaves your device), the one thing to fix next week, what your own scanner trades say about the scorecard, and a tax-ready P&L download per financial year (intraday, F&O and delivery kept apart, with turnover).
-**Investments (Journal > Investments).** Long-term lots with value, gain, days held, the date each lot becomes long-term for tax, an estimate of tax if sold today, and drift from your target weights. Set the variable `HOLDING_SYMBOLS` (for example `NIFTYBEES,JUNIORBEES`) to have the scan fetch their prices; quantities never leave your journal.
 
 **Optional repo variables (Settings > Secrets and variables > Actions > Variables).**
 | Variable | What it does |
@@ -149,6 +164,8 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 | `ALERT_CHARTS`, `NTFY_ACTIONS` | `off` switches off chart pictures or action alerts |
 | `CRON_TOKEN_EXPIRES`, `BACKUP_TOKEN_EXPIRES`, `CRON_JOB_EXPECTED` | token expiry dates (YYYY-MM-DD) for readiness reminders, and an off switch for the cron-job check |
 | `RISK_PCT`, `RISK_PCT_APLUS`, `OPEN_RISK_CAP`, `DAY_STOP_PCT`, `WEEK_STOP_PCT`, `MONTH_HALF_PCT`, `MONTH_STOP_PCT`, `MAX_TRADES_PER_DAY`, `STOP_AFTER_LOSSES` | your account rules for the backtest's "With your rules" |
+| `BACKTEST_FROM`, `MIN_SCORE`, `APLUS_OVERFLOW` | backtest window (default 2026-04-01, `all` for everything), minimum score (default 8 = A+), and `off` for a strict 2 a day |
+| `GOLD_SYMBOL`, `GOLD_COST` | gold data symbol (default `GC=F`) and round-trip cost in dollars per ounce (default 0.35) |
 
 **Not included:** scan results behind your login (your repo is public, so the strategy code is public anyway), and second-by-second live prices or a real-time engine (they need an always-on machine). Use Angel One's own price alerts and your stop-loss orders for second-level protection.
 
@@ -178,7 +195,7 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 **Market data.** The year of daily candles comes from Yahoo (about a minute for the whole Nifty 500, and it matched Angel One on every close we compared). Each morning a sample of stocks plus Nifty is checked against Angel One and shown under System health > Data sources. Angel One serves the Nifty candles, the hourly candles for swing candidates and the live option prices. Intraday stocks use Yahoo by design.
 
 ## Tests (no internet needed)
-`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_backtest_tf.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`
+`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_backtest_tf.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`, `test_rules.py`
 
 ## Limits
 Without the Angel One secrets, data is Yahoo Finance (unofficial, can be delayed) and option premiums are model prices. With them, premiums at your stop and targets are still model estimates around the live price. Results dates come from Yahoo and can be missing (check NSE). Rules-based candidates, not investment advice.

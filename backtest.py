@@ -23,10 +23,44 @@ import numpy as np, pandas as pd
 IST = 'Asia/Kolkata'
 COST_PCT = 0.30                 # round-trip cost of a delivery trade as % of entry: STT 0.2, stamp duty, exchange + GST, DP charge, slippage
 SEGMENTS = {
+    'intraday': dict(title='Intraday', files=('backtest_intraday.json', 'backtest_intraday_trades.json'), cost_pct=0.08),
     'swing': dict(title='Swing', files=('backtest.json', 'backtest_trades.json'), cost_pct=0.30),
     'positional': dict(title='Positional', files=('backtest_positional.json', 'backtest_positional_trades.json'), cost_pct=0.30),
-    'intraday': dict(title='Intraday', files=('backtest_intraday.json', 'backtest_intraday_trades.json'), cost_pct=0.08),
-    'options': dict(title='Nifty options', files=('backtest_options.json', 'backtest_options_trades.json'), cost_pct=None)}      # options: costs are in rupees, see backtest_tf.py
+    'options': dict(title='Nifty options', files=('backtest_options.json', 'backtest_options_trades.json'), cost_pct=None),     # options: costs are in rupees, see backtest_tf.py
+    'gold_intraday': dict(title='Gold intraday', files=('backtest_gold_intraday.json', 'backtest_gold_intraday_trades.json'), cost_pct=None, gold=True),     # gold: costs are in dollars per ounce
+    'gold_swing': dict(title='Gold swing', files=('backtest_gold_swing.json', 'backtest_gold_swing_trades.json'), cost_pct=None, gold=True),
+    'gold_positional': dict(title='Gold positional', files=('backtest_gold_positional.json', 'backtest_gold_positional_trades.json'), cost_pct=None, gold=True)}
+SHORT_HOLD = ('intraday', 'options', 'gold_intraday')          # results measured in minutes, not days
+
+# ------------------------------------------------------------------ the two rules every playbook now runs with
+WINDOW_FROM = '2026-04-01'      # current financial year only: nothing before 1 April 2026 is replayed or counted (BACKTEST_FROM to change, 'all' for everything)
+A_PLUS = 8                      # A+ = scorecard 8 to 10. Below that a signal is skipped by the replay itself (MIN_SCORE to change)
+
+def rules_from_env(env=None):
+    """The window and the grade gate, from repo variables when they are set. Bad values are ignored, so a typo never widens the test silently."""
+    e = env if env is not None else os.environ; out = dict(window_from=WINDOW_FROM, min_score=A_PLUS)
+    v = str(e.get('BACKTEST_FROM', '') or '').strip()
+    if v.lower() in ('all', 'none', '0'): out['window_from'] = None
+    elif v:
+        try: out['window_from'] = str(pd.Timestamp(v).date())
+        except Exception: pass
+    try:
+        if str(e.get('MIN_SCORE', '') or '').strip(): out['min_score'] = max(1, min(10, int(float(e['MIN_SCORE']))))
+    except ValueError: pass
+    return out
+
+def gate(trades, rules=None):
+    """Keep only the trades inside the window that reached the minimum score. The replays already skip the rest; this also cleans files saved
+    by older runs, so a quick re-run shows the same thing."""
+    r = rules or rules_from_env(); f = r.get('window_from'); m = r.get('min_score') or 0
+    return [t for t in trades if (not f or str(t.get('entry_t', ''))[:10] >= f) and (t.get('score') or 0) >= m]
+
+def start_stamp(rules=None):
+    f = (rules or rules_from_env()).get('window_from'); return pd.Timestamp(f) if f else None
+
+def rules_text(r):
+    g = 'A+ only (score 8 to 10)' if r.get('min_score', 0) >= A_PLUS else f"score {r.get('min_score')} or more"
+    return g + (f" · from {pd.Timestamp(r['window_from']).strftime('%d %b %Y')}" if r.get('window_from') else ' · all history')
 SEGMENT_NOTES = {
     'positional': ['Positional = the swing playbook one timeframe up (my reading, tell me if yours differs): structure on the WEEKLY chart (CHoCH, BOS, FVG, order block, fib), trigger on the DAILY chart (rejection in the zone, close back above the 9 EMA on 1.5x volume), long only, entry at that daily close, stop below the weekly order block with a 0.25 ATR buffer, T1 1R (half) with no early breakeven, T2 2R (a quarter, stop to entry), T3 3R, expiry after 120 days.',
                    'Daily candles are used to walk the trade, so when a daily candle touches both the stop and a target the stop is assumed first (the cautious assumption).',
@@ -40,6 +74,15 @@ SEGMENT_NOTES = {
                 'R is measured on the premium: (premium at exit - premium paid) / (premium paid - modelled premium at the index stop). Half comes off at T1, a quarter at T2, the rest at T3, the stop or 15:15, like your plan.',
                 'Costs per trade: 40 rupees brokerage plus 0.15% of the premium turnover (STT, exchange charges, GST). Lot size 65.',
                 'Free 5-minute history only reaches back about 60 days, so this view GROWS: each Saturday run adds new days and keeps the old trades.']}
+GOLD_NOTE = ('Gold = XAUUSD price action, replayed on COMEX gold futures (Yahoo GC=F), the closest free intraday history. Futures trade a few dollars away from spot '
+             '(the basis), so levels differ slightly from your broker\'s XAUUSD chart; structure and timing are the same. Times are shown in IST.')
+GOLD_COST_NOTE = 'Costs: 0.35 dollars per ounce on a round trip (spread plus commission), taken off every trade in R. Overnight swap or financing on held positions is NOT modelled.'
+SEGMENT_NOTES.update({
+    'gold_intraday': [GOLD_NOTE, 'Gold intraday = your intraday engine on gold: 5-minute structure and trigger with the 15-minute CHoCH bias, long and short, volume at least 1.5x. Entries only in the London and New York sessions (12:30 to 00:30 IST), everything closed by 02:00 IST.',
+                      GOLD_COST_NOTE, 'Free 5-minute history reaches back about 60 days, so this view GROWS every Saturday.'],
+    'gold_swing': [GOLD_NOTE, 'Gold swing = your swing playbook on gold: daily structure, 1H confirmation (rejection in the zone, close back over the 9 EMA on 1.5x volume), long only like your stock swings, stop below the daily order block with a 0.25 ATR buffer, T1 1R half (no early breakeven), T2 2R a quarter with the stop to entry, T3 3R, closed after 28 days.',
+                   'The weekly-trend and 2R-room hold-backs are applied. ' + GOLD_COST_NOTE],
+    'gold_positional': [GOLD_NOTE, 'Gold positional = the swing playbook one timeframe up on gold: weekly structure, daily trigger, long only, held up to 120 days.', GOLD_COST_NOTE]})
 ASSUMPTIONS = [
     'Entry is the close of the 1H confirmation candle (the 15m precision entry cannot be replayed: 15-minute history is about 60 days).',
     'Stop, targets and management are the live rules: half at T1 with no early breakeven, a quarter at T2 and stop to entry, the rest at T3, expiry after 28 days; the stop is assumed to fill before a target inside the same candle.',
@@ -49,12 +92,14 @@ ASSUMPTIONS = [
     'One trade at a time per stock; no limit on how many stocks are open together.']
 
 # ------------------------------------------------------------------ your account rules (the same limits as Settings in the journal)
-ACCOUNT = dict(risk=0.5, risk_aplus=0.75, aplus_score=8, open_cap=2.0, day_stop=0.75, week_stop=2.0, month_half=3.0, month_stop=5.0, max_per_day=2, stop_after_losses=None)
+ACCOUNT = dict(risk=0.5, risk_aplus=0.75, aplus_score=8, open_cap=2.0, day_stop=0.75, week_stop=2.0, month_half=3.0, month_stop=5.0, max_per_day=2, aplus_overflow=True, stop_after_losses=None)
+# max_per_day is the base limit (2). With aplus_overflow on, a 3rd, 4th... trade that day is allowed ONLY when it is A+ (score 8 or more);
+# anything below A+ past the limit is blocked. The open-risk ceiling and the loss limits still apply to every trade.
 ACCOUNT_SEG = dict(options=dict(stop_after_losses=2))                          # your options rule: stop after two losing trades in a day
 SCENARIOS = [
-    ('all', 'Every signal, no limits', dict(min_score=4, rules=False)),
-    ('a', 'A and A+ (score 6 or more), your rules', dict(min_score=6, rules=True)),
-    ('ap', 'A+ only (score 8 or more), your rules', dict(min_score=8, rules=True)),
+    ('all', 'Every A+ signal, no limits', dict(min_score=8, rules=False)),
+    ('ap', 'A+, your rules: 2 a day, more only if A+', dict(min_score=8, rules=True)),
+    ('ap2', 'A+, a strict 2 a day', dict(min_score=8, rules=True, overflow=False)),
     ('p10', 'Perfect 10 only, your rules', dict(min_score=10, rules=True))]
 
 def account_from_env(env=None, segment='swing'):
@@ -64,21 +109,24 @@ def account_from_env(env=None, segment='swing'):
         try:
             if str(e.get(var, '')).strip(): a[key] = float(e[var]) if key not in ('max_per_day', 'stop_after_losses') else int(float(e[var]))
         except ValueError: pass
+    ov = str(e.get('APLUS_OVERFLOW', '') or '').strip().lower()
+    if ov in ('off', 'false', 'no', '0'): a['aplus_overflow'] = False
+    elif ov in ('on', 'true', 'yes', '1'): a['aplus_overflow'] = True
     return a
 
-def simulate_account(trades, min_score, rules=True, acct=None):
+def simulate_account(trades, min_score, rules=True, acct=None, overflow=None):
     """Trade the backtest the way your journal rules say, on a 100-unit account that compounds.
     Every trade that closed and was not held back is a candidate, in the order its entry happened (first come, first served: no peeking
     at later signals that day). A candidate is taken only if its score is at least `min_score` and, when `rules` is true:
-      - fewer than max_per_day trades were entered that day;
+      - fewer than max_per_day trades were entered that day, OR (with aplus_overflow) the trade is A+: past the limit only A+ gets through;
       - the day's realised loss is under day_stop %, this week's under week_stop %, this month's under month_stop %;
       - the open risk of trades still running plus this one stays within open_cap %.
     Risk per trade is risk_aplus % for scores of aplus_score or more, otherwise risk %, halved for the rest of a month once that month is down month_half %.
     A trade's result is its net R (after costs) times the risk taken, so a 1R loss costs exactly the risk you set."""
-    a = {**ACCOUNT, **(acct or {})}
+    a = {**ACCOUNT, **(acct or {})}; over = a.get('aplus_overflow', True) if overflow is None else overflow
     cand = sorted([t for t in trades if t.get('closed') and not t.get('held')], key=lambda t: (t['entry_t'], t['exit_t']))
     eq, base_eq, open_, curve, per_day, day_pl, week_pl, month_pl, day_losses = 100.0, 100.0, [], [], {}, {}, {}, {}, {}
-    taken, skipped = [], dict(score=0, day_cap=0, loss_limit=0, open_cap=0)
+    taken, skipped, extra = [], dict(score=0, day_cap=0, loss_limit=0, open_cap=0), 0
     wk = lambda d: '%d-W%02d' % pd.Timestamp(d).isocalendar()[:2]
 
     def settle(upto):
@@ -93,28 +141,33 @@ def simulate_account(trades, min_score, rules=True, acct=None):
         if t['score'] < min_score: skipped['score'] += 1; continue
         risk = a['risk_aplus'] if t['score'] >= a['aplus_score'] else a['risk']
         if rules:
-            if per_day.get(d, 0) >= a['max_per_day']: skipped['day_cap'] += 1; continue
+            past = per_day.get(d, 0) >= a['max_per_day']
+            if past and not (over and t['score'] >= a['aplus_score']): skipped['day_cap'] += 1; continue
             if a.get('stop_after_losses') and day_losses.get(d, 0) >= a['stop_after_losses']: skipped['loss_limit'] += 1; continue
             if day_pl.get(d, 0.0) <= -a['day_stop'] or week_pl.get(wk(d), 0.0) <= -a['week_stop'] or month_pl.get(d[:7], 0.0) <= -a['month_stop']: skipped['loss_limit'] += 1; continue
             if month_pl.get(d[:7], 0.0) <= -a['month_half']: risk *= 0.5
             if sum(o['risk'] for o in open_) + risk > a['open_cap'] + 1e-9: skipped['open_cap'] += 1; continue
+            if past: extra += 1
         per_day[d] = per_day.get(d, 0) + 1; o = dict(t, risk=risk, base=eq); open_.append(o); taken.append(o)
     settle('9999-12-31')
     n = len(taken)
-    if not n: return dict(n=0, win=None, avg=None, pf=None, per_year=0, ret=0.0, cagr=None, max_dd=0.0, streak=0, skipped=skipped, curve=[])
+    if not n: return dict(n=0, win=None, avg=None, pf=None, per_year=0, ret=0.0, cagr=None, max_dd=0.0, streak=0, skipped=skipped, aplus_extra=0, curve=[], log=[])
     rs = [o['r_net'] for o in sorted(taken, key=lambda x: x['exit_t'])]; st = stats(rs)
     peak, dd = 100.0, 0.0
     for _, v in curve: peak = max(peak, v); dd = max(dd, (peak - v) / peak * 100.0)
     a0, b0 = pd.Timestamp(min(o['entry_t'] for o in taken)), pd.Timestamp(max(o['exit_t'] for o in taken)); span = max(1, (b0 - a0).days)
     cagr = ((eq / 100.0) ** (365.0 / span) - 1) * 100 if span >= 120 and eq > 0 else None
     return dict(n=n, win=st['win'], avg=st['avg'], pf=st['pf'], per_year=round(n * 365.0 / span, 1), ret=round(eq - 100.0, 1), cagr=None if cagr is None else round(cagr, 1), max_dd=round(dd, 1),
-                streak=st['streak'], skipped=skipped, curve=[(d, round(v, 2)) for d, v in curve])
+                streak=st['streak'], skipped=skipped, aplus_extra=extra, curve=[(d, round(v, 2)) for d, v in curve],
+                log=[dict(sym=o['sym'], side=o.get('side', 'long'), score=o['score'], entry_t=o['entry_t'], exit_t=o['exit_t'], entry=o.get('entry'), sl=o.get('sl'), outcome=o.get('outcome'), r_net=o['r_net'], risk=round(o['risk'], 3), pnl_pct=round(o.get('pnl_pct', 0.0), 3), risk_usd=o.get('risk_usd'), strike=o.get('strike')) for o in sorted(taken, key=lambda x: x['entry_t'])][-400:])
 
 def scenarios(trades, acct=None):
     """All the scenarios side by side, with one equity curve per scenario on a shared monthly axis."""
     rows, curves = [], {}
     for key, name, kw in SCENARIOS:
-        r = simulate_account(trades, kw['min_score'], kw['rules'], acct); curves[key] = r.pop('curve'); rows.append(dict(key=key, name=name, min_score=kw['min_score'], rules=kw['rules'], **r))
+        r = simulate_account(trades, kw['min_score'], kw['rules'], acct, kw.get('overflow')); curves[key] = r.pop('curve'); log = r.pop('log')
+        rows.append(dict(key=key, name=name, min_score=kw['min_score'], rules=kw['rules'], overflow=kw.get('overflow', (acct or {}).get('aplus_overflow', True)) if kw['rules'] else None, **r))
+        if key == 'ap': rows[-1]['log'] = log                    # the trade log of the way you trade, for the page
     months = sorted({d[:7] for c in curves.values() for d, _ in c}); series = {}
     for key, c in curves.items():
         last, by, out = 100.0, {}, []
@@ -170,19 +223,27 @@ def split_stats(trades, cut, field='r_net'):
 def _naive(ts):
     ts = pd.Timestamp(ts); return ts.tz_convert(IST).tz_localize(None) if ts.tzinfo is not None else ts
 
-def replay_symbol(sym, daily, h1, sector='', regimes=None, min_score=4, window_days=250, start_at=None):
-    """All the trades the playbook would have opened on one stock. daily: OHLCV with a daily index; h1: hourly OHLCV (tz-aware IST)."""
+def session_day(ts, tz=IST):
+    """The trading day a timestamp belongs to, on the clock whose midnight ends the daily candle (IST for NSE, UTC+2 for COMEX gold)."""
+    t = pd.Timestamp(ts); return (t.tz_convert(tz).tz_localize(None) if t.tzinfo is not None else t).normalize()
+
+def replay_symbol(sym, daily, h1, sector='', regimes=None, min_score=4, window_days=250, start_at=None, day_tz=IST, stock=True, cost_abs=None):
+    """All the trades the playbook would have opened on one stock. daily: OHLCV with a daily index; h1: hourly OHLCV (tz-aware IST).
+    Gold (stock=False): day_tz is the clock that ends the trading day when the daily candle ends (UTC+2 for COMEX gold, so the hours of a
+    session belong to the daily candle of that session and never to the one before), the NSE liquidity and locked-circuit rules are off,
+    and costs are cost_abs in price units instead of a percentage."""
     import swing, signals, strategy_scanner as sc
     d = daily.dropna(subset=['Open', 'High', 'Low', 'Close']); trades = []
     if h1 is None or len(h1) < 30 or len(d) < sc.CFG['min_bars'] + 5: return trades
-    hdays = pd.DatetimeIndex([_naive(t).normalize() for t in h1.index]); h_first = hdays[0]; lows = d.Low.values
+    sday = lambda ts: session_day(ts, day_tz)
+    hdays = pd.DatetimeIndex([sday(t) for t in h1.index]); h_first = hdays[0]; lows = d.Low.values
     busy_until = None; cfg = swing.CFG
     for i in range(sc.CFG['min_bars'], len(d) - 1):
         day, nxt = d.index[i], d.index[i + 1]
         if nxt < h_first or (start_at is not None and nxt < start_at): continue
         if busy_until is not None and nxt <= busy_until: continue
         w = d.iloc[max(0, i + 1 - window_days): i + 1]
-        if not sc.liquid(w, sc.CFG) or bool((w.High.tail(5) == w.Low.tail(5)).any()): continue
+        if stock and (not sc.liquid(w, sc.CFG) or bool((w.High.tail(5) == w.Low.tail(5)).any())): continue
         try: r = swing.analyse(w)
         except Exception: continue
         if not r or r.get('stage', 0) < 2: continue
@@ -208,29 +269,29 @@ def replay_symbol(sym, daily, h1, sector='', regimes=None, min_score=4, window_d
             fut = h1.iloc[k + 1:]; fut = fut[fut.index <= t_in + pd.Timedelta(days=signals.SWING_EXPIRY_DAYS + 2)]
             end = min(h1.index[-1], t_in + pd.Timedelta(days=signals.SWING_EXPIRY_DAYS + 1))
             signals.walk(sig, fut, end + pd.Timedelta(hours=1))
-            closed = sig['status'] == 'CLOSED'; r_g = float(sig.get('r_final', sig.get('r_now', 0.0))); cost_r = (COST_PCT / 100.0) * entry / risk
+            closed = sig['status'] == 'CLOSED'; r_g = float(sig.get('r_final', sig.get('r_now', 0.0))); cost_r = (cost_abs / risk) if cost_abs else (COST_PCT / 100.0) * entry / risk
             t_out = pd.Timestamp(sig['closed']) if closed else h1.index[-1]
             trades.append(dict(sym=sym, sector=sector or 'Other', grade=rr['grade'], score=int(rr['score']), structure=int(rr['structure']), zone_q=int(rr['zone_q']), confirm=int(rr['confirm']), context=int(rr['context']),
                                entry_t=str(_naive(t_in))[:16], exit_t=str(_naive(t_out))[:16], entry=round(entry, 2), sl=round(sl, 2), risk_pct=round(100 * risk / entry, 2),
                                outcome=sig['outcome'] if closed else 'OPEN', r=round(r_g, 2), r_net=round(r_g - cost_r, 2), hold_days=int((_naive(t_out) - _naive(t_in)).days),
                                hits=len(sig['hits']), rvol=(None if rr.get('rvol') is None or (isinstance(rr['rvol'], float) and math.isnan(rr['rvol'])) else round(float(rr['rvol']), 2)),
                                weekly_up=bool(rr['weekly'].get('up')), room_r=(None if room is None else round(float(room), 2)), held=held, regime=(regimes or {}).get(str(pd.Timestamp(day).date()), 'Unknown'),
-                               weekday=pd.Timestamp(nxt).strftime('%a'), closed=closed))
-            busy_until = _naive(t_out).normalize()
+                               weekday=pd.Timestamp(nxt).strftime('%a'), closed=closed, risk_usd=None if stock else round(risk, 2)))
+            busy_until = sday(t_out)
             break
     return trades
 
 def _work(job):
-    sym, daily, h1, sector, regimes, overrides, start_at = job
+    sym, daily, h1, sector, regimes, overrides, start_at, min_score = job
     import swing
     old = {k: swing.CFG[k] for k in (overrides or {})}
     try:
-        swing.CFG.update(overrides or {}); return replay_symbol(sym, daily, h1, sector, regimes, start_at=start_at)
+        swing.CFG.update(overrides or {}); return replay_symbol(sym, daily, h1, sector, regimes, min_score=min_score, start_at=start_at)
     except Exception as ex: print(f'  backtest error {sym}: {ex}', file=sys.stderr); return []
     finally: swing.CFG.update(old)
 
-def run_all(daily, hourly, sectors, regimes, overrides=None, workers=1, start_at=None, progress=True):
-    jobs = [(s, daily[s], hourly.get(s), sectors.get(s, ''), regimes, overrides, start_at) for s in daily if s in hourly]; trades = []; t0 = time.time()
+def run_all(daily, hourly, sectors, regimes, overrides=None, workers=1, start_at=None, progress=True, min_score=4):
+    jobs = [(s, daily[s], hourly.get(s), sectors.get(s, ''), regimes, overrides, start_at, min_score) for s in daily if s in hourly]; trades = []; t0 = time.time()
     if workers > 1 and len(jobs) > 8:
         import multiprocessing as mp
         with mp.get_context('fork').Pool(workers) as pool:
@@ -283,15 +344,23 @@ def dimensions(segment, live):
     hour = ('hour', 'By time of entry', 'hour of the day the trade opened (IST)', 'Hour', _hour_label, None)
     vix = ('vix', 'By India VIX', 'the previous close', 'VIX', lambda t: 'unknown' if t.get('vix') is None else ('VIX under 13' if t['vix'] < 13 else 'VIX 13 to 16' if t['vix'] < 16 else 'VIX over 16'), ['VIX under 13', 'VIX 13 to 16', 'VIX over 16', 'unknown'])
     dte = ('dte', 'By days to expiry', 'weekly expiry is Tuesday', 'Days left', lambda t: 'unknown' if t.get('dte') is None else ('under 2 days' if t['dte'] < 2 else '2 to 4 days' if t['dte'] < 4 else '4 days or more'), ['under 2 days', '2 to 4 days', '4 days or more', 'unknown'])
+    usd = lambda t: t.get('risk_usd') if t.get('risk_usd') is not None else abs(t['entry'] - t['sl'])
+    stop_gi = ('stop', 'By stop width', 'dollars per ounce', 'Stop', lambda t: 'stop under $4' if usd(t) < 4 else 'stop $4 to $8' if usd(t) < 8 else 'stop over $8', ['stop under $4', 'stop $4 to $8', 'stop over $8'])
+    stop_gs = ('stop', 'By stop width', 'dollars per ounce', 'Stop', lambda t: 'stop under $40' if usd(t) < 40 else 'stop $40 to $80' if usd(t) < 80 else 'stop over $80', ['stop under $40', 'stop $40 to $80', 'stop over $80'])
+    sess = ('session', 'By session', 'when the trade opened (IST)', 'Session', lambda t: 'London (12:30-17:30)' if '12:30' <= t['entry_t'][11:16] < '17:30' else 'London + New York (17:30-21:30)' if '17:30' <= t['entry_t'][11:16] < '21:30' else 'New York (21:30 on)',
+            ['London (12:30-17:30)', 'London + New York (17:30-21:30)', 'New York (21:30 on)'])
+    gside = ('side', 'Long and short', '', 'Side', lambda t: 'Long' if t.get('side', 'long') == 'long' else 'Short', None)
     if segment == 'options': extra = [side, hour, vix, dte, reg, wd, mon]
     elif segment == 'intraday': extra = [side, hour, vol, stop_i, reg, wd, mon]
+    elif segment == 'gold_intraday': extra = [gside, sess, hour, vol, stop_gi, reg, wd, mon]
+    elif segment in ('gold_swing', 'gold_positional'): extra = [reg, vol, stop_gs, wd, mon]
     elif segment == 'positional': extra = [reg, vol, stop, sec, wd, mon]
     else: extra = [reg, vol, stop, sec, wd, mon]
     return G + extra
 
-def report(trades, variants=(), window=None, universe=0, params=None, now=None, acct=None, segment='swing'):
-    """Everything the Backtest lab page shows, from the list of trades of one segment (swing, positional, intraday or options)."""
-    seg = SEGMENTS.get(segment, SEGMENTS['swing'])
+def report(trades, variants=(), window=None, universe=0, params=None, now=None, acct=None, segment='swing', rules=None):
+    """Everything the Backtest lab page shows, from the list of trades of one segment. Only A+ trades inside the window count (see gate)."""
+    seg = SEGMENTS.get(segment, SEGMENTS['swing']); rules = rules or rules_from_env(); trades = gate(trades, rules)
     done = [t for t in trades if t['closed']]; live = [t for t in done if not t.get('held')]; now = now or dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30)))
     rs_net = [t['r_net'] for t in live]; span_days = 1
     if live:
@@ -306,20 +375,25 @@ def report(trades, variants=(), window=None, universe=0, params=None, now=None, 
     mins = [t['hold_min'] for t in live if t.get('hold_min') is not None]; days = [t['hold_days'] for t in live if t.get('hold_days') is not None]
     by, order = {}, []
     for key, title, cap, first, fn, ordr in dimensions(segment, live):
+        if key == 'grade' and rules.get('min_score', 0) >= A_PLUS: continue          # every trade is A+ now: the score table splits them 8 / 9 / 10
         rows = group(live, fn, ordr)
         if key == 'sector': rows = rows[:14]
         if rows: by[key] = rows; order.append(dict(key=key, title=title, cap=cap, first=first))
-    out = dict(generated_at=now.isoformat(timespec='seconds'), segment=segment, title=seg['title'], window=window or {}, universe=universe, params=params or {}, assumptions=ASSUMPTIONS if segment == 'swing' else SEGMENT_NOTES.get(segment, ASSUMPTIONS),
+    win = dict(window or {})
+    if rules.get('window_from') and (not win.get('from') or win['from'] < rules['window_from']): win['from'] = rules['window_from']
+    out = dict(generated_at=now.isoformat(timespec='seconds'), segment=segment, title=seg['title'], window=win, universe=universe, params=params or {}, assumptions=ASSUMPTIONS if segment == 'swing' else SEGMENT_NOTES.get(segment, ASSUMPTIONS),
+               rules=dict(window_from=rules.get('window_from'), min_score=rules.get('min_score'), text=rules_text(rules)), gold=bool(seg.get('gold')),
                cost_pct=seg['cost_pct'], counts=dict(all=len(trades), closed=len(done), open=len(trades) - len(done), held_back=len(done) - len(live), taken=len(live)),
                summary=dict(net=stats(rs_net), gross=stats([t['r'] for t in live]), held_back=stats([t['r_net'] for t in done if t.get('held')]),
                             trades_per_year=round(per_year, 1), avg_hold_days=round(float(np.mean(days)), 1) if days else None, avg_hold_min=round(float(np.mean(mins))) if mins else None,
                             outcomes={k: sum(1 for t in live if t['outcome'] == k) for k in ('TARGET', 'TRAIL', 'SL', 'EXPIRED')}),
                by=by, by_order=order, equity=eq, split=dict(cut=cut, train=split_stats(live, cut)[0], test=split_stats(live, cut)[1]) if cut else None,
                montecarlo=monte_carlo(rs_net, per_year), variants=[],
-               trades=[{k: t.get(k) for k in ('sym', 'side', 'grade', 'score', 'entry_t', 'exit_t', 'entry', 'sl', 'outcome', 'r', 'r_net', 'hold_days', 'hold_min', 'regime', 'sector', 'strike', 'premium')} for t in live][-600:])
+               trades=[{k: t.get(k) for k in ('sym', 'side', 'grade', 'score', 'entry_t', 'exit_t', 'entry', 'sl', 'outcome', 'r', 'r_net', 'hold_days', 'hold_min', 'regime', 'sector', 'strike', 'premium', 'risk_usd')} for t in live][-600:],
+               open_now=[{k: t.get(k) for k in ('sym', 'side', 'score', 'entry_t', 'entry', 'sl')} for t in trades if not t['closed']][-20:])
     base = stats(rs_net)
     for name, desc, vt in variants:
-        v = [t for t in vt if t['closed'] and not t.get('held')]
+        v = [t for t in gate(vt, rules) if t['closed'] and not t.get('held')]
         if cut: tr, te = split_stats(v, cut)
         else: tr = te = {k: stats([])[k] for k in ('n', 'win', 'avg', 'pf')}
         b_tr, b_te = (out['split']['train'], out['split']['test']) if out['split'] else (None, None)
@@ -342,8 +416,9 @@ def resim(out_dir, acct=None, segment='swing'):
     if not os.path.exists(tp): raise SystemExit(f'quick mode needs a finished full {segment} backtest first ({tf} is missing)')
     d = json.load(open(tp)); prev = json.load(open(rp)) if os.path.exists(rp) else {}
     rep = report(d['trades'], (), window=d.get('window'), universe=d.get('universe', 0), params=dict(d.get('params') or {}, quick=True), acct=acct, segment=segment)
-    for k in ('variants', 'variant_base'):
-        if k in prev: rep[k] = prev[k]
+    same = {k: (prev.get('rules') or {}).get(k) for k in ('window_from', 'min_score')} == {k: rep['rules'][k] for k in ('window_from', 'min_score')}
+    for k in ('variants', 'variant_base'):                            # rule variants are only kept when they were tested on the same window and grades
+        if k in prev and same: rep[k] = prev[k]
     with open(rp, 'w') as f: json.dump(rep, f, separators=(',', ':'), default=str)
     return rep
 
@@ -374,7 +449,7 @@ def notify_result(out, status):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(); ap.add_argument('--out', default='pub/data'); ap.add_argument('--notify', default=None, help='only send the result message; pass the job status')
-    ap.add_argument('--segment', default='swing', choices=('swing', 'positional', 'intraday', 'options'), help='which playbook to replay (swing is the default)')
+    ap.add_argument('--segment', default='swing', choices=tuple(SEGMENTS), help='which playbook to replay (swing is the default)')
     ap.add_argument('--deep', type=int, default=0, help='intraday and options: try to pull this many days of 5m/15m history from Angel One instead of Yahoo\'s 60 (experimental)')
     ap.add_argument('--deep-minutes', type=int, default=60, help='time budget for --deep on stocks')
     ap.add_argument('--resim', action='store_true', help='quick mode: re-apply your account rules to the saved trades of the last full run (seconds)'); ap.add_argument('--top', type=int, default=250, help='most liquid N stocks of the Nifty 500 (0 = all)')
@@ -382,7 +457,7 @@ def main(argv=None):
     a = ap.parse_args(argv); t0 = time.time()
     if a.notify is not None: return notify_result(a.out, a.notify)
     if a.resim:
-        for seg in ('swing', 'positional', 'intraday', 'options'):
+        for seg in SEGMENTS:
             try: r = resim(a.out, account_from_env(segment=seg), seg)
             except SystemExit as ex: print(f'backtest: {seg}: {ex}'); continue
             print(f'backtest: {seg} re-simulated: ' + ', '.join(f"{x['name']}: {x['n']} trades" for x in r['scenarios']))
@@ -398,16 +473,17 @@ def main(argv=None):
     hraw, _ = sc.yahoo_many(pick, '730d', '1h'); hourly = {s: sc.tidy_intraday(f, now, 60) for s, f in hraw.items()}
     nraw, _ = sc.yahoo_many(['^NSEI'], '3y', '1d'); regimes = regime_map(sc.tidy_daily(nraw['^NSEI'], now)) if '^NSEI' in nraw else {}
     dsel = {s: daily[s] for s in pick if s in hourly}
-    print(f'backtest: replaying {len(dsel)} stocks on {a.workers} cores', flush=True)
-    trades = run_all(dsel, hourly, industries, regimes, workers=a.workers)
+    rules = rules_from_env(); start = start_stamp(rules)
+    print(f'backtest: replaying {len(dsel)} stocks on {a.workers} cores, {rules_text(rules)}', flush=True)
+    trades = run_all(dsel, hourly, industries, regimes, workers=a.workers, start_at=start, min_score=rules['min_score'])
     var = []
     if a.variants:
         small = {s: dsel[s] for s in list(dsel)[:120]}
         for name, desc, ov in VARIANTS:
-            print(f'backtest: variant "{name}"', flush=True); var.append((name, desc, run_all(small, hourly, industries, regimes, overrides=ov, workers=a.workers, progress=False)))
+            print(f'backtest: variant "{name}"', flush=True); var.append((name, desc, run_all(small, hourly, industries, regimes, overrides=ov, workers=a.workers, progress=False, start_at=start, min_score=rules['min_score'])))
         base_small = [t for t in trades if t['sym'] in small]
     first = min((str(h.index[0])[:10] for h in hourly.values() if len(h)), default=''); last = max((str(h.index[-1])[:10] for h in hourly.values() if len(h)), default='')
-    rep = report(trades, var, window={'from': first, 'to': last}, universe=len(dsel), params=dict(top=a.top, variants=bool(a.variants), variant_universe=120 if a.variants else 0, seconds=round(time.time() - t0)), acct=account_from_env())
+    rep = report(trades, var, window={'from': first, 'to': last}, universe=len(dsel), params=dict(top=a.top, variants=bool(a.variants), variant_universe=120 if a.variants else 0, seconds=round(time.time() - t0)), acct=account_from_env(), rules=rules)
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, 'backtest_trades.json'), 'w') as f: json.dump(dict(window=rep['window'], universe=rep['universe'], params=rep['params'], trades=trades), f, separators=(',', ':'), default=str)   # every trade, so rules can be re-applied in seconds
     if a.variants and rep.get('split'):                       # variants are compared with the base rule on the same 120 stocks

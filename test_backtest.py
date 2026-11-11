@@ -2,6 +2,9 @@
 split, the rule variants and the Monte Carlo are checked on known inputs. No network. Run: python test_backtest.py"""
 import datetime as dt, json, numpy as np, pandas as pd
 import backtest as bt, playbook_fixture as pf, strategy_scanner as sc
+import os
+os.environ['BACKTEST_FROM'] = 'all'; os.environ['MIN_SCORE'] = '4'      # these tests check the machinery on every grade and old dates;
+                                                                          # the A+ gate and the financial-year window have their own tests (test_rules.py)
 fails = []
 def check(name, cond, info=''):
     print(('PASS ' if cond else 'FAIL ') + name + (f'   {info}' if info else ''))
@@ -80,9 +83,9 @@ neg = bt.report([dict(t, r=-1.0, r_net=-1.1) for t in T], window={}, universe=1)
 
 rows = bt.run_all({'PBK': d, 'P2': d}, {'PBK': up, 'P2': dn}, {'PBK': 'IT'}, {}, workers=1, progress=False)
 check('run_all: several stocks, results ordered by exit time', len(rows) == 2 and rows[0]['exit_t'] <= rows[1]['exit_t'])
-import swing; before = dict(swing.CFG); bt._work(('PBK', d, up, 'IT', {}, dict(rvol_min=9.9), None))
+import swing; before = dict(swing.CFG); bt._work(('PBK', d, up, 'IT', {}, dict(rvol_min=9.9), None, 4))
 check('variants: a rule override is restored after the run (the live settings are never left changed)', swing.CFG == before)
-strict = bt._work(('PBK', d, up, 'IT', {}, dict(rvol_min=9.9), None))
+strict = bt._work(('PBK', d, up, 'IT', {}, dict(rvol_min=9.9), None, 4))
 check('variants: a stricter volume rule changes what the engine confirms (lower score or no trade)', strict == [] or strict[0]['score'] < 10, str([(x['score'], x['entry_t']) for x in strict]))
 
 # ---- your account rules (item: the backtest now trades the way your journal rules say)
@@ -92,8 +95,16 @@ one = bt.simulate_account([Tr('2026-01-05 14:15', '2026-01-09 11:15', 10, 2.0), 
 check('account: two trades at 0.75% risk compound exactly: +2R makes 100 -> 101.5, then -1R costs 0.75% of 101.5 = 0.76125 -> 100.74', one['n'] == 2 and one['ret'] == 0.7 and one['curve'][0][1] == 101.5 and one['curve'][1][1] == 100.74, str(one['curve']))
 check('account: a B-grade setup is never taken when you only trade A+ (score 8 or more)', bt.simulate_account([Tr('2026-01-05 14:15', '2026-01-09 11:15', 5, 3.0)], 8, True, A0)['n'] == 0 and bt.simulate_account([Tr('2026-01-05 14:15', '2026-01-09 11:15', 5, 3.0)], 8, True, A0)['skipped']['score'] == 1)
 day = [Tr('2026-01-05 10:15', '2026-01-20 11:15', 10, 1.0, 'A'), Tr('2026-01-05 11:15', '2026-01-20 11:15', 10, 1.0, 'B'), Tr('2026-01-05 14:15', '2026-01-20 11:15', 10, 1.0, 'C')]
-d = bt.simulate_account(day, 8, True, A0)
-check('account: max 2 trades a day: the first two to trigger are taken, the third is skipped (no peeking at later signals)', d['n'] == 2 and d['skipped']['day_cap'] == 1)
+d = bt.simulate_account(day, 8, True, dict(A0, aplus_overflow=False))
+check('account: a strict 2 a day: the first two to trigger are taken, the third is skipped (no peeking at later signals)', d['n'] == 2 and d['skipped']['day_cap'] == 1)
+big = dict(A0, open_cap=5.0)                                                 # room for three open trades, so only the daily rule decides
+d3 = bt.simulate_account(day, 8, True, big)
+check('account: 2 a day, MORE ONLY IF A+: a third A+ trade the same day is taken and counted as an A+ extra', d3['n'] == 3 and d3['skipped']['day_cap'] == 0 and d3['aplus_extra'] == 1, str(d3['skipped']))
+dayA = [Tr('2026-01-05 10:15', '2026-01-20 11:15', 10, 1.0, 'A'), Tr('2026-01-05 11:15', '2026-01-20 11:15', 9, 1.0, 'B'), Tr('2026-01-05 14:15', '2026-01-20 11:15', 7, 1.0, 'C')]
+d4 = bt.simulate_account(dayA, 6, True, big)
+check('account: past the base limit a trade below A+ (score 7) is blocked even when risk allows it', d4['n'] == 2 and d4['skipped']['day_cap'] == 1)
+check('account: with the default account rules, the open-risk ceiling still stops a third 0.75% trade (2.25% > 2%)', bt.simulate_account(day, 8, True, A0)['skipped']['open_cap'] == 1)
+check('account: the trade log lists what was taken', len(bt.simulate_account(day, 8, True, big)['log']) == 3)
 check('account: with no limits all three are taken', bt.simulate_account(day, 8, False, A0)['n'] == 3)
 cap = [Tr(f'2026-01-0{i} 14:15', '2026-01-30 11:15', 10, 1.0, f'S{i}') for i in (5, 6, 7)]
 c = bt.simulate_account(cap, 8, True, A0)
@@ -115,17 +126,20 @@ dd = bt.simulate_account([Tr('2026-01-05 10:15', '2026-01-06 11:15', 10, 2.0, 'a
 check('account: max drawdown is the deepest fall from the running peak, in percent of the account (101.5 -> 100.0 here = 1.5%)', dd['n'] == 4 and 1.4 <= dd['max_dd'] <= 1.6 and dd['streak'] == 2, str((dd['max_dd'], dd['streak'])))
 check('account: no candidates gives an empty result, not an error', bt.simulate_account([], 8)['n'] == 0)
 rows, cv = bt.scenarios([Tr(f'2026-0{1 + i % 5}-{5 + i % 20:02d} 14:15', f'2026-0{1 + i % 5}-{8 + i % 20:02d} 14:15', [10, 8, 6, 4][i % 4], [1.75, -1.0][i % 2], f'S{i}') for i in range(40)], A0)
-check('scenarios: four views side by side, "every signal" takes the most trades and a stricter score takes fewer', [r['key'] for r in rows] == ['all', 'a', 'ap', 'p10'] and rows[0]['n'] >= rows[1]['n'] >= rows[2]['n'] >= rows[3]['n'] and rows[3]['n'] > 0)
-check('scenarios: one equity curve per scenario on one shared monthly axis', set(cv['series']) == {'all', 'a', 'ap', 'p10'} and all(len(v) == len(cv['labels']) for v in cv['series'].values()))
+check('scenarios: four A+ views side by side, "no limits" takes the most and perfect-10 the fewest', [r['key'] for r in rows] == ['all', 'ap', 'ap2', 'p10'] and rows[0]['n'] >= rows[1]['n'] >= rows[2]['n'] and rows[1]['n'] >= rows[3]['n'] and rows[3]['n'] > 0)
+check('scenarios: one equity curve per scenario on one shared monthly axis', set(cv['series']) == {'all', 'ap', 'ap2', 'p10'} and all(len(v) == len(cv['labels']) for v in cv['series'].values()))
+check('scenarios: the "your rules" row carries its trade log for the page', 'log' in rows[1] and len(rows[1]['log']) == rows[1]['n'])
 Rr = bt.report(T, window={}, universe=40, acct=A0)
 check('report: carries the scenarios, the curves and the account rules used', len(Rr['scenarios']) == 4 and Rr['account']['max_per_day'] == 2 and 'labels' in Rr['scenario_curves'])
 env = bt.account_from_env(dict(RISK_PCT='0.4', OPEN_RISK_CAP='3', MAX_TRADES_PER_DAY='1', DAY_STOP_PCT='x'))
 check('account rules can be set with repo variables; bad values fall back to your defaults', env['risk'] == 0.4 and env['open_cap'] == 3.0 and env['max_per_day'] == 1 and env['day_stop'] == 0.75)
 import tempfile, os as _os
 qd = tempfile.mkdtemp(); json.dump(dict(window={'from': 'a', 'to': 'b'}, universe=40, params={'top': 250}, trades=T), open(_os.path.join(qd, 'backtest_trades.json'), 'w'), default=str)
-json.dump(dict(variants=[dict(name='keep me')], variant_base=dict(all={})), open(_os.path.join(qd, 'backtest.json'), 'w'))
+json.dump(dict(variants=[dict(name='keep me')], variant_base=dict(all={}), rules=dict(window_from=None, min_score=4)), open(_os.path.join(qd, 'backtest.json'), 'w'))
 q = bt.resim(qd, dict(A0, max_per_day=1)); q2 = json.load(open(_os.path.join(qd, 'backtest.json')))
 check('quick mode: re-applies new account rules to the saved trades and keeps the last run\'s rule variants', q['account']['max_per_day'] == 1 and q2['variants'][0]['name'] == 'keep me' and q2['params'].get('quick') and len(q2['scenarios']) == 4)
+json.dump(dict(variants=[dict(name='old rules')], variant_base=dict(all={})), open(_os.path.join(qd, 'backtest.json'), 'w'))      # saved by a run with other rules
+check('quick mode: drops rule variants that were tested under different rules (older window or grades)', 'variants' not in json.load(open(_os.path.join(qd, 'backtest.json'))) or bt.resim(qd, A0) and json.load(open(_os.path.join(qd, 'backtest.json')))['variants'] == [])
 no = tempfile.mkdtemp()
 try: bt.resim(no); msg = ''
 except SystemExit as e: msg = str(e)
