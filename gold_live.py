@@ -217,7 +217,8 @@ def run(out, state_dir, styles=STYLES, now=None, fetch=None):
                entry_window=entry_window(now), trades_today=n_day, open_now=n_open, max_open=max_open, max_day=max_day, min_score=ms, sessions=os.environ.get('GOLD_SESSIONS', 'all') or 'all')
     sc.write_json(out, 'gold.json', doc)
     sent = alerts(out, os.path.join(state_dir, 'gold_notified.json'), now)
-    print(f"gold {now:%Y-%m-%d %H:%M} IST: {', '.join(f'{s} {len(doc['styles'].get(s, {}).get('setups', []))}' for s in styles)} A+ setups, {n_open} open, {n_day} today, {len(sent)} alerts")
+    counts = ', '.join('%s %d' % (s, len(doc['styles'].get(s, {}).get('setups', []))) for s in styles)      # no nested quotes: CI runs Python 3.11
+    print(f"gold {now:%Y-%m-%d %H:%M} IST: {counts} A+ setups, {n_open} open, {n_day} today, {len(sent)} alerts")
     return doc
 
 def main(argv=None):
