@@ -1,5 +1,6 @@
 name: backtest
 
+# Every style counts A+ setups only (score 8-10) from 1 April 2026 (repo variables BACKTEST_FROM, MIN_SCORE), with your 2-a-day rule (more only if A+).
 # Backtesting lab, stock playbooks: SWING (about two years, 1D structure with 1H trigger) and POSITIONAL (about ten years of daily history,
 # weekly structure with daily trigger), each replayed with the live engine and the live trade tracker. Runs every Saturday morning, or by hand.
 # INTRADAY and NIFTY OPTIONS are in the `backtest-intraday` workflow. Quick mode re-applies your account rules to all four saved results in about a minute.
@@ -17,11 +18,15 @@ on:
         type: boolean
         default: true
       positional:
-        description: Also run the positional backtest (weekly structure, daily trigger, about ten years of history)
+        description: Also run the positional backtest (weekly structure, daily trigger)
+        type: boolean
+        default: true
+      gold:
+        description: Also run gold (XAUUSD) swing and positional
         type: boolean
         default: true
       quick:
-        description: Quick mode (about 1 minute) - only re-apply your account rules to the trades saved by the last full runs (all four playbooks)
+        description: Quick mode (about 1 minute) - only re-apply your rules to the trades saved by the last full runs (every style, gold included)
         type: boolean
         default: false
 
@@ -56,6 +61,12 @@ jobs:
           VAR_IN: ${{ inputs.variants }}
           QUICK_IN: ${{ inputs.quick }}
           POS_IN: ${{ inputs.positional }}
+          GOLD_IN: ${{ inputs.gold }}
+          BACKTEST_FROM: ${{ vars.BACKTEST_FROM }}
+          MIN_SCORE: ${{ vars.MIN_SCORE }}
+          APLUS_OVERFLOW: ${{ vars.APLUS_OVERFLOW }}
+          GOLD_SYMBOL: ${{ vars.GOLD_SYMBOL }}
+          GOLD_COST: ${{ vars.GOLD_COST }}
           STOP_AFTER_LOSSES: ${{ vars.STOP_AFTER_LOSSES }}
           RISK_PCT: ${{ vars.RISK_PCT }}
           RISK_PCT_APLUS: ${{ vars.RISK_PCT_APLUS }}
@@ -71,6 +82,7 @@ jobs:
           if [ "$VAR_IN" = "false" ]; then extra=""; fi
           python backtest.py --out pub/data --top "$top" $extra
           if [ "$POS_IN" != "false" ]; then python backtest.py --segment positional --out pub/data --top "$top"; fi
+          if [ "$GOLD_IN" != "false" ]; then python backtest.py --segment gold_swing --out pub/data || true; python backtest.py --segment gold_positional --out pub/data || true; fi
       - name: Publish
         run: python publish.py push pub "$START" "backtest"
         env:
