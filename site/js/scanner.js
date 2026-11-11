@@ -52,7 +52,6 @@ App.pages.swing = () => {
   if (u.view !== 'setups') return h + ledgerView('swing', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'The swing scan runs before the open, every hour at :25 and after the close.')}</div></div>`;
   const S = d.setups, cnt = k => S.filter(s => s.stage === k).length;
-  h += SC.heat(d);
   h += `<div class="pipeline" style="margin-bottom:14px">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${STG[k][1]}</div></button>`).join('')}</div>`;
   const short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
   if (short.length) h += App.ui.callout('good', `<b>Today's shortlist (max 5, pick 1 or 2):</b> ${short.map(s => `<a href="#/trade?s=swing&id=${encodeURIComponent(s.symbol + '|long')}"><b>${esc(s.symbol)}</b></a> <small>${STG[s.stage][0]} · ${s.grade} ${s.score}/10</small>`).join(' &nbsp;·&nbsp; ')}`) + '<div style="height:12px"></div>';
@@ -117,7 +116,7 @@ App.pages.intraday = () => {
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${viewSeg('intraday', u.view)}${u.view === 'setups' ? App.ui.seg('inside', [['all', 'Both'], ['long', 'Long'], ['short', 'Short']], u.side) : ''}</div>`;
   if (u.view !== 'setups') return h + ledgerView('intraday', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No intraday data yet', '')}</div></div>`;
-  const rs = App.journal.riskStatus(); if (rs.intra >= rs.S.maxIntra) h += App.ui.callout('warn', `<b>${rs.intra} intraday trades today</b>: that is your maximum.`) + '<div style="height:10px"></div>';
+  const rs = App.journal.riskStatus(); if (rs.trades >= rs.S.maxIntra) h += App.ui.callout(rs.over ? 'bad' : 'warn', `<b>${rs.trades} trades today</b>: your base limit is ${rs.S.maxIntra}. Another one only if it is A+.`) + '<div style="height:10px"></div>';
   const L = d.setups.filter(s => u.side === 'all' || s.direction === u.side);
   return h + (L.length ? `<div class="cards">${L.map(s => card('intraday', s)).join('')}</div>` : `<div class="card"><div class="bd">${App.ui.empty('No intraday setups right now', '')}</div></div>`) + `<p class="help" style="margin-top:12px">${esc(d.note || '')}</p>`;
 };
@@ -219,9 +218,30 @@ function pineText(it) {
     .forEach(([k, name, c, st]) => { if (isNum(it[k])) L.push(`hline(${n(it[k])}, "${name}", color=${c}, linestyle=${st}, linewidth=${k === 'entry' || k === 'sl' ? 2 : 1})`); });
   return L.join('\n');
 }
-function ticketCard(it) {
+/* Pre-trade check: a compact badge in the corner of the order ticket. Portfolio heat for THIS symbol (its sector cluster, what you already hold
+   in that sector, stocks that move with it) and your daily rule (2 trades a day, more only if A+). Review it before you place the order. */
+SC.preCheck = function (it, sec) {
+  const d = App.data.swing || {}, ht = d.heat || {}, map = (App.lazyNow('sectors') || {}).map || {}, sym = (it.symbol || '').toUpperCase(), sector = it.sector || map[sym] || '';
+  const lines = [], rs = App.journal.riskStatus(); let lvl = 'ok';
+  const warn = (m, bad) => { lines.push([bad ? 'bad' : 'warn', m]); lvl = bad || lvl === 'bad' ? 'bad' : 'warn'; };
+  if (rs.trades >= rs.S.maxIntra) { if (it.grade === 'A+') lines.push(['good', `${rs.trades} trades today: past your base ${rs.S.maxIntra}, allowed because this one is A+.`]); else warn(`${rs.trades} trades today and this one is ${esc(it.grade || 'ungraded')}: past ${rs.S.maxIntra} a day only A+ is allowed. Skip it.`, true); }
+  else lines.push(['good', `${rs.trades} of ${rs.S.maxIntra} trades today.`]);
+  if (it.grade !== 'A+') warn(`Grade ${esc(it.grade || '-')} ${it.score}/10: your backtests count A+ only (8 to 10).`);
+  if (sec === 'swing' || sec === 'positional') {
+    const cl = (ht.clusters || []).find(c => c.sector === sector && (c.symbols || []).length);
+    if (cl) { const others = cl.symbols.filter(x => x !== sym); if (others.length) warn(`<b>${esc(sector)}</b>: ${cl.n} candidates or tracked trades (${others.map(esc).join(', ')} besides this one). Several of them are one sector bet: pick the best or split your risk.`); }
+    const held = App.journal.enrich().filter(t => t.open && map[(t.inst || '').toUpperCase()] === sector && (t.inst || '').toUpperCase() !== sym).map(t => t.inst.toUpperCase());
+    if (sector && held.length) warn(`You already hold <b>${held.map(esc).join(', ')}</b> in ${esc(sector)}.`);
+    (ht.pairs || []).filter(p => p.a === sym || p.b === sym).slice(0, 3).forEach(p => warn(`Moves with <b>${esc(p.a === sym ? p.b : p.a)}</b> (correlation ${p.corr.toFixed(2)} over 60 sessions): treat them as one position for risk.`));
+    if (lvl === 'ok' || !lines.some(l => l[0] !== 'good')) lines.push(['good', sector ? `No crowding in ${esc(sector)} and no correlated pair.` : 'No sector crowding found.']);
+  }
+  if (rs.openRisk > rs.S.openMax * 0.75) warn(`Open risk is ${pct(rs.openRisk, 2)} of your ${pct(rs.S.openMax, 1)} cap: this trade may not fit.`, rs.openRisk >= rs.S.openMax);
+  const label = lvl === 'ok' ? 'Pre-trade check: clear' : lvl === 'bad' ? 'Pre-trade check: stop' : `Pre-trade check: ${lines.filter(l => l[0] === 'warn').length} to review`;
+  return `<details class="precheck"><summary class="pill ${lvl === 'ok' ? 'ok' : lvl}" title="Review before placing the order"><i></i>${label}</summary><div class="precheck-pop"><b>Before you place it</b><ul class="ins">${lines.map(([k, m]) => `<li class="${k}"><i></i><span>${m}</span></li>`).join('')}</ul></div></details>`;
+};
+function ticketCard(it, sec) {
   if (!isNum(it.entry) || !isNum(it.sl)) return '';
-  return `<div class="card"><div class="hd"><h2>Order ticket</h2><span class="cap">you place it yourself</span></div><div class="bd"><pre class="ticket" id="tkt">${esc(ticketText(it))}</pre>
+  return `<div class="card"><div class="hd"><h2>Order ticket</h2><span class="cap">you place it yourself</span><span class="sp"></span>${SC.preCheck(it, sec || it.section)}</div><div class="bd"><pre class="ticket" id="tkt">${esc(ticketText(it))}</pre>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn sm" type="button" id="tktCopy">Copy ticket</button><button class="btn sm" type="button" id="pineCopy">Copy TradingView levels (Pine)</button></div>
     <p class="help" style="margin-top:8px">The quantity uses your capital and risk per trade from Settings. For TradingView: open the Pine Editor, paste, and click Add to chart.</p></div></div>`;
 }
@@ -271,7 +291,7 @@ App.pages.trade = q => {
     <div class="bd" id="chBox">${chartFor(it, tf, sig, 700)}</div><div class="bd legend" style="padding-top:0"><span><i style="background:var(--c6)"></i>9 EMA</span><span><i style="background:var(--good)"></i>FVG</span><span><i style="background:var(--c1)"></i>OB</span><span><i style="background:var(--sun)"></i>Fib</span><span><i style="background:var(--brand)"></i>Entry / zone</span><span><i style="background:var(--bad)"></i>Stop</span></div></div>
     ${it.checklist ? checklistCard(it) : `<div class="card"><div class="hd"><h2>Why this setup</h2></div><div class="bd"><ul class="checks">${(it.logic || []).map(l => `<li><span class="mk ${l.ok === false ? 'n' : 'y'}">${l.ok === false ? '✗' : '✓'}</span><span class="tf"></span><div><b>${esc(l.title)}</b><p>${esc(l.text)}</p></div></li>`).join('')}</ul></div></div>`}
     ${news.length ? `<div class="card"><div class="hd"><h2>News for ${esc(it.symbol)}</h2></div><div class="bd"><ul class="news">${news.slice(0, 6).map(n => `<li><span class="imp ${n.impact || ''}"></span><div><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><br><small>${esc(n.source || '')}${n.published ? ' · ' + esc(ago(n.published)) : ''}</small></div></li>`).join('')}</ul></div></div>` : ''}</div>
-    <div class="stack">${sig ? trackCard(sig, it) : ''}${scoreCard(it)}${planCard(it)}${optionCard(it)}${sizeCard(it)}${ticketCard(it)}
+    <div class="stack">${sig ? trackCard(sig, it) : ''}${scoreCard(it)}${planCard(it)}${optionCard(it)}${sizeCard(it)}${ticketCard(it, sec)}
       ${(it.notes || []).length ? `<div class="card"><div class="hd"><h2>Cautions</h2></div><div class="bd"><ul class="ins">${it.notes.map(n => `<li class="warn"><i></i><span>${esc(n)}</span></li>`).join('')}</ul></div></div>` : ''}</div></div>`;
   return h;
 };

@@ -1,5 +1,5 @@
-/* DownerStuff: Backtest lab (items 2a-2e, 14), Weekly review with the rule-based coach (22, 32), learning from your journal (9),
-   the tax-ready export (24) and Investments (25). Loaded after the other pages; it only adds pages, it changes none. */
+/* DownerStuff: Backtest lab (one view per trading style), the XAUUSD gold lab, Weekly review with the rule-based coach,
+   learning from your journal and the tax-ready export. Loaded after the other pages. */
 (() => {
 const JR = App.journal, kpi = App.ui.kpi, empty = App.ui.empty, callout = App.ui.callout;
 const card = (title, body, cap = '', extra = '') => `<div class="card"><div class="hd"><h2>${title}</h2>${cap ? `<span class="cap">${cap}</span>` : ''}${extra}</div><div class="bd">${body}</div></div>`;
@@ -11,88 +11,162 @@ const csvCell = v => { const s = v == null ? '' : String(v); return /[",\n]/.tes
 const lazyPage = (name, page, maxAge = 600000) => { if (App.lazyAge(name) > maxAge) App.lazy(name, maxAge).then(() => { if (App.route().page === page) App.render(); }).catch(() => { }); };
 
 /* ============================== Backtest lab ============================== */
-/* Four playbooks, each with its own result file: swing, positional (weekly structure), intraday (stocks, long and short) and Nifty options (modelled premiums). */
-const BT_FILES = { swing: 'backtest', positional: 'backtest_positional', intraday: 'backtest_intraday', options: 'backtest_options' };
-const BT_TITLES = { swing: 'Swing', positional: 'Positional', intraday: 'Intraday', options: 'Nifty options' };
-const BT_WORKFLOW = { swing: 'backtest.yml', positional: 'backtest.yml', intraday: 'backtest-intraday.yml', options: 'backtest-intraday.yml' };
-const BT_LEGACY = [['grade', 'By grade', 'does your scorecard separate good setups from weak ones?', 'Grade'], ['score', 'By score', '', 'Score /10'], ['regime', 'By market regime', 'the regime on the day before entry', 'Regime'], ['confirm', 'By confirmation', 'rejection, 9 EMA reclaim, volume', 'Confirmation'],
+/* One reusable view per style. Stocks: Intraday, Swing, Positional and Nifty options. Gold (XAUUSD): intraday, swing and positional on its own page.
+   Every view counts A+ setups only (score 8 to 10), from 1 April 2026, with your rule "2 trades a day, more only if A+". */
+const BT = {
+  intraday: { file: 'backtest_intraday', title: 'Intraday', wf: 'backtest-intraday.yml', mins: true, grows: '5-minute history reaches back about 60 days' },
+  swing: { file: 'backtest', title: 'Swing', wf: 'backtest.yml' },
+  positional: { file: 'backtest_positional', title: 'Positional', wf: 'backtest.yml' },
+  options: { file: 'backtest_options', title: 'Nifty options', wf: 'backtest-intraday.yml', mins: true, grows: '5-minute history reaches back about 60 days' },
+  gold_intraday: { file: 'backtest_gold_intraday', title: 'Gold intraday', tab: 'Intraday', wf: 'backtest-intraday.yml', mins: true, gold: true, grows: '5-minute history reaches back about 60 days' },
+  gold_swing: { file: 'backtest_gold_swing', title: 'Gold swing', tab: 'Swing', wf: 'backtest.yml', gold: true },
+  gold_positional: { file: 'backtest_gold_positional', title: 'Gold positional', tab: 'Positional', wf: 'backtest.yml', gold: true } };
+const STOCK_TABS = ['intraday', 'swing', 'positional', 'options'], GOLD_TABS = ['gold_intraday', 'gold_swing', 'gold_positional'];
+const SCN = { all: ['every A+ signal', 'var(--ink-3)', 1.6], ap: ['your rules', 'var(--brand)', 2.6], ap2: ['strict 2 a day', 'var(--sun)', 1.8], p10: ['perfect 10', 'var(--good)', 1.8] };
+const BT_LEGACY = [['grade', 'By grade', '', 'Grade'], ['score', 'By score', '', 'Score /10'], ['regime', 'By market regime', 'the regime on the day before entry', 'Regime'], ['confirm', 'By confirmation', 'rejection, 9 EMA reclaim, volume', 'Confirmation'],
   ['volume', 'By volume on the confirmation', '', 'Relative volume'], ['zone', 'By zone quality', '', 'Zone'], ['context', 'By context', 'key level, fib, MTF EMA', 'Context ticks'], ['stop', 'By stop width', '', 'Stop'], ['weekday', 'By weekday of entry', '', 'Day'], ['sector', 'By sector', 'largest 14', 'Sector'], ['month', 'By month', 'month the trade closed', 'Month']];
-const btSeg = () => { const s = App.ui.btseg || 'swing'; return BT_FILES[s] ? s : 'swing'; };
-const btTabs = seg => `<div class="seg" role="tablist" aria-label="Playbook" style="margin-bottom:14px">${Object.keys(BT_FILES).map(k => `<button type="button" role="tab" aria-selected="${k === seg}" aria-pressed="${k === seg}" data-btseg="${k}">${BT_TITLES[k]}</button>`).join('')}</div>`;
+const btSeg = () => { const s = App.ui.btseg || 'swing'; return STOCK_TABS.includes(s) ? s : 'swing'; };
+const goldSeg = () => { const s = App.ui.goldseg || 'gold_intraday'; return GOLD_TABS.includes(s) ? s : 'gold_intraday'; };
+const btTabs = (tabs, seg, attr) => `<div class="seg" role="tablist" aria-label="Trading style" style="margin-bottom:14px">${tabs.map(k => `<button type="button" role="tab" aria-selected="${k === seg}" aria-pressed="${k === seg}" ${attr}="${k}">${BT[k].tab || BT[k].title}</button>`).join('')}</div>`;
 const statTable = (title, rows, cap, first = '') => !rows || !rows.length ? '' : card(title, `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>${first}</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Avg R</th><th class="n">Profit factor</th><th class="n">Total R</th></tr></thead><tbody>
   ${rows.map(r => `<tr><td><b>${esc(r.k)}</b></td><td class="n">${r.n}</td><td class="n">${r.win == null ? '-' : r.win + '%'}</td><td class="n ${cls(r.avg)}">${rv(r.avg)}</td><td class="n">${r.pf == null ? '-' : r.pf}</td><td class="n ${cls(r.total)}">${rv(r.total)}</td></tr>`).join('')}</tbody></table></div>`, cap);
-const holdText = (S, seg) => seg === 'intraday' || seg === 'options' ? (S.avg_hold_min == null ? '-' : S.avg_hold_min + ' min') : (S.avg_hold_days == null ? '-' : S.avg_hold_days + ' d');
+const holdText = (S, seg) => BT[seg].mins ? (S.avg_hold_min == null ? '-' : S.avg_hold_min + ' min') : (S.avg_hold_days == null ? '-' : S.avg_hold_days + ' d');
+const OUT = (seg, o) => ({ TARGET: 'T3 reached', TRAIL: 'Trailing stop', SL: 'Stop-loss', EXPIRED: BT[seg].mins ? 'Squared off' : 'Expired' })[o] || o || '';
+
+/* gold lot size: XAUUSD 1 standard lot = 100 ounces, so a 1-dollar move is 100 dollars a lot. Settings stay on this device. */
+const GS = () => Object.assign({ acct: 10000, risk: 0.5, riskA: 0.75 }, store.get('ds_gold_v1', {}) || {});
+const goldLots = (stopUsd, aplus = true) => { const g = GS(), riskD = g.acct * (aplus ? g.riskA : g.risk) / 100; return stopUsd > 0 ? Math.floor(riskD / (stopUsd * 100) * 100) / 100 : 0; };
 
 function forwardTest(B, seg) {
   const led = seg === 'swing' ? 'swing' : seg === 'intraday' ? 'intraday' : null;
-  if (!led) return card('Live forward test', `<p class="help" style="margin:0">${seg === 'options' ? 'Live option signals are tracked on the index, and this backtest measures the option premium, so the two cannot be compared one to one. Judge the options playbook by the Journal once you have logged option trades.' : 'Positional trades are not tracked live yet.'}</p>`, 'is the live scanner behaving like the backtest?');
-  const live = App.LED(led).signals.filter(s => s.status === 'CLOSED' && isNum(s.r_final)), n = live.length;
-  if (!n) return card('Live forward test', empty('No tracked ' + led + ' trade has closed yet', 'Every setup the scanner triggers is tracked with the same rules. As they close, this card compares real results with the backtest.'), 'is the live scanner behaving like the backtest?');
+  if (!led) return card('Live forward test', `<p class="help" style="margin:0">${seg === 'options' ? 'Live option signals are tracked on the index, and this backtest measures the option premium, so the two cannot be compared one to one. Judge the options playbook by the Journal once you have logged option trades.' : BT[seg].gold ? 'Gold is not scanned live yet (it trades mostly outside the Indian market loop\'s hours). Judge it by the Journal once you log gold trades.' : 'This style is not tracked live yet.'}</p>`, 'is the live scanner behaving like the backtest?');
+  const live = App.LED(led).signals.filter(s => s.status === 'CLOSED' && isNum(s.r_final) && (s.score || 0) >= 8), n = live.length;
+  if (!n) return card('Live forward test', empty('No tracked A+ ' + led + ' trade has closed yet', 'Every setup the scanner triggers is tracked with the same rules. As A+ trades close, this card compares them with the backtest.'), 'is the live scanner behaving like the backtest?');
   const avg = live.reduce((a, s) => a + s.r_final, 0) / n, win = 100 * live.filter(s => s.r_final > 0).length / n, b = B.summary.gross;
-  const verdict = n < 20 ? ['info', `Only ${n} live trade${n > 1 ? 's' : ''} so far. Fewer than 20 says very little: keep tracking before you judge.`]
+  const verdict = n < 20 ? ['info', `Only ${n} live A+ trade${n > 1 ? 's' : ''} so far. Fewer than 20 says very little: keep tracking before you judge.`]
     : avg >= b.avg - 0.25 ? ['good', 'Live results are in line with the backtest (or better).'] : ['warn', 'Live results are clearly below the backtest. That can be bad luck over a small sample, or a market regime the backtest saw little of.'];
-  return card('Live forward test', `<div class="kpis">${kpi('Live trades closed', n)}${kpi('Live win rate', win.toFixed(0) + '%', `backtest ${b.win}%`)}${kpi('Live average', rv(avg), `backtest ${rv(b.avg)} before costs`, cls(avg))}</div><div style="height:10px"></div>${callout(verdict[0], verdict[1])}`, 'tracked signals against the backtest');
+  return card('Live forward test', `<div class="kpis">${kpi('Live A+ trades closed', n)}${kpi('Live win rate', win.toFixed(0) + '%', `backtest ${b.win}%`)}${kpi('Live average', rv(avg), `backtest ${rv(b.avg)} before costs`, cls(avg))}</div><div style="height:10px"></div>${callout(verdict[0], verdict[1])}`, 'tracked A+ signals against the backtest');
 }
 
-App.pages.backtest = () => {
-  const seg = btSeg(), B = App.lazyNow(BT_FILES[seg]), T = BT_TITLES[seg];
-  let h = `<div class="ph"><div><h1>Backtest lab</h1><p>Each playbook replayed on past data with the same engine and the same trade rules the live scanner uses, kept apart. The first view of each takes <b>every</b> signal; "With your rules" then trades it the way your journal rules say. Evidence to tune your rules with, not a promise about the future.</p></div></div>` + btTabs(seg);
-  if (!B || !B.summary) return h + `<div class="card"><div class="bd">${empty('No ' + T.toLowerCase() + ' backtest yet', `It runs every Saturday. To run it now, open <a href="${App.actionsUrl()}/workflows/${BT_WORKFLOW[seg]}" target="_blank" rel="noopener">GitHub → ${BT_WORKFLOW[seg].replace('.yml', '')} → Run workflow</a>. ${seg === 'intraday' || seg === 'options' ? 'It takes about 10 to 30 minutes.' : 'It takes 30 to 90 minutes.'} This page fills in when it finishes.`)}</div></div>`;
-  const s = B.summary.net, g = B.summary.gross, S = B.summary, mc = B.montecarlo || {}, o = S.outcomes || {}, W = B.window || {}, small = seg === 'intraday' || seg === 'options';
-  h += `<p class="help" style="margin:-4px 0 12px">${esc(W.from || '')} to ${esc(W.to || '')} · ${seg === 'options' ? 'Nifty 50 index' : seg === 'positional' ? `${B.universe} most liquid Nifty 500 stocks, long only` : `${B.universe} most liquid Nifty 500 stocks`} · run ${esc(dateIST(B.generated_at))} <small class="muted">${esc(ago(B.generated_at))}</small></p>`;
-  if (seg === 'options') h += callout('warn', '<b>Modelled premiums, not real option prices.</b> There is no free historical option data, so each trade picks the strike by delta like the live app and prices the option with Black-Scholes on the previous day\'s India VIX. Real fills differ with changing volatility, skew and the bid-ask spread. The index signals are real; the premium results are an estimate.') + '<div style="height:10px"></div>';
-  if (small) h += callout('info', `<b>This view starts small and grows.</b> Free 5-minute history only reaches back about 60 days, so each Saturday run adds the new days to the trades already saved (${s.n} so far). Until it has a few hundred trades, read the numbers as a hint, not a verdict.`) + '<div style="height:10px"></div>';
-  if (seg === 'positional') h += callout('info', '<b>Positional here means the swing playbook one timeframe up:</b> structure on the weekly chart, trigger on the daily chart, long only, held for weeks to months (up to 120 days). This is my reading of it: if your positional rules differ, tell me and I will change the engine.') + '<div style="height:10px"></div>';
-  h += `<p class="help" style="margin:0 0 8px"><b>Every ${({ swing: 'swing', positional: 'positional', intraday: 'intraday', options: 'Nifty options' })[seg]} signal the engine produced</b> (all grades from 4 up, no daily limit, no risk rules). This is the engine's raw edge, not your trading.</p>`;
-  h += `<div class="kpis" style="margin-bottom:14px">${kpi('Trades', s.n, small ? `about ${Math.round(S.trades_per_year / 252 * 10) / 10} a trading day` : `about ${Math.round(S.trades_per_year)} a year`)}${kpi('Win rate', s.win == null ? '-' : s.win + '%', `win ${rv(s.avg_win)} · loss ${rv(s.avg_loss)}`)}${kpi('Expectancy', rv(s.avg), `after costs · ${rv(g.avg)} before`, cls(s.avg))}
-    ${kpi('Profit factor', s.pf == null ? '-' : s.pf, 'wins ÷ losses', s.pf >= 1 ? 'good' : 'bad')}${kpi('Max drawdown', s.max_dd + 'R', `longest losing run ${s.streak}`)}${kpi('Average hold', holdText(S, seg), `${o.TARGET || 0} T3 · ${o.SL || 0} stopped`)}</div>`;
-  const SC = B.scenarios || [], AC = B.account || {}, CV = B.scenario_curves || {};
-  const scRow = r => `<tr><td><b>${esc(r.name)}</b></td><td class="n">${r.n}<br><small class="muted">${r.per_year} a year</small></td><td class="n">${r.win == null ? '-' : r.win + '%'}</td><td class="n ${cls(r.avg)}">${rv(r.avg)}</td><td class="n">${r.pf == null ? '-' : r.pf}</td>
-    <td class="n ${cls(r.ret)}">${r.n ? sg(r.ret) + '%' : '-'}${r.cagr != null ? `<br><small class="muted">${sg(r.cagr)}% a year</small>` : ''}</td><td class="n">${r.n ? '-' + r.max_dd + '%' : '-'}</td><td class="n">${r.streak}</td>
-    <td><small class="muted">${r.rules ? `${r.skipped.day_cap} over the daily cap · ${r.skipped.open_cap} over open risk · ${r.skipped.loss_limit} stopped by loss limits` : 'none: every trade taken'}</small></td></tr>`;
-  const SLAB = { all: 'every signal', a: 'A and A+', ap: 'A+ only', p10: 'perfect 10' };
-  const best = SC.filter(r => r.rules && r.n >= 30).sort((a, b) => b.avg - a.avg)[0], few = SC.filter(r => r.rules && r.n > 0 && r.n < 30);
-  let acct = '';
-  if (SC.length) acct = card('With your rules', `<p class="help" style="margin:0 0 10px">The same trades, taken the way you trade: only setups at or above the score, the first ${AC.max_per_day} to trigger each day, ${AC.risk}% risk (${AC.risk_aplus}% for A+), open risk up to ${AC.open_cap}%, no more entries after a ${AC.day_stop}% losing day, a ${AC.week_stop}% losing week or a ${AC.month_stop}% losing month, half size once a month is down ${AC.month_half}%${AC.stop_after_losses ? `, and no more trades for the day after ${AC.stop_after_losses} losing trades` : ''}. A 100-unit account that compounds.</p>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Scenario</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Avg R</th><th class="n">Profit factor</th><th class="n">Account</th><th class="n">Max drawdown</th><th class="n">Worst run</th><th>Not taken</th></tr></thead><tbody>${SC.map(scRow).join('')}</tbody></table></div>
-    ${(CV.labels || []).length > 2 ? `<div style="margin-top:12px"><div id="btSc"></div><div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px">${SC.map(r => `<span class="help" style="margin:0"><b style="color:${({ all: 'var(--sun)', a: 'var(--ink-2)', ap: 'var(--brand)', p10: 'var(--good)' })[r.key]}">&#9632;</b> ${esc(SLAB[r.key])}</span>`).join('')}</div></div>` : ''}
-    <div style="height:10px"></div>${best ? callout(best.avg > 0.05 ? 'good' : best.avg > -0.05 ? 'info' : 'bad', `<b>Best with your rules: ${esc(best.name)}.</b> ${best.n} trades, ${rv(best.avg)} per trade after costs, ${sg(best.ret)}% on the account with a worst fall of -${best.max_dd}%. Taking every signal: ${rv(s.avg)} per trade.${best.avg > s.avg + 0.05 ? ' Being selective is what separates a loss from a profit here.' : ''}${best.n < 100 ? ` With only ${best.n} trades this is a lead, not proof: a few lucky trades can move the average.` : ''}`)
-      : callout('warn', 'None of your rule sets has 30 trades yet, which is too few to judge.')}
-    ${few.length ? `<p class="help" style="margin-top:8px">Fewer than 30 trades, so read as a hint only: ${few.map(r => esc(r.name) + ' (' + r.n + ')').join('; ')}.</p>` : ''}`, 'the same trades, your way', `<span class="sp"></span><span class="pill info">quick re-run: Actions &gt; backtest &gt; quick</span>`);
-  const verdict = s.n < 50 ? ['warn', `<b>Only ${s.n} trades.</b> That is too few to trust any number on this page.${small ? ' It grows every week.' : ' Run the backtest on more stocks (set "top" to 0 for all 500).'}`]
-    : s.avg >= 0.2 ? ['good', `<b>The playbook had a positive edge after costs:</b> ${rv(s.avg)} per trade over ${s.n} trades. Expect losing runs of about ${mc.streak_p50 || s.streak} trades in a normal year.`]
-    : s.avg > 0 ? ['info', `<b>A thin edge after costs:</b> ${rv(s.avg)} per trade. Costs and slippage matter a lot at this level: look at which grades, regimes and filters below carry the result.`]
-    : ['bad', `<b>Taking every signal, there was no edge after costs on this window:</b> ${rv(s.avg)} per trade. That is not how you trade: see "With your rules" below, and the tables further down, where the loss is often concentrated in a few conditions you can simply skip.`];
-  h += callout(verdict[0], verdict[1]) + '<div style="height:14px"></div>' + (acct ? acct + '<div style="height:14px"></div>' : '');
+/* The trade log of one style: the trades your rules took (default) or every A+ signal, newest first, 25 at a time. */
+const LOGU = () => (App.ui.btlog = App.ui.btlog || { mode: 'rules', n: 25 });
+function tradeLog(B, seg) {
+  const u = LOGU(), ap = (B.scenarios || []).find(r => r.key === 'ap'), rules = ap && ap.log ? ap.log : null, mode = rules && u.mode === 'rules' ? 'rules' : 'all';
+  const rows = (mode === 'rules' ? rules : (B.trades || [])).slice().reverse(), shown = rows.slice(0, u.n), gold = BT[seg].gold;
+  const name = t => seg === 'options' && t.strike ? `${t.sym} ${t.strike} ${t.side === 'short' ? 'PE' : 'CE'}` : t.sym;
+  const head = `<th>${seg === 'options' ? 'Option' : gold ? 'Gold' : 'Stock'}</th><th>Entry (IST)</th><th>Exit</th><th class="n">Score</th>${gold ? '<th class="n">Stop</th><th class="n">Lots*</th>' : ''}<th>Result</th><th class="n">R net</th>${mode === 'rules' ? '<th class="n">Account</th>' : ''}`;
+  const tr = t => `<tr><td><b>${esc(name(t))}</b> <small class="muted">${t.side === 'short' ? 'short' : gold || seg === 'options' ? 'long' : ''} ${esc(t.sector || '')}</small></td><td class="nw"><small>${esc(sd(t.entry_t))}</small></td><td class="nw"><small>${esc(sd(t.exit_t))}${t.hold_min != null ? ' · ' + t.hold_min + ' min' : t.hold_days != null ? ' · ' + t.hold_days + 'd' : ''}</small></td>
+    <td class="n">${t.score}</td>${gold ? `<td class="n">${isNum(t.risk_usd) ? '$' + t.risk_usd.toFixed(2) : '-'}</td><td class="n">${isNum(t.risk_usd) ? goldLots(t.risk_usd).toFixed(2) : '-'}</td>` : ''}<td class="nw"><small>${esc(OUT(seg, t.outcome))}</small></td><td class="n ${cls(t.r_net)}">${rv(t.r_net)}</td>${mode === 'rules' ? `<td class="n ${cls(t.pnl_pct)}">${isNum(t.pnl_pct) ? sg(t.pnl_pct) + '%' : '-'}</td>` : ''}</tr>`;
+  const seg2 = rules ? App.ui.seg('btlog', [['rules', `Taken with your rules ${rules.length}`], ['all', `Every A+ signal ${(B.trades || []).length}`]], mode) : '';
+  const open = (B.open_now || []).length ? `<p class="help" style="margin-top:10px">Still open when the run ended (not counted): ${B.open_now.map(t => `<b>${esc(t.sym)}</b> ${esc(t.entry_t.slice(5))}`).join(' · ')}</p>` : '';
+  return card('Trade log', `${seg2 ? `<div style="margin-bottom:10px">${seg2}</div>` : ''}${rows.length ? `<div class="tbl-wrap" style="max-height:560px;overflow:auto"><table class="tbl"><thead><tr>${head}</tr></thead><tbody>${shown.map(tr).join('')}</tbody></table></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"><small class="muted">Showing ${shown.length} of ${rows.length}, newest first</small><span style="flex:1"></span>${rows.length > shown.length ? '<button class="btn sm" type="button" id="btMore">Show 25 more</button>' : ''}<button class="btn sm ghost" type="button" id="btCsv">${ic('download')} CSV</button></div>
+    ${gold ? `<p class="help" style="margin-top:8px">*Lots for your gold settings (${inr0usd(GS().acct)} account, ${GS().riskA}% risk on A+): risk ÷ (stop in dollars × 100 ounces). Change them in the Lot size card.</p>` : ''}` : empty('No trades in this view yet', '')}${open}`, mode === 'rules' ? 'the trades your rules would have taken' : 'every A+ signal, before your rules');
+}
+const sd = t => { const s = String(t || ''); return s.length >= 16 ? `${+s.slice(8, 10)} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][+s.slice(5, 7) - 1]} ${s.slice(11, 16)}` : s; };
+const inr0usd = v => '$' + Math.round(v).toLocaleString('en-US');
+
+/* The whole view of one style. */
+function labView(seg) {
+  const M = BT[seg], B = App.lazyNow(M.file);
+  if (!B || !B.summary) return `<div class="card"><div class="bd">${empty(App.lazyAge(M.file) === Infinity ? 'Loading…' : 'No ' + M.title.toLowerCase() + ' backtest yet', `It runs every Saturday. To run it now, open <a href="${App.actionsUrl()}/workflows/${M.wf}" target="_blank" rel="noopener">GitHub → ${M.wf.replace('.yml', '')} → Run workflow</a>. ${M.mins ? 'It takes about 10 to 30 minutes.' : 'It takes 30 to 90 minutes.'} This page fills in when it finishes.`)}</div></div>`;
+  const s = B.summary.net, g = B.summary.gross, S = B.summary, mc = B.montecarlo || {}, o = S.outcomes || {}, W = B.window || {}, AC = B.account || {}, RU = B.rules || {}, small = !!M.grows;
+  const what = seg === 'options' ? 'Nifty 50 index' : M.gold ? `XAUUSD, from ${esc((B.params || {}).source || 'GC=F')}` : `${B.universe} most liquid Nifty 500 stocks${['swing', 'positional'].includes(seg) ? ', long only' : ''}`;
+  let h = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 12px"><span class="pill ${M.gold ? 'gold' : 'info'}">${esc(RU.text || 'all grades')}</span><span class="pill">${AC.max_per_day || 2} a day${AC.aplus_overflow !== false ? ', more only if A+' : ''}</span><span class="pill">${esc(W.from || '')} to ${esc(W.to || '')}</span><span class="pill">${what}</span><span class="pill">run ${esc(dateIST(B.generated_at))} · ${esc(ago(B.generated_at))}</span></div>`;
+  if (!RU.text) h += callout('warn', '<b>This result is from an older run</b> that counted every grade and all history. The next run (or Actions → backtest → quick) shows A+ only from 1 April 2026.') + '<div style="height:10px"></div>';
+  if (seg === 'options') h += callout('warn', '<b>Modelled premiums, not real option prices.</b> The index signals are real; the premium results are a Black-Scholes estimate on the previous day\'s India VIX. Real fills differ (volatility, skew, spread).') + '<div style="height:10px"></div>';
+  if (small) h += callout('info', `<b>This view starts small and grows.</b> Free ${M.grows}, so each Saturday run adds new days to the trades already saved (${s.n} A+ trades so far). Until it has a few hundred, read the numbers as a hint, not a verdict.`) + '<div style="height:10px"></div>';
+  if (seg === 'positional' || seg === 'gold_positional') h += callout('info', '<b>Positional trades last weeks to months (up to 120 days),</b> so a window that starts on 1 April has few finished trades and many still open. Judge positional over a longer window too: set the repo variable <code>BACKTEST_FROM</code> to <code>all</code> and run quick mode.') + '<div style="height:10px"></div>';
+  if (seg === 'positional') h += callout('info', `<b>Positional rules are my reading of your playbook,</b> not rules you gave me (see "How to read this"). If yours differ, tell me and I will change the engine.`) + '<div style="height:10px"></div>';
+  h += `<div class="sec-h" style="margin-top:4px"><h2>Every A+ signal</h2><small class="muted">no daily limit, no risk rules: the engine's raw edge</small></div><div class="kpis" style="margin-bottom:14px">${kpi('Trades', s.n, M.mins ? `about ${Math.round(S.trades_per_year / 252 * 10) / 10} a trading day` : `about ${Math.round(S.trades_per_year)} a year`)}${kpi('Win rate', s.win == null ? '-' : s.win + '%', `win ${rv(s.avg_win)} · loss ${rv(s.avg_loss)}`)}${kpi('Expectancy', rv(s.avg), `after costs · ${rv(g.avg)} before`, cls(s.avg))}
+    ${kpi('Profit factor', s.pf == null ? '-' : s.pf, 'wins ÷ losses', s.pf == null ? '' : s.pf >= 1 ? 'good' : 'bad')}${kpi('Max drawdown', s.max_dd + 'R', `longest losing run ${s.streak}`)}${kpi('Average hold', holdText(S, seg), `${o.TARGET || 0} T3 · ${o.SL || 0} stopped`)}</div>`;
+  const verdict = s.n < 50 ? ['warn', `<b>Only ${s.n} A+ trades in this window.</b> That is too few to trust any number on this page.${small ? ' It grows every week.' : ''}`]
+    : s.avg >= 0.2 ? ['good', `<b>A+ setups had a positive edge after costs:</b> ${rv(s.avg)} per trade over ${s.n} trades. Expect losing runs of about ${mc.streak_p50 || s.streak} trades in a normal year.`]
+    : s.avg > 0 ? ['info', `<b>A thin edge after costs:</b> ${rv(s.avg)} per trade. At this level costs and slippage decide the result.`]
+    : ['bad', `<b>Every A+ signal together lost money after costs in this window:</b> ${rv(s.avg)} per trade. A+ alone is not the edge here: see "With your rules" and the tables below for where the loss sits.`];
+  h += callout(verdict[0], verdict[1]) + '<div style="height:14px"></div>';
+  const SC = B.scenarios || [], CV = B.scenario_curves || {};
+  const notTaken = r => !r.rules ? 'none: every trade taken' : `${r.skipped.day_cap} over the daily limit · ${r.skipped.open_cap} over open risk · ${r.skipped.loss_limit} stopped by loss limits${r.aplus_extra ? ` · <b>${r.aplus_extra} A+ extras</b> taken past 2 a day` : ''}`;
+  const scRow = r => `<tr${r.key === 'ap' ? ' class="hl"' : ''}><td><b>${esc(r.name)}</b></td><td class="n">${r.n}<br><small class="muted">${r.per_year} a year</small></td><td class="n">${r.win == null ? '-' : r.win + '%'}</td><td class="n ${cls(r.avg)}">${rv(r.avg)}</td><td class="n">${r.pf == null ? '-' : r.pf}</td>
+    <td class="n ${cls(r.ret)}">${r.n ? sg(r.ret) + '%' : '-'}${r.cagr != null ? `<br><small class="muted">${sg(r.cagr)}% a year</small>` : ''}</td><td class="n">${r.n ? '-' + r.max_dd + '%' : '-'}</td><td class="n">${r.streak}</td><td><small class="muted">${notTaken(r)}</small></td></tr>`;
+  const mine = SC.find(r => r.key === 'ap');
+  if (SC.length) h += card('With your rules', `<p class="help" style="margin:0 0 10px">The same A+ trades, taken the way you trade, on a 100-unit account that compounds: ${AC.max_per_day} trades a day${AC.aplus_overflow !== false ? ' and more only when they are A+' : ''}, ${AC.risk_aplus}% risk on A+, open risk up to ${AC.open_cap}%, no more entries after a ${AC.day_stop}% losing day, a ${AC.week_stop}% losing week or a ${AC.month_stop}% losing month, half size once a month is down ${AC.month_half}%${AC.stop_after_losses ? `, and no more trades for the day after ${AC.stop_after_losses} losing trades` : ''}. First come, first served: no peeking at later signals that day.</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>View</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Avg R</th><th class="n">Profit factor</th><th class="n">Account</th><th class="n">Max drawdown</th><th class="n">Worst run</th><th>Not taken</th></tr></thead><tbody>${SC.map(scRow).join('')}</tbody></table></div>
+    ${(CV.labels || []).length > 2 ? `<div style="margin-top:12px"><div id="btSc"></div><div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px">${SC.filter(r => SCN[r.key]).map(r => `<span class="help" style="margin:0"><b style="color:${SCN[r.key][1]}">&#9632;</b> ${SCN[r.key][0]}</span>`).join('')}</div></div>` : '<p class="help" style="margin-top:8px">The account curve appears once the trades span more than two months.</p>'}
+    ${mine ? `<div style="height:10px"></div>${callout(mine.n < 30 ? 'warn' : mine.avg > 0.05 ? 'good' : mine.avg > -0.05 ? 'info' : 'bad', mine.n < 30 ? `<b>Only ${mine.n} trades with your rules.</b> Too few to judge: a couple of lucky or unlucky trades move the result.` : `<b>With your rules:</b> ${mine.n} trades, ${rv(mine.avg)} per trade after costs, ${sg(mine.ret)}% on the account with a worst fall of -${mine.max_dd}%.`)}` : ''}`,
+    'the P&L of the way you trade', `<span class="sp"></span><span class="pill info">quick re-run: Actions &gt; backtest &gt; quick</span>`) + '<div style="height:14px"></div>';
   const order = (B.by_order && B.by_order.length) ? B.by_order : BT_LEGACY.filter(x => (B.by || {})[x[0]]).map(x => ({ key: x[0], title: x[1], cap: x[2], first: x[3] })), tbl = x => statTable(x.title, (B.by || {})[x.key], x.cap, x.first);
-  h += `<div class="grid g-main" style="margin-bottom:14px"><div class="stack">${card('Equity curve', '<div id="btEq"></div>', 'running total in R, after costs, one unit of risk per trade')}${order.slice(0, 3).map(tbl).join('')}</div>
+  h += `<div class="grid g-main" style="margin-bottom:14px"><div class="stack">${card('Equity curve', '<div id="btEq"></div>', 'every A+ signal, running total in R after costs')}${order.slice(0, 3).map(tbl).join('')}</div>
     <div class="stack">${forwardTest(B, seg)}
     ${card('What a year can look like', mc.sims ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Risk per trade</th><th class="n">Typical year</th><th class="n">Bad year</th><th class="n">Good year</th><th class="n">Typical drawdown</th><th class="n">Bad drawdown</th><th class="n">Losing year</th></tr></thead><tbody>
       ${Object.entries(mc.risks).map(([k, r]) => `<tr><td><b>${k}%</b></td><td class="n ${cls(r.ret_p50)}">${sg(r.ret_p50)}%</td><td class="n ${cls(r.ret_p5)}">${sg(r.ret_p5)}%</td><td class="n ${cls(r.ret_p95)}">${sg(r.ret_p95)}%</td><td class="n">-${r.dd_p50}%</td><td class="n bad">-${r.dd_p95}%</td><td class="n">${r.losing_year}%</td></tr>`).join('')}</tbody></table></div>
-      <p class="help" style="margin-top:8px">${mc.sims.toLocaleString()} simulated years of ${mc.trades_per_year} trades, drawn at random from the backtest results. "Bad" is the worst 1 year in 20. Expect a losing run of about <b>${mc.streak_p50}</b> trades in a normal year and <b>${mc.streak_p95}</b> in a bad one: choose a risk per trade you can sit through.${small ? ' The window is short, so treat the yearly numbers as rough.' : ''}</p>` : empty('Not enough trades to simulate', mc.note || ''), 'Monte Carlo')}
+      <p class="help" style="margin-top:8px">${mc.sims.toLocaleString()} simulated years of ${mc.trades_per_year} trades, drawn at random from these A+ results. "Bad" is the worst 1 year in 20. Expect a losing run of about <b>${mc.streak_p50}</b> trades in a normal year and <b>${mc.streak_p95}</b> in a bad one. The window is under a year, so treat this as rough.</p>` : empty('Not enough trades to simulate', mc.note || ''), 'Monte Carlo')}
     ${B.split ? card('Did it hold up over time?', `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Period</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Avg R</th><th class="n">Profit factor</th></tr></thead><tbody>
       ${[['First 60% of the window', B.split.train], ['Last 40% (most recent)', B.split.test]].map(([n, r]) => `<tr><td><b>${n}</b></td><td class="n">${r.n}</td><td class="n">${r.win == null ? '-' : r.win + '%'}</td><td class="n ${cls(r.avg)}">${rv(r.avg)}</td><td class="n">${r.pf == null ? '-' : r.pf}</td></tr>`).join('')}</tbody></table></div>
       <p class="help" style="margin-top:8px">An edge that shows in both halves is more believable than one that only shows in the first.</p>`) : ''}
-    ${S.held_back && S.held_back.n ? card('Your hold-back rules', `<p style="margin:0">Trades your rules held back (weekly trend against, or less than 2R of room) averaged <b class="${cls(S.held_back.avg)}">${rv(S.held_back.avg)}</b> over ${S.held_back.n} trades, against <b class="${cls(s.avg)}">${rv(s.avg)}</b> for the trades taken. ${S.held_back.avg < s.avg ? 'The rules kept you out of worse trades: keep them.' : 'The held-back trades did no worse here: the rules cost you opportunities on this window.'}</p>`) : ''}</div></div>`;
+    ${S.held_back && S.held_back.n ? card('Your hold-back rules', `<p style="margin:0">A+ trades your rules held back (weekly trend against, or less than 2R of room) averaged <b class="${cls(S.held_back.avg)}">${rv(S.held_back.avg)}</b> over ${S.held_back.n} trades, against <b class="${cls(s.avg)}">${rv(s.avg)}</b> for the trades taken. ${S.held_back.avg < s.avg ? 'The rules kept you out of worse trades: keep them.' : 'The held-back trades did no worse here: the rules cost you opportunities on this window.'}</p>`) : ''}</div></div>`;
   if ((B.variants || []).length) { const vb = B.variant_base || { all: B.base, train: (B.split || {}).train || {}, test: (B.split || {}).test || {} };
     h += card('Would a different rule have been better?', `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Rule</th><th class="n">Trades</th><th class="n">Avg R, all</th><th class="n">First 60%</th><th class="n">Last 40%</th><th>Verdict</th></tr></thead><tbody>
       <tr><td><b>Your current rules</b><br><small class="muted">1.5x volume, 0.25 ATR stop buffer</small></td><td class="n">${vb.all.n}</td><td class="n ${cls(vb.all.avg)}">${rv(vb.all.avg)}</td><td class="n">${rv(vb.train.avg)}</td><td class="n">${rv(vb.test.avg)}</td><td><span class="pill info">baseline</span></td></tr>
       ${B.variants.map(v => `<tr><td><b>${esc(v.name)}</b><br><small class="muted">${esc(v.desc)}</small></td><td class="n">${v.all.n}</td><td class="n ${cls(v.all.avg)}">${rv(v.all.avg)}</td><td class="n">${rv(v.train.avg)}</td><td class="n">${rv(v.test.avg)}</td><td><span class="pill ${v.better ? 'ok' : 'info'}">${v.better ? 'Better in both halves' : 'Keep your rule'}</span></td></tr>`).join('')}</tbody></table></div>
-      <p class="help" style="margin-top:8px">A variant is only called better when it beats your rule in <b>both</b> halves of the window with at least 20 recent trades. That guards against a rule that merely fits the past. Tested on the ${(B.params || {}).variant_universe || 120} most liquid stocks.</p>`, 'one change at a time') + '<div style="height:14px"></div>'; }
-  h += `<div class="grid g2x" style="margin-bottom:14px">${order.slice(3).map(tbl).join('')}</div>`;
-  h += `<div class="grid g-main"><div class="stack">${card('Most recent trades', `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>${seg === 'options' ? 'Option' : 'Stock'}</th><th>Entry</th><th>Exit</th><th class="n">Grade</th><th>Result</th><th class="n">R net</th></tr></thead><tbody>
-      ${(B.trades || []).slice(-30).reverse().map(t => `<tr><td><b>${esc(seg === 'options' && t.strike ? `${t.sym} ${t.strike} ${t.side === 'short' ? 'PE' : 'CE'}` : t.sym)}</b> <small class="muted">${t.side === 'short' ? 'short' : ''} ${esc(t.sector || '')}</small></td><td><small>${esc(t.entry_t)}</small></td><td><small>${esc(t.exit_t)} · ${t.hold_min != null ? t.hold_min + ' min' : (t.hold_days != null ? t.hold_days + 'd' : '')}</small></td><td class="n">${esc(t.grade)} ${t.score}</td><td>${esc({ TARGET: 'T3 reached', TRAIL: 'Trailing stop', SL: 'Stop-loss', EXPIRED: small ? 'Squared off 15:15' : 'Expired' }[t.outcome] || t.outcome)}</td><td class="n ${cls(t.r_net)}">${rv(t.r_net)}</td></tr>`).join('')}</tbody></table></div>`, 'last 30 of ' + s.n)}</div>
-    <div class="stack">${card('How to read this', `<ul class="ins">${(B.assumptions || []).map(a => `<li><i></i><span>${esc(a)}</span></li>`).join('')}</ul>`, 'what the replay does and does not include')}</div></div>`;
+      <p class="help" style="margin-top:8px">A variant is only called better when it beats your rule in <b>both</b> halves of the window with at least 20 recent trades. Tested on the ${(B.params || {}).variant_universe || 120} most liquid stocks.</p>`, 'one change at a time') + '<div style="height:14px"></div>'; }
+  const rest = order.slice(3).map(tbl).join('');
+  if (rest) h += `<div class="grid g2x" style="margin-bottom:14px">${rest}</div>`;
+  h += `<div class="grid g-main"><div class="stack">${tradeLog(B, seg)}</div><div class="stack">${card('How to read this', `<ul class="ins">${(B.assumptions || []).map(a => `<li><i></i><span>${esc(a)}</span></li>`).join('')}</ul>`, 'what the replay does and does not include')}</div></div>`;
   return h;
-};
-App.binds.backtest = () => {
-  const seg = btSeg(); $$('[data-btseg]').forEach(b => b.onclick = () => { App.ui.btseg = b.dataset.btseg; App.render(); });
-  lazyPage(BT_FILES[seg], 'backtest');
-  const B = App.lazyNow(BT_FILES[seg]), el = $('#btEq'); if (!B || !el || !(B.equity || []).length) return;
+}
+function labBind(seg, page) {
+  const M = BT[seg]; lazyPage(M.file, page);
+  const B = App.lazyNow(M.file); if (!B) return;
+  $$('[data-seg="btlog"]').forEach(b => b.onclick = () => { LOGU().mode = b.dataset.v; LOGU().n = 25; App.render(); });
+  if ($('#btMore')) $('#btMore').onclick = () => { LOGU().n += 25; App.render(); };
+  if ($('#btCsv')) $('#btCsv').onclick = () => { const ap = (B.scenarios || []).find(r => r.key === 'ap'), rules = LOGU().mode === 'rules' && ap && ap.log, rows = rules ? ap.log : (B.trades || []);
+    dl(`${M.file}-${rules ? 'your-rules' : 'all-aplus'}.csv`, '\ufeff' + [['Symbol', 'Side', 'Score', 'Entry time', 'Exit time', 'Entry', 'Stop', 'Outcome', 'R net', rules ? 'Account %' : 'Hold'].join(','),
+      ...rows.map(t => [t.sym, t.side || 'long', t.score, t.entry_t, t.exit_t, t.entry, t.sl, t.outcome, t.r_net, rules ? t.pnl_pct : (t.hold_min != null ? t.hold_min + ' min' : (t.hold_days != null ? t.hold_days + ' d' : ''))].map(csvCell).join(','))].join('\n')); App.toast('Trade log downloaded'); };
   const sc = $('#btSc'), CV = B.scenario_curves;
-  if (sc && CV && (CV.labels || []).length > 2) sc.innerHTML = App.charts.line(['all', 'a', 'ap', 'p10'].filter(k => CV.series[k]).map(k => ({ pts: CV.series[k], c: ({ all: 'sun', a: 'ink', ap: 'brand', p10: 'good' })[k], w: k === 'p10' || k === 'ap' ? 2.4 : 1.6 })), { W: sc.clientWidth || 640, H: 220, labels: CV.labels, fmt: v => v.toFixed(0), label: 'Account value by scenario, starting at 100' });
+  if (sc && CV && (CV.labels || []).length > 2) sc.innerHTML = App.charts.line(['all', 'p10', 'ap2', 'ap'].filter(k => CV.series[k]).map(k => ({ pts: CV.series[k], c: SCN[k][1], w: SCN[k][2] })), { W: sc.clientWidth || 640, H: 220, labels: CV.labels, fmt: v => v.toFixed(0), label: 'Account value with each set of rules, starting at 100' });
+  const el = $('#btEq'); if (!el || !(B.equity || []).length) return;
   const draw = () => { el.innerHTML = App.charts.line([{ pts: [0].concat(B.equity.map(x => x[1])), c: B.summary.net.total >= 0 ? 'good' : 'bad', area: true }], { W: el.clientWidth || 640, H: 230, zero: true, labels: [B.equity[0][0]].concat(B.equity.map(x => x[0])), fmt: v => v.toFixed(0) + 'R', label: 'Backtest equity curve in R' }); };
   draw();
+}
+
+App.pages.backtest = () => {
+  const seg = btSeg();
+  return `<div class="ph"><div><h1>Backtest lab</h1><p>Each trading style replayed on past data with the same engine and trade rules the live scanner uses, kept apart. Only A+ setups count (score 8 to 10), only from 1 April 2026, and "With your rules" takes at most 2 a day unless the extra one is A+. Evidence to tune your rules with, not a promise about the future.</p></div><span class="sp"></span><a class="btn sm gold-btn" href="#/gold">XAUUSD Gold lab</a></div>` + btTabs(STOCK_TABS, seg, 'data-btseg') + labView(seg);
+};
+App.binds.backtest = () => {
+  $$('[data-btseg]').forEach(b => b.onclick = () => { App.ui.btseg = b.dataset.btseg; LOGU().n = 25; App.render(); });
+  labBind(btSeg(), 'backtest');
+};
+
+/* ============================== XAUUSD gold ============================== */
+App.pages.gold = q => {
+  if (q && q.get && GOLD_TABS.includes(q.get('s'))) App.ui.goldseg = q.get('s');
+  const seg = goldSeg(), g = GS(), B = App.lazyNow(BT[seg].file), last = B && (B.trades || []).slice(-1)[0];
+  let h = `<div class="gold-zone"><div class="ph gold-head"><div><h1><span class="gold-coin" aria-hidden="true">Au</span>XAUUSD Gold</h1><p>Your playbook on gold in three styles, each backtested on its own: A+ setups only, from 1 April 2026, at most 2 trades a day unless the extra one is A+. Intraday trades the London and New York sessions (12:30 to 00:30 IST, all closed by 02:00 IST). Swing and positional are long only, like your stock swings.</p></div></div>`;
+  h += `<div class="grid g-main" style="margin-bottom:14px"><div class="stack">${card('Sessions in IST', `<div class="kv"><span>London</span><b>12:30 to 17:30</b><span>London + New York overlap</span><b>17:30 to 21:30 <small class="muted">usually the busiest</small></b><span>New York</span><b>21:30 to 00:30 (last entry)</b><span>Intraday square-off</span><b>02:00</b></div><p class="help" style="margin-top:8px">These are summer-time hours (about April to October). In winter, London and New York open about one hour later in IST (London about 13:30, the overlap from about 18:30). The backtest uses fixed UTC hours all year.</p>`, 'when gold intraday trades')}</div>
+    <div class="stack">${card('Lot size', `<div class="fields"><div class="field"><label for="gAcct">Account ($)</label><input id="gAcct" type="number" inputmode="decimal" min="0" step="100" value="${g.acct}"></div><div class="field"><label for="gRisk">Risk per trade (%)</label><input id="gRisk" type="number" inputmode="decimal" min="0" step="0.05" value="${g.risk}"></div><div class="field"><label for="gRiskA">A+ risk (%)</label><input id="gRiskA" type="number" inputmode="decimal" min="0" step="0.05" value="${g.riskA}"></div><div class="field"><label for="gStop">Stop distance ($ per oz)</label><input id="gStop" type="number" inputmode="decimal" min="0" step="0.1" value="${last && isNum(last.risk_usd) ? last.risk_usd : 5}"></div></div>
+      <div class="kv" style="margin-top:10px" id="gOut"></div><p class="help" style="margin-top:8px">1 standard lot = 100 ounces, so each dollar gold moves is 100 dollars a lot (1 dollar per 0.01 lot). Lots = risk ÷ (stop × 100), rounded down to 0.01. Structure decides the stop, the stop decides the size: never widen the stop to fit a bigger size. Saved on this device only.</p>`, 'from your gold account and risk')}</div></div>`;
+  h += btTabs(GOLD_TABS, seg, 'data-goldseg') + labView(seg) + '</div>';
+  return h;
+};
+App.binds.gold = () => {
+  $$('[data-goldseg]').forEach(b => b.onclick = () => { App.ui.goldseg = b.dataset.goldseg; LOGU().n = 25; App.render(); });
+  const calc = () => { const v = id => +($('#' + id) || {}).value || 0, acct = v('gAcct'), risk = v('gRisk'), riskA = v('gRiskA'), stop = v('gStop'), out = $('#gOut'); if (!out) return;
+    const lots = r => stop > 0 ? Math.floor(acct * r / 100 / (stop * 100) * 100) / 100 : 0, L = lots(risk), LA = lots(riskA);
+    out.innerHTML = `<span>Risk budget</span><b>${inr0usd(acct * risk / 100)} <small class="muted">A+ ${inr0usd(acct * riskA / 100)}</small></b><span>Lots</span><b>${L.toFixed(2)} <small class="muted">A+ ${LA.toFixed(2)}</small></b><span>Loss at the stop</span><b class="bad">${inr0usd(L * stop * 100)} <small class="muted">A+ ${inr0usd(LA * stop * 100)}</small></b>${LA > 0 && LA < 0.01 ? '' : L === 0 && stop > 0 ? '<span></span><b class="bad">Stop too wide for this risk: even 0.01 lot risks more. Skip it.</b>' : ''}`;
+    if (acct > 0) store.set('ds_gold_v1', { acct, risk, riskA }); };
+  ['gAcct', 'gRisk', 'gRiskA', 'gStop'].forEach(id => { const i = $('#' + id); if (i) i.oninput = calc; });
+  ['gAcct', 'gRisk', 'gRiskA'].forEach(id => { const i = $('#' + id); if (i) i.onchange = () => App.render(); });
+  calc(); labBind(goldSeg(), 'gold');
+};
+/* Dashboard card: one line per gold style, from the last runs (loads in the background). */
+App.goldCard = () => {
+  const rows = GOLD_TABS.map(k => [k, App.lazyNow(BT[k].file)]);
+  GOLD_TABS.forEach(k => { if (App.lazyAge(BT[k].file) > 600000) App.lazy(BT[k].file, 600000).then(() => { if (App.route().page === 'dashboard') App.render(); }).catch(() => { }); });
+  const line = ([k, B]) => { const ap = B && (B.scenarios || []).find(r => r.key === 'ap'), s = B && B.summary && B.summary.net;
+    return `<tr class="click" data-href="#/gold?s=${k}"><td><b>${BT[k].tab}</b></td><td class="n">${s ? s.n : '-'}</td><td class="n ${s ? cls(s.avg) : ''}">${s ? rv(s.avg) : '-'}</td><td class="n ${ap ? cls(ap.ret) : ''}">${ap && ap.n ? sg(ap.ret) + '%' : '-'}</td></tr>`; };
+  return `<div class="card gold-card"><div class="hd"><h2><span class="gold-coin sm" aria-hidden="true">Au</span>XAUUSD Gold</h2><span class="cap">A+ backtests since 1 April</span><span class="sp"></span><a class="btn sm gold-btn" href="#/gold">Open</a></div><div class="bd"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Style</th><th class="n">A+ trades</th><th class="n">Avg R</th><th class="n">Your rules</th></tr></thead><tbody>${rows.map(line).join('')}</tbody></table></div></div></div>`;
 };
 
 /* ============================== Weekly review, coach, learning, tax ============================== */
@@ -102,7 +176,7 @@ function coach(t, S) {
   if (t.riskP != null && t.riskP > S.riskC + 1e-5) bad(`Risked ${pct(t.riskP, 2)} of capital, above your ${pct(S.riskC, 2)} ceiling.`);
   if (t.brkd) bad(`Rule break logged: ${t.brk}.`);
   if (t.chk && t.chk.skipped && t.chk.skipped.length) warn(`Entered with ${t.chk.skipped.length} checklist rule${t.chk.skipped.length > 1 ? 's' : ''} unticked: ${t.chk.skipped.slice(0, 2).join('; ')}${t.chk.skipped.length > 2 ? '…' : ''}.`);
-  if (t.cat === 'Intraday' && t.idx > S.maxIntra) bad(`Intraday trade number ${t.idx} that day: your limit is ${S.maxIntra}.`);
+  if (t.didx > S.maxIntra) { if (t.grade === 'A+') L.push(`Trade number ${t.didx} that day, past your base limit of ${S.maxIntra}: allowed because it was A+.`); else bad(`Trade number ${t.didx} that day was ${t.grade ? t.grade : 'ungraded'}: past ${S.maxIntra} a day only A+ is allowed.`); }
   if (t.closed && t.r != null) {
     if (t.r < -1.15) bad(`Lost ${rv(t.r)}, more than the planned 1R: the stop was moved, skipped or slipped.`);
     else if (t.res === 'Loss' && tone === 'good') L.push(`A ${rv(t.r)} loss inside the plan. If the setup was valid, this is a good loss.`);
@@ -185,54 +259,8 @@ App.binds.review = () => {
     App.scanner.copyText(txt, 'Review copied'); };
 };
 
-/* ============================== Investments (item 25) ============================== */
-const LT_DAYS = 365, ST_RATE = 0.20, LT_RATE = 0.125, LT_EXEMPT = 125000;
-const H = () => { const J = JR.J(); J.lists.holdings = J.lists.holdings || []; J.lists.prices = J.lists.prices || {}; J.lists.alloc = J.lists.alloc || {}; return J.lists; };
-const priceOf = (sym, L) => { const q = ((App.lazyNow('quotes') || {}).quotes || {})[sym]; return q && isNum(q.price) ? { p: q.price, src: 'scan ' + (q.date || '') } : isNum(L.prices[sym]) ? { p: L.prices[sym], src: 'entered by you' } : { p: null, src: '' }; };
-App.pages.invest = () => {
-  const L = H(), today = todayIST(), lots = L.holdings.slice().sort((a, b) => a.sym < b.sym ? -1 : a.sym > b.sym ? 1 : a.d < b.d ? -1 : 1);
-  let h = `<div class="ph"><div><h1>Investments</h1><p>Your long-term holdings, kept apart from trading: cost, value, how long each lot has been held, when it becomes long-term for tax, and how far each holding has drifted from your target.</p></div><span class="sp"></span><button class="btn primary" type="button" id="ivAdd">${ic('plus')} Add a lot</button></div>`;
-  if (!lots.length) return h + `<div class="card"><div class="bd">${empty('No holdings yet', 'Add each purchase as its own lot (symbol, date, quantity, price). Tax depends on each lot\'s own holding period.')}</div></div>`;
-  let cost = 0, costP = 0, val = 0, stG = 0, ltG = 0, missing = 0; const by = {};
-  const rows = lots.map(x => { const pr = priceOf(x.sym, L), c = x.qty * x.price, v = pr.p != null ? x.qty * pr.p : null, days = Math.max(0, Math.round((new Date(today) - new Date(x.d)) / 864e5)), lt = days > LT_DAYS, ltOn = addDays(x.d, LT_DAYS + 1), gain = v != null ? v - c : null;
-    cost += c; if (v != null) { val += v; costP += c; by[x.sym] = (by[x.sym] || 0) + v; if (lt) ltG += gain; else stG += gain; } else missing++;
-    const ann = v != null && days >= 30 && c > 0 ? Math.pow(v / c, 365 / days) - 1 : null;
-    return `<tr><td><b>${esc(x.sym)}</b><br><small class="muted">${esc(x.d)} · ${days} d</small><br>${lt ? '<span class="pill ok">Long-term</span>' : `<span class="pill warn">Short-term</span> <small class="muted">long-term from ${esc(ltOn)} (${LT_DAYS + 1 - days} d)</small>`}</td><td class="n">${fmt0(x.qty)}</td><td class="n">${fmt(x.price)}</td><td class="n">${pr.p != null ? fmt(pr.p) : `<button class="btn sm ghost" data-ivp="${esc(x.sym)}" type="button">set price</button>`}</td><td class="n">${v != null ? inr(v) : '-'}</td>
-      <td class="n ${cls(gain)}">${gain != null ? inrS(gain) + `<br><small>${sg(100 * gain / c)}%${ann != null ? ' · ' + sg(100 * ann) + '%/yr' : ''}</small>` : '-'}</td><td class="n"><button class="btn sm ghost" data-ivx="${x.id}" type="button" aria-label="Remove this lot" title="Remove this lot">×</button></td></tr>`; }).join('');
-  const tax = Math.max(0, stG) * ST_RATE + Math.max(0, ltG - LT_EXEMPT) * LT_RATE;
-  h += `<div class="kpis" style="margin-bottom:14px">${kpi('Invested', inr(cost), `${lots.length} lots`)}${kpi('Value now', missing === lots.length ? '-' : inr(val), missing ? `${missing} lot${missing > 1 ? 's' : ''} without a price` : 'all lots priced')}${kpi('Gain', missing === lots.length ? '-' : inrS(val - costP), costP ? sg(100 * (val - costP) / costP) + '% on priced lots' : '', cls(val - costP))}
-    ${kpi('Short-term gain', inrS(stG), 'held up to 12 months', cls(stG))}${kpi('Long-term gain', inrS(ltG), 'held over 12 months', cls(ltG))}${kpi('Tax if sold today', inr(tax), 'estimate, see the note')}</div>`;
-  const tot = Object.values(by).reduce((a, b) => a + b, 0), syms = Object.keys(by).sort((a, b) => by[b] - by[a]);
-  h += `<div class="grid g-main"><div class="stack">${card('Lots', `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Lot</th><th class="n">Qty</th><th class="n">Buy</th><th class="n">Price</th><th class="n">Value</th><th class="n">Gain</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`, 'each purchase on its own')}</div>
-    <div class="stack">${card('Allocation', syms.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Holding</th><th class="n">Weight</th><th class="n">Target %</th></tr></thead><tbody>${syms.map(s => { const w = 100 * by[s] / tot, t = L.alloc[s], dr = isNum(t) ? w - t : null;
-      return `<tr><td><b>${esc(s)}</b><br>${dr == null ? '<small class="muted">set a target</small>' : Math.abs(dr) <= 5 ? '<span class="pill ok">on target</span>' : `<span class="pill warn">${dr > 0 ? 'over' : 'under'} by ${Math.abs(dr).toFixed(1)} pts</span>`}</td><td class="n">${w.toFixed(1)}%</td><td class="n"><input class="inp" data-ivt="${esc(s)}" type="number" inputmode="decimal" step="any" value="${isNum(t) ? t : ''}" placeholder="-" style="width:68px;text-align:right" aria-label="Target weight for ${esc(s)} in percent"></td></tr>`; }).join('')}</tbody></table></div>
-      <p class="help" style="margin-top:8px">A holding more than 5 points from its target is a rule-based reason to trim or add, with no prediction needed.</p>` : empty('Set a price for your lots to see the allocation', ''), 'weights against your targets')}
-    ${card('About the numbers', `<ul class="ins"><li><i></i><span><b>Prices</b> come from the scan when the repo variable <code>HOLDING_SYMBOLS</code> lists your symbols (for example <code>NIFTYBEES,JUNIORBEES</code>); otherwise use "set price".</span></li>
-      <li><i></i><span><b>Tax estimate</b>: listed equity and equity ETFs, ${ST_RATE * 100}% on short-term gains and ${LT_RATE * 100}% on long-term gains above ₹${LT_EXEMPT.toLocaleString('en-IN')} a year, before cess and without setting off losses. Rates change: check the current ones before you act.</span></li>
-      <li><i></i><span>Holdings are saved inside your journal, so they sync and back up with it. Nothing here is published.</span></li></ul>`)}</div></div>`;
-  return h;
-};
-App.binds.invest = () => {
-  lazyPage('quotes', 'invest', 300000); const L = H(), save = () => { JR.touch(); JR.persist(); App.render(); };
-  if ($('#ivAdd')) $('#ivAdd').onclick = () => {
-    const bg = document.createElement('div'); bg.className = 'modal-bg';
-    bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="Add a lot" style="max-width:520px"><div class="mh"><h2>Add a lot</h2><button class="btn sm ghost" data-x>Close</button></div><div class="mb"><div class="fgrid">
-      <div class="field w2"><label for="iv-sym">Symbol (NSE)</label><input id="iv-sym" placeholder="NIFTYBEES" autocomplete="off"></div><div class="field w2"><label for="iv-d">Buy date</label><input id="iv-d" type="date" value="${todayIST()}"></div>
-      <div class="field w2"><label for="iv-q">Quantity</label><input id="iv-q" type="number" step="any" inputmode="decimal"></div><div class="field w2"><label for="iv-p">Buy price (₹)</label><input id="iv-p" type="number" step="any" inputmode="decimal"></div></div></div>
-      <div class="mf"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Add lot</button></div></div>`;
-    document.body.appendChild(bg); setTimeout(() => $('#iv-sym', bg).focus(), 30);
-    bg.addEventListener('click', e => { if (e.target === bg || e.target.closest('[data-x]')) bg.remove();
-      if (e.target.closest('[data-ok]')) { const sym = $('#iv-sym', bg).value.trim().toUpperCase(), d = $('#iv-d', bg).value, q = +$('#iv-q', bg).value, p = +$('#iv-p', bg).value;
-        if (!sym || !d || !(q > 0) || !(p > 0)) { App.toast('Fill in the symbol, date, quantity and price'); return; }
-        L.holdings.push({ id: 'h' + Date.now().toString(36), sym, d, qty: q, price: p }); bg.remove(); save(); App.toast('Lot added'); } });
-  };
-  $$('[data-ivx]').forEach(b => b.onclick = () => { if (confirm('Remove this lot?')) { L.holdings = JR.J().lists.holdings = L.holdings.filter(x => x.id !== b.dataset.ivx); save(); } });
-  $$('[data-ivp]').forEach(b => b.onclick = () => { const v = prompt(`Current price of ${b.dataset.ivp} (₹)`); if (v && +v > 0) { L.prices[b.dataset.ivp] = +v; save(); } });
-  $$('[data-ivt]').forEach(i => i.onchange = () => { const v = i.value === '' ? null : +i.value; if (v == null) delete L.alloc[i.dataset.ivt]; else if (v >= 0 && v <= 100) L.alloc[i.dataset.ivt] = v; save(); });
-};
-
-/* the swing page needs the symbol -> sector map for the portfolio heat card */
-const swingBind = App.binds.swing;
-App.binds.swing = q => { if (swingBind) swingBind(q); if (App.lazyAge('sectors') > 3600000) App.lazy('sectors', 3600000).then(() => { if (App.route().page === 'swing') App.render(); }).catch(() => { }); };
-App.lab = { coach, oneThing, taxRows, taxCsv, taxClass, fyOf };
+/* the trade page's pre-trade check needs the symbol -> sector map (portfolio heat) */
+const tradeBind = App.binds.trade;
+App.binds.trade = q => { if (tradeBind) tradeBind(q); if (App.lazyAge('sectors') > 3600000) App.lazy('sectors', 3600000).then(() => { if (App.route().page === 'trade') App.render(); }).catch(() => { }); };
+App.lab = { coach, oneThing, taxRows, taxCsv, taxClass, fyOf, BT, labView, goldLots };
 })();

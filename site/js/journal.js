@@ -16,7 +16,7 @@ const REGIMES = ['Trending', 'Range', 'Volatile'], EVENTS = ['No', 'Yes'], XTYPE
 const SET0 = JR.SET0 = { capital: 200000, riskN: .005, riskA: .0075, riskC: .01, openMax: .02, dayCaution: .005, dayStop: .0075, dayLim: .01, weekAlert: .015, weekReview: .02, monthHalf: .03, monthStop: .05, maxIntra: 2, be: .1, expN: 50, minN: 5, wdTol: .1 };
 JR.SETKEYS = [['capital', 'Trading capital (₹)', 'n'], ['riskN', 'Normal risk per trade', 'p'], ['riskA', 'A+ risk per trade', 'p'], ['riskC', 'Hard ceiling per trade', 'p'], ['openMax', 'Max total open risk', 'p'],
   ['dayCaution', 'Daily: caution', 'p'], ['dayStop', 'Daily: stop new trades', 'p'], ['dayLim', 'Daily: loss limit', 'p'], ['weekAlert', 'Weekly: reduce size', 'p'], ['weekReview', 'Weekly: review mode', 'p'],
-  ['monthHalf', 'Monthly: half size', 'p'], ['monthStop', 'Monthly: stop', 'p'], ['maxIntra', 'Max intraday trades a day', 'i'], ['be', 'Breakeven band (± R)', 'd'], ['minN', 'Trades before a pattern counts', 'i']];
+  ['monthHalf', 'Monthly: half size', 'p'], ['monthStop', 'Monthly: stop', 'p'], ['maxIntra', 'Trades a day (more only if A+)', 'i'], ['be', 'Breakeven band (± R)', 'd'], ['minN', 'Trades before a pattern counts', 'i']];
 const TDEF = { d: '', tm: '', inst: '', cat: 'Intraday', setup: '', tf: '', dir: 'Long', grade: null, cap: null, qty: null, entry: null, sl: null, tgt: null, exit: null, chg: null, emo: null, brk: null, xt: null, note: '', ovr: null, exp: null, mae: null, mfe: null, reg: null, evt: null };
 const NUMK = ['cap', 'qty', 'entry', 'sl', 'tgt', 'exit', 'chg', 'ovr', 'mae', 'mfe'];
 const LSK = 'tji_journals_v1', LSL = 'tji_last_v1', LSU = 'tji_ui_v1', LSD = 'tji_deleted_v1';
@@ -54,7 +54,7 @@ JR.enrich = function (J) {
   J = J || JR.J(); const S = J.set, cap = S.capital || 1;
   const T = J.trades.map((t, i) => Object.assign({}, t, { _i: i })).filter(t => ymd(t.d));
   T.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0) || ((a.tm || '') < (b.tm || '') ? -1 : (a.tm || '') > (b.tm || '') ? 1 : 0) || a._i - b._i);
-  const dayIntra = {};
+  const dayIntra = {}, dayAll = {};
   T.forEach(t => {
     const sgn = t.dir === 'Short' ? -1 : 1;
     t.q = t.qty > 0 ? t.qty : (t.cap > 0 && t.entry > 0 ? Math.floor(t.cap / t.entry + 1e-6) : null);
@@ -75,6 +75,7 @@ JR.enrich = function (J) {
     t.ec = t.emo ? (RISKY.has(t.emo) ? 'Risky' : 'Calm') : null; t.gr = GRANK[t.grade] || 0;
     t.src = /DS:/.test(t.note || '') ? 'Scanner' : 'Own idea';
     if (t.cat === 'Intraday') { dayIntra[t.d] = (dayIntra[t.d] || 0) + 1; t.idx = dayIntra[t.d]; }
+    dayAll[t.d] = (dayAll[t.d] || 0) + 1; t.didx = dayAll[t.d];                 // trade number that day, every style (your 2-a-day rule)
     t.open = !t.closed;
   });
   return T;
@@ -93,15 +94,17 @@ JR.riskStatus = () => {
   const sum = a => a.reduce((x, t) => x + (t.net || 0), 0), closed = T.filter(t => t.closed && t.net != null);
   const day = sum(closed.filter(t => t.d === td)) / cap, week = sum(closed.filter(t => t.wk === wk)) / cap, month = sum(closed.filter(t => t.mkey === mo)) / cap;
   const openRisk = T.filter(t => t.open && t.risk).reduce((x, t) => x + t.risk, 0) / cap, intra = T.filter(t => t.d === td && t.cat === 'Intraday').length;
+  const todayT = T.filter(t => t.d === td), trades = todayT.length, over = todayT.filter(t => t.didx > S.maxIntra && t.grade !== 'A+');
   const fullLoss = closed.filter(t => t.d === td && t.r != null && t.r <= -0.9).length; const msgs = []; let level = 'ok';
   const bump = (l, m) => { msgs.push([l, m]); if (l === 'bad' || (l === 'warn' && level === 'ok')) level = l; };
   if (day <= -S.dayLim) bump('bad', `Day is over: down ${pct(-day)} (limit ${pct(S.dayLim)}). No recovery trade.`); else if (day <= -S.dayStop) bump('bad', `Stop new trades today: down ${pct(-day)}.`); else if (day <= -S.dayCaution) bump('warn', `Caution: down ${pct(-day)} today.`);
   if (week <= -S.weekReview) bump('bad', `Weekly review mode: down ${pct(-week)} this week. Never increase risk to recover.`); else if (week <= -S.weekAlert) bump('warn', `Reduce size: down ${pct(-week)} this week.`);
   if (month <= -S.monthStop) bump('bad', `Monthly stop: down ${pct(-month)}. Review the last 30 to 50 trades.`); else if (month <= -S.monthHalf) bump('warn', `Half size: down ${pct(-month)} this month.`);
   if (openRisk > S.openMax) bump('warn', `Open risk ${pct(openRisk)} is above your ${pct(S.openMax)} cap.`);
-  if (intra >= S.maxIntra) bump('warn', `${intra} intraday trades today: that is your maximum.`);
+  if (over.length) bump('bad', `Trade ${over.map(t => '#' + t.didx + ' (' + (t.inst || '?') + ', ' + (t.grade || 'ungraded') + ')').join(', ')} today is past your ${S.maxIntra} a day and not A+.`);
+  else if (trades >= S.maxIntra) bump('warn', `${trades} trades today: your base limit. Another one only if it is A+.`);
   if (fullLoss >= 2) bump('bad', 'Two full-risk losses today: trading stops for the day.'); else if (fullLoss === 1) bump('warn', 'One full-risk loss today: take a 20 to 30 minute reset before the next idea.');
-  return { level, msgs, day, week, month, openRisk, intra, fullLoss, cap, S };
+  return { level, msgs, day, week, month, openRisk, intra, trades, over: over.length, fullLoss, cap, S };
 };
 JR.sizeFor = (entry, sl, grade) => { const S = JR.J().set, rp = grade === 'A+' ? S.riskA : S.riskN, risk = S.capital * rp, per = Math.abs(entry - sl); return { rp, risk, qty: per > 0 ? Math.floor(risk / per) : 0, ceiling: S.capital * S.riskC, capital: S.capital }; };
 JR.findByTag = tag => JR.enrich().find(t => (t.note || '').includes('DS:' + tag));
@@ -152,7 +155,10 @@ JR.RULES = {
   Swing: ['Weekly trend is up, or price is at weekly support', 'Daily CHoCH and BOS, with an FVG or order-block zone', 'Price pulled back into the zone', '1H rejection, then a close above the 9 EMA on at least 1.5x volume', '15m entry trigger fired (no chasing)',
     'Sector index is not falling', 'No results within 14 days', 'At least 2R of room to resistance', 'Risk is within my per-trade limit'],
   Options: ['1H agrees with the direction', '15m bias agrees', '5m CHoCH, BOS, FVG and order block', 'Pullback into the 5m zone', '5m close beyond the 9 EMA', 'Delta between 0.40 and 0.60', 'Not an expiry-day afternoon', 'Fewer than 2 losses today', 'Risk is within my per-trade limit'],
-  Intraday: ['15m bias agrees', '5m structure: CHoCH, BOS and a zone', 'Volume at least 1.5x', 'Before 15:00, with the exit planned by 15:10', 'Fewer than 2 intraday trades today', 'Risk is within my per-trade limit'] };
+  Intraday: ['15m bias agrees', '5m structure: CHoCH, BOS and a zone', 'Volume at least 1.5x', 'Before 15:00, with the exit planned by 15:10', 'Risk is within my per-trade limit'],
+  Commodity: ['Gold: inside the London or New York session (12:30 to 00:30 IST)', 'Structure, zone and 9 EMA close on my timeframes', 'Stop from structure, lots from the stop (Lot size card)', 'No high-impact US data in the next 30 minutes', 'Risk is within my per-trade limit'] };
+JR.DAYRULE = 'Fewer than 2 trades today, or this one is A+';            // your daily rule, added to every checklist
+Object.keys(JR.RULES).forEach(k => JR.RULES[k].splice(JR.RULES[k].length - 1, 0, JR.DAYRULE));
 JR.gate = function (o, done) {
   const rules = JR.RULES[o.cat] || JR.RULES.Swing, bg = document.createElement('div'); bg.className = 'modal-bg gate-bg';
   bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="Pre-trade checklist" style="max-width:560px"><div class="mh"><h2>Pre-trade checklist</h2><span class="pill info">${esc(o.cat || 'Swing')}</span></div><div class="mb">

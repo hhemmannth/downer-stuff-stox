@@ -81,10 +81,11 @@ App.pages.dashboard = () => {
   h += `</div><div class="stack">`;
   h += `<div class="card"><div class="hd"><h2>Risk status</h2><span class="sp"></span><span class="pill ${lvl[0] === 'good' ? 'ok' : lvl[0]}">${lvl[1]}</span></div><div class="bd"><div class="kv">
     <span>Today</span><b class="${cls(rs.day)}">${pct(rs.day, 2)}</b><span>This week</span><b class="${cls(rs.week)}">${pct(rs.week, 2)}</b><span>This month</span><b class="${cls(rs.month)}">${pct(rs.month, 2)}</b>
-    <span>Open risk</span><b>${pct(rs.openRisk, 2)} <small class="muted">of ${pct(rs.S.openMax, 1)}</small></b><span>Intraday trades today</span><b>${rs.intra} / ${rs.S.maxIntra}</b><span>Risk per trade</span><b>${pct(rs.S.riskN, 2)} · A+ ${pct(rs.S.riskA, 2)}</b></div>
+    <span>Open risk</span><b>${pct(rs.openRisk, 2)} <small class="muted">of ${pct(rs.S.openMax, 1)}</small></b><span>Trades today</span><b class="${rs.over ? 'bad' : ''}">${rs.trades} / ${rs.S.maxIntra} <small class="muted">more only if A+</small></b><span>Risk per trade</span><b>${pct(rs.S.riskN, 2)} · A+ ${pct(rs.S.riskA, 2)}</b></div>
     ${rs.msgs.length ? `<ul class="ins" style="margin-top:12px">${rs.msgs.map(([k, t]) => `<li class="${k}"><i></i><span>${esc(t)}</span></li>`).join('')}</ul>` : '<p class="help" style="margin-top:10px">All limits are clear. Success today = following your rules, not P&L.</p>'}</div></div>`;
   h += `<div class="card"><div class="hd"><h2>Insights</h2><span class="sp"></span><a class="btn sm" href="#/analytics">Analytics</a></div><div class="bd"><ul class="ins">${App.analytics.insights(all, all.C, J.set).slice(0, 4).map(([k, t]) => `<li class="${k}"><i></i><span>${t}</span></li>`).join('')}</ul>
     ${all.n >= 2 ? `<div style="margin-top:10px" id="dEq"></div>` : ''}</div></div>`;
+  if (App.goldCard) h += App.goldCard();
   const ev = (nw.events || []).slice(0, 6), flags = nw.risk_flags || [];
   h += `<div class="card"><div class="hd"><h2>Events and risk</h2><span class="sp"></span><a class="btn sm" href="#/news">News</a></div><div class="bd">${flags.map(f => App.ui.callout('warn', esc(f))).join('<div style="height:8px"></div>')}${flags.length ? '<div style="height:10px"></div>' : ''}
     ${ev.length ? `<ul class="timeline">${ev.map(e => `<li class="${e.impact === 'high' ? 'bad' : ''}"><time>${esc(e.date)}${e.time ? ' · ' + esc(e.time) : ''} · ${e.days === 0 ? 'today' : e.days === 1 ? 'tomorrow' : 'in ' + e.days + ' days'}</time>${esc(e.title)}</li>`).join('')}</ul>` : App.ui.empty('No events loaded', '')}</div></div>`;

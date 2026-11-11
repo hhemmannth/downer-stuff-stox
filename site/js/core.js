@@ -32,6 +32,7 @@ const ICONS = {
   news: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/>',
   playbook: '<path d="M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2z"/><path d="M8 7h6M8 11h6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  gold: '<path d="M3 18h7l1-4H4zM13 18h7l-1-4h-7zM8 12h7l-1-4H9z"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', pulse: '<path d="M3 12h4l3-7 4 14 3-7h4"/>', refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -44,12 +45,13 @@ const ic = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k] || ''}</
 const NAV = [
   ['Today', [['dashboard', 'Dashboard', 'home']]],
   ['Scanner', [['swing', 'Swing', 'swing', 'primary'], ['options', 'Nifty options', 'options'], ['intraday', 'Intraday', 'intraday']]],
-  ['Journal', [['journal', 'Trades', 'journal'], ['analytics', 'Analytics', 'analytics'], ['review', 'Weekly review', 'playbook'], ['invest', 'Investments', 'market']]],
+  ['Gold', [['gold', 'XAUUSD Gold', 'gold']]],
+  ['Journal', [['journal', 'Trades', 'journal'], ['analytics', 'Analytics', 'analytics'], ['review', 'Weekly review', 'playbook']]],
   ['Research', [['backtest', 'Backtest lab', 'analytics']]],
   ['Context', [['market', 'Market', 'market'], ['news', 'News & events', 'news']]],
   ['You', [['playbook', 'Playbook & rules', 'playbook'], ['health', 'System health', 'pulse'], ['settings', 'Settings', 'settings']]]];
 const TABS = [['dashboard', 'Today', 'home'], ['swing', 'Swing', 'swing'], ['journal', 'Journal', 'journal'], ['analytics', 'Stats', 'analytics']];
-const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade', backtest: 'Backtest lab', review: 'Weekly review', invest: 'Investments' };
+const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade', backtest: 'Backtest lab', review: 'Weekly review', gold: 'XAUUSD Gold' };
 
 App.route = () => { const h = location.hash.replace(/^#\/?/, ''); const [p, q] = h.split('?'); return { page: p || 'dashboard', q: new URLSearchParams(q || '') }; };
 App.go = (page, q) => { location.hash = '#/' + page + (q ? '?' + new URLSearchParams(q).toString() : ''); };
