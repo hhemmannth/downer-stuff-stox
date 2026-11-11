@@ -32,15 +32,16 @@ def _ts(s):
 def minutes(now, s):
     t = _ts(s); return None if t is None else (now - t).total_seconds() / 60
 
-def decide(now, runs, hb, trading=True):
+def decide(now, runs, hb, trading=True, window=None, name='market-loop'):
     """Pure decision, so it can be tested. runs: market-loop runs from the API (newest first). hb: the loop heartbeat or None.
     Returns (action, reason, run_id) with action in skip / ok / start / restart."""
-    if not trading: return 'skip', 'not a trading day', None
-    if not (OPEN <= now.time() <= LAST): return 'skip', f'outside {OPEN:%H:%M}-{LAST:%H:%M} IST', None
+    if not trading: return 'skip', 'not a trading day' if name == 'market-loop' else 'the gold market is closed', None
+    o, l = window or (OPEN, LAST)
+    if not (o <= now.time() <= l): return 'skip', f'outside {o:%H:%M}-{l:%H:%M} IST', None
     active = [r for r in runs if r.get('status') in ACTIVE]
     running = [r for r in active if r.get('status') == 'in_progress']
-    if not active: return 'start', 'no market-loop run was running or queued', None
-    if not running: return 'ok', 'a market-loop run is queued and about to start', None
+    if not active: return 'start', f'no {name} run was running or queued', None
+    if not running: return 'ok', f'a {name} run is queued and about to start', None
     r = running[0]; age_run = minutes(now, r.get('run_started_at') or r.get('created_at')) or 0
     beat = minutes(now, (hb or {}).get('last_tick') or (hb or {}).get('started')) if hb else None
     if hb and _ts(hb.get('started')) and _ts(r.get('run_started_at') or r.get('created_at')) and _ts(hb['started']) < _ts(r.get('run_started_at') or r.get('created_at')) - dt.timedelta(minutes=2):
@@ -50,9 +51,9 @@ def decide(now, runs, hb, trading=True):
         return 'restart', f"the running loop has been silent for {'over ' + str(int(age_run)) if beat is None else int(beat)} min", r.get('id')
     return 'ok', f'loop alive, last tick {beat:.0f} min ago', None
 
-def heartbeat(repo, token):
+def heartbeat(repo, token, path='data/health/loop.json'):
     try:
-        js = gh('GET', f'/repos/{repo}/contents/data/health/loop.json?ref=gh-pages', token)
+        js = gh('GET', f'/repos/{repo}/contents/{path}?ref=gh-pages', token)
         return json.loads(base64.b64decode(js['content']).decode())
     except Exception as ex:
         print(f'heartbeat unavailable: {ex}'); return None
@@ -65,8 +66,34 @@ def push(title, body):
     try: notify.post(os.environ.get('NTFY_URL', 'https://ntfy.sh').rstrip('/'), topic, title, body, 'rotating_light', click.rstrip('/') + '/#/health' if click else '')
     except Exception as ex: print(f'push failed: {ex}')
 
+def gold_market_open(now):
+    """Gold trades from Sunday 22:00 UTC (23:00 in the northern winter) to Friday 22:00 UTC, with a short daily break. Weekends are closed."""
+    u = now.astimezone(dt.timezone.utc); wd, h = u.weekday(), u.hour
+    if wd == 5: return False
+    if wd == 6: return h >= 22
+    if wd == 4: return h < 22
+    return True
+
+def main_gold(now, repo, token, ref):
+    """--gold: keep the gold loop alive through every gold session (Sunday night to Friday night IST), the same way."""
+    trading = gold_market_open(now); full = (dt.time(0, 0), dt.time(23, 59, 59))
+    if not trading: print('gold watchdog:', decide(now, [], None, trading, full, 'gold-loop')[1]); return 0
+    runs = gh('GET', f'/repos/{repo}/actions/workflows/gold-loop.yml/runs?per_page=15', token).get('workflow_runs', [])
+    hb = heartbeat(repo, token, 'data/health/gold_loop.json')
+    action, reason, run_id = decide(now, runs, hb, trading, full, 'gold-loop')
+    print(f'gold watchdog {now:%a %H:%M} IST: {action} ({reason})')
+    if action == 'restart':
+        try: gh('POST', f'/repos/{repo}/actions/runs/{run_id}/cancel', token); time.sleep(15)
+        except Exception as ex: print(f'cancel failed: {ex}')
+    if action in ('start', 'restart'):
+        gh('POST', f'/repos/{repo}/actions/workflows/gold-loop.yml/dispatches', token, {'ref': ref})
+        if action == 'restart' or os.environ.get('GOLD_WATCHDOG_PUSH', '').strip().lower() in ('on', 'all'):
+            push(f"Gold loop {'restarted' if action == 'restart' else 'started'} by the watchdog", f"{now:%H:%M} IST: {reason}. Gold scans resume within about 5 minutes.")
+    return 0
+
 def main():
     now = loop.now_ist(); repo = os.environ['GITHUB_REPOSITORY']; token = os.environ['GITHUB_TOKEN']; ref = os.environ.get('GITHUB_REF_NAME') or 'main'
+    if '--gold' in sys.argv[1:]: return main_gold(now, repo, token, ref)
     trading = loop.trading_day(now.date())
     if not trading or not (OPEN <= now.time() <= LAST):
         print('watchdog:', decide(now, [], None, trading)[1]); return 0

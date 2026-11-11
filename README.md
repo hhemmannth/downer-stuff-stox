@@ -102,6 +102,21 @@ Needs A and the `ANGEL_*` secrets. Actions > tradebook > Run workflow (tick forc
 3. Optional, stronger: once step 2 works, run `supabase/require_2fa.sql` once in the SQL Editor. The database itself then refuses your journal without a verified code (the scanner user is exempt). To undo, run the two `drop policy` lines at the bottom of that file.
 Lost phone: Supabase > Authentication > Users > your user > remove the factor, then sign in with your password.
 
+## Live gold (XAUUSD): every session, long and short
+The **gold-loop** workflow scans gold all through the gold week (Sunday night to Friday night IST, every session: Asia, London, New York). Every 5 minutes it runs the gold **intraday** engine; once an hour, just after the hourly candle closes, the gold **swing** and **positional** engines. All three look for **long and short** setups (swing and positional shorts are found on the mirrored chart with the same rules), and only **A+** setups (score 8 to 10) are listed or taken.
+
+A setup that triggers becomes a **tracked gold trade** with your rules (half at T1, a quarter at T2, the rest at T3 or the stop; intraday closed by 02:00 IST; swing after 28 days, positional after 120) and a **phone alert** with entry, stop, targets, the stop in dollars and the lot size. **It never places an order:** you check the chart and place it yourself. Your limits apply: at most 2 gold trades open at once (your 2% open-risk cap at 0.75% each; `GOLD_MAX_OPEN` to change) and past 2 a day only A+. Intraday entries run 04:00 to 00:30 IST (`GOLD_SESSIONS=london_ny` for London and New York only, 12:30 to 00:30).
+
+The Gold page shows it live (refreshes every minute while open): market and session, price, the A+ setups now with a Log button, the tracked trades with R now, and the closed ones. The dashboard's gold card has a one-line live summary.
+
+**Set it up (once):**
+1. Upload the files (the two new workflows are `gold-loop.yml` and `gold-watchdog.yml`).
+2. Optional variables: `GOLD_ACCOUNT` (your gold account in dollars) and `GOLD_RISK_PCT` (default 0.75) put the lot size in each alert.
+3. Actions > **gold-loop** > Run workflow to start it now (it also starts by itself on Sunday night and every 6 hours).
+4. On cron-job.org add one more job, every 10 minutes, every day: `POST https://api.github.com/repos/hhemmannth/downer-stuff-stox/actions/workflows/gold-watchdog.yml/dispatches`, body `{"ref":"main"}`, same headers and token as the watchdog job. GitHub skips scheduled runs at times, and the gold loop has to restart every ~6 hours (each loop queues the next one itself; the watchdog is the backup).
+
+**Limits.** Data is Yahoo `GC=F` (COMEX gold futures): free, but it can lag the live market by a few minutes and sits a few dollars from spot XAUUSD, so check the levels on your broker's chart before you act. A 5-minute scan is not tick-by-tick: fast moves can run past an entry between scans. The loop uses GitHub Actions almost all week (about 115 hours); public repositories do not pay for minutes, but GitHub's terms are aimed at building and testing software, and very heavy use can get Actions limited on an account. If that ever happens, `GOLD_SESSIONS=london_ny` and fewer scans are the fallback, or a small always-on server. Indian residents: XAUUSD CFDs on offshore platforms are not permitted under RBI/FEMA rules (not legal advice); MCX gold is the onshore route.
+
 ## Round 6: A+ only, this financial year, 2 a day, and gold
 **Every backtest now counts A+ setups only (score 8 to 10), from 1 April 2026.** The replay itself skips anything below A+, so a weaker setup can never block an A+ one on the same stock. Repo variables: `BACKTEST_FROM` (a date, or `all` for every year the data has), `MIN_SCORE` (default 8).
 
@@ -109,7 +124,7 @@ Lost phone: Supabase > Authentication > Users > your user > remove the factor, t
 
 **Backtest lab: one view per style.** Intraday, Swing, Positional and Nifty options, each with its own KPIs and win rate, "With your rules" (the P&L of the way you trade, with an account curve), the equity curve in R, breakdown tables and a **trade log** (the trades your rules took, or every A+ signal; 25 at a time; CSV download).
 
-**XAUUSD Gold (sidebar > Gold).** Intraday, swing and positional on gold, each backtested on its own, in a gold-themed page with a lot-size calculator (1 lot = 100 oz; your gold account and risk are saved on the device). Data: COMEX gold futures from Yahoo (`GC=F`, change with `GOLD_SYMBOL`), the closest free intraday history; levels differ from spot by a few dollars. Intraday trades the London and New York sessions (12:30 to 00:30 IST, closed by 02:00 IST) on a session clock that never splits a trading day at midnight. Swing and positional are long only, like your stock swings. Costs 0.35 dollars per ounce per round trip (`GOLD_COST`); overnight swap is not modelled. Gold is not scanned live (it trades mostly outside the market loop's hours). Indian residents: XAUUSD CFDs on offshore platforms are not permitted under RBI/FEMA rules; MCX gold is the onshore route.
+**XAUUSD Gold (sidebar > Gold).** Intraday, swing and positional on gold, each backtested on its own, in a gold-themed page with a lot-size calculator (1 lot = 100 oz; your gold account and risk are saved on the device). Data: COMEX gold futures from Yahoo (`GC=F`, change with `GOLD_SYMBOL`), the closest free intraday history; levels differ from spot by a few dollars. Intraday trades every session (entries 04:00 to 00:30 IST, closed by 02:00 IST) on a session clock that never splits a trading day at midnight. Swing and positional trade long and short. Costs 0.35 dollars per ounce per round trip (`GOLD_COST`); overnight swap is not modelled. Gold is scanned live by the gold loop (see Live gold). Indian residents: XAUUSD CFDs on offshore platforms are not permitted under RBI/FEMA rules; MCX gold is the onshore route.
 
 **Pre-trade check.** Portfolio heat moved off the top of the Swing page into a small badge in the corner of the Order ticket: this stock's sector crowding, what you already hold in that sector, stocks that move with it, today's trade count against your rule, the grade and the open risk. Tap it before you place the order.
 
@@ -166,6 +181,7 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 | `RISK_PCT`, `RISK_PCT_APLUS`, `OPEN_RISK_CAP`, `DAY_STOP_PCT`, `WEEK_STOP_PCT`, `MONTH_HALF_PCT`, `MONTH_STOP_PCT`, `MAX_TRADES_PER_DAY`, `STOP_AFTER_LOSSES` | your account rules for the backtest's "With your rules" |
 | `BACKTEST_FROM`, `MIN_SCORE`, `APLUS_OVERFLOW` | backtest window (default 2026-04-01, `all` for everything), minimum score (default 8 = A+), and `off` for a strict 2 a day |
 | `GOLD_SYMBOL`, `GOLD_COST` | gold data symbol (default `GC=F`) and round-trip cost in dollars per ounce (default 0.35) |
+| `GOLD_SESSIONS`, `GOLD_MAX_OPEN`, `GOLD_ACCOUNT`, `GOLD_RISK_PCT` | `london_ny` to skip Asia; most gold trades open at once (default 2); gold account in dollars and A+ risk % for lot sizes in alerts |
 
 **Not included:** scan results behind your login (your repo is public, so the strategy code is public anyway), and second-by-second live prices or a real-time engine (they need an always-on machine). Use Angel One's own price alerts and your stop-loss orders for second-level protection.
 
@@ -195,7 +211,7 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 **Market data.** The year of daily candles comes from Yahoo (about a minute for the whole Nifty 500, and it matched Angel One on every close we compared). Each morning a sample of stocks plus Nifty is checked against Angel One and shown under System health > Data sources. Angel One serves the Nifty candles, the hourly candles for swing candidates and the live option prices. Intraday stocks use Yahoo by design.
 
 ## Tests (no internet needed)
-`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_backtest_tf.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`, `test_rules.py`
+`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_backtest_tf.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`, `test_rules.py`, `test_gold_live.py`
 
 ## Limits
 Without the Angel One secrets, data is Yahoo Finance (unofficial, can be delayed) and option premiums are model prices. With them, premiums at your stop and targets are still model estimates around the live price. Results dates come from Yahoo and can be missing (check NSE). Rules-based candidates, not investment advice.

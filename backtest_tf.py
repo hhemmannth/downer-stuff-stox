@@ -118,7 +118,14 @@ def _day_bounds(f5):
 # day (COMEX: 23:00 UTC to 22:00 UTC, an hour later in US summer) never splits across two dates and the daily candle ends at midnight.
 NSE_SESSION = dict(tz=IST, first=9 * 60 + 30, last=15 * 60, square=15 * 60 + 15)
 GOLD_TZ = 'Etc/GMT-2'                                                 # = UTC+2 (the sign is reversed in these zone names)
-GOLD_SESSION = dict(tz=GOLD_TZ, first=9 * 60, last=21 * 60, square=22 * 60 + 30)    # London open to New York afternoon: 07:00-19:00 UTC, all closed 20:30 UTC (12:30-00:30 and 02:00 IST)
+GOLD_ALL = dict(tz=GOLD_TZ, first=30, last=21 * 60, square=22 * 60 + 30)              # every session: entries 22:30-19:00 UTC (04:00-00:30 IST), all closed 20:30 UTC (02:00 IST)
+GOLD_LNY = dict(tz=GOLD_TZ, first=9 * 60, last=21 * 60, square=22 * 60 + 30)            # London and New York only: entries 07:00-19:00 UTC (12:30-00:30 IST)
+GOLD_SESSION = GOLD_ALL                                                                 # your choice: scan and trade through every session
+
+def gold_session(env=None):
+    """GOLD_SESSIONS=london_ny limits gold intraday entries to London and New York; anything else (the default) is every session."""
+    v = str((env if env is not None else os.environ).get('GOLD_SESSIONS', '') or '').strip().lower()
+    return GOLD_LNY if v in ('london_ny', 'london-ny', 'lny') else GOLD_ALL
 
 def replay_intraday(sym, f5, f15, cfg=None, min_score=4, hist_bars=375, bias_bars=250, regimes=None, prefilter=True, cost_pct=None, first_day=None,
                     session=None, bar_min=5, bias_min=15, cost_abs=None, stock=True):
@@ -287,6 +294,18 @@ def gold_daily(sym, period, now, fetch=None):
     today = pd.Timestamp(now).tz_convert(GOLD_TZ).tz_localize(None).normalize()           # the session still trading now
     return f[f.index < today]
 
+def mirror_k(*frames):
+    """The mirror constant for shorts: prices become K - p, so a falling market looks like a rising one to the long-only swing engines."""
+    return float(2 * max(float(f.High.max()) for f in frames if f is not None and len(f)))
+
+def both_sides(longs, shorts_mirrored, K):
+    """Gold swing and positional trade both ways: the short trades were found on the mirrored chart, so their prices are mirrored back.
+    R, the outcome and the dollar stop distance are the same in both pictures (the mirror keeps every distance)."""
+    for t in longs: t['side'] = 'long'
+    for t in shorts_mirrored:
+        t['side'] = 'short'; t['entry'], t['sl'] = round(K - t['entry'], 2), round(K - t['sl'], 2); t['risk_pct'] = round(100 * abs(t['entry'] - t['sl']) / t['entry'], 2)
+    return sorted(longs + shorts_mirrored, key=lambda t: (t['exit_t'], t['entry_t']))
+
 def _from(fd, rules):
     """The first day a replay may open a trade: after the warm-up AND inside the window (1 April 2026 by default)."""
     st = bt.start_stamp(rules)
@@ -374,16 +393,18 @@ def main_segment(a):
             fa = gold_intraday(sym, '60d', '5m', now); fb = gold_intraday(sym, '60d', '15m', now)
             if fa is None or fb is None or not len(fa): print('No gold intraday data downloaded.', file=sys.stderr); return 2
             fd = _from(_warm([fa], now, 3), rules); print(f'backtest: replaying gold intraday from {str(fd)[:10]}', flush=True)
-            new = replay_intraday(GOLD_LABEL, fa, fb, regimes=regimes, first_day=fd, min_score=ms, cost_abs=cost, stock=False, session=GOLD_SESSION)
+            new = replay_intraday(GOLD_LABEL, fa, fb, regimes=regimes, first_day=fd, min_score=ms, cost_abs=cost, stock=False, session=gold_session())
             trades = bt.merge_trades(prev.get('trades', []), new); first = min([str(fd)[:10]] + ([prev['window']['from']] if prev.get('window', {}).get('from') else []))
             window = {'from': first, 'to': str(fa.index[-1])[:10], 'note': 'grows every week'}
         elif style == 'swing':
             h1 = gold_intraday(sym, '730d', '1h', now)
             if h1 is None or len(h1) < 100: print('No gold hourly data downloaded.', file=sys.stderr); return 2
-            trades = bt.replay_symbol(GOLD_LABEL, gd, h1, 'Gold', regimes, min_score=ms, start_at=start, day_tz=GOLD_TZ, stock=False, cost_abs=cost)
+            run = lambda dd, hh: bt.replay_symbol(GOLD_LABEL, dd, hh, 'Gold', regimes, min_score=ms, start_at=start, day_tz=GOLD_TZ, stock=False, cost_abs=cost)
+            K = mirror_k(gd, h1); trades = both_sides(run(gd, h1), run(sc.invert(gd, K), sc.invert(h1, K)), K)
             window = {'from': str(h1.index[0])[:10], 'to': str(gd.index[-1])[:10]}
         else:
-            trades = replay_positional(GOLD_LABEL, gd, 'Gold', regimes, None, CFG_GP, min_score=ms, start_at=start, stock=False, cost_abs=cost)
+            run = lambda dd: replay_positional(GOLD_LABEL, dd, 'Gold', regimes, None, CFG_GP, min_score=ms, start_at=start, stock=False, cost_abs=cost)
+            K = mirror_k(gd); trades = both_sides(run(gd), run(sc.invert(gd, K)), K)
             window = {'from': str(gd.index[0])[:10], 'to': str(gd.index[-1])[:10]}
         params = dict(source=sym, cost_usd=cost, seconds=round(time.time() - t0)); universe = 1
     else:                                                                           # options

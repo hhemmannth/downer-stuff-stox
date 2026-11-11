@@ -78,11 +78,11 @@ GOLD_NOTE = ('Gold = XAUUSD price action, replayed on COMEX gold futures (Yahoo 
              '(the basis), so levels differ slightly from your broker\'s XAUUSD chart; structure and timing are the same. Times are shown in IST.')
 GOLD_COST_NOTE = 'Costs: 0.35 dollars per ounce on a round trip (spread plus commission), taken off every trade in R. Overnight swap or financing on held positions is NOT modelled.'
 SEGMENT_NOTES.update({
-    'gold_intraday': [GOLD_NOTE, 'Gold intraday = your intraday engine on gold: 5-minute structure and trigger with the 15-minute CHoCH bias, long and short, volume at least 1.5x. Entries only in the London and New York sessions (12:30 to 00:30 IST), everything closed by 02:00 IST.',
+    'gold_intraday': [GOLD_NOTE, 'Gold intraday = your intraday engine on gold: 5-minute structure and trigger with the 15-minute CHoCH bias, long and short, volume at least 1.5x. Entries in every session (Asia, London, New York: 04:00 to 00:30 IST; GOLD_SESSIONS=london_ny for London and New York only), everything closed by 02:00 IST.',
                       GOLD_COST_NOTE, 'Free 5-minute history reaches back about 60 days, so this view GROWS every Saturday.'],
-    'gold_swing': [GOLD_NOTE, 'Gold swing = your swing playbook on gold: daily structure, 1H confirmation (rejection in the zone, close back over the 9 EMA on 1.5x volume), long only like your stock swings, stop below the daily order block with a 0.25 ATR buffer, T1 1R half (no early breakeven), T2 2R a quarter with the stop to entry, T3 3R, closed after 28 days.',
-                   'The weekly-trend and 2R-room hold-backs are applied. ' + GOLD_COST_NOTE],
-    'gold_positional': [GOLD_NOTE, 'Gold positional = the swing playbook one timeframe up on gold: weekly structure, daily trigger, long only, held up to 120 days.', GOLD_COST_NOTE]})
+    'gold_swing': [GOLD_NOTE, 'Gold swing = your swing playbook on gold: daily structure, 1H confirmation (rejection in the zone, close back over the 9 EMA on 1.5x volume), long AND short (shorts are found on the mirrored chart with the same rules), stop beyond the daily order block with a 0.25 ATR buffer, T1 1R half (no early breakeven), T2 2R a quarter with the stop to entry, T3 3R, closed after 28 days.',
+                   'The weekly-trend (against the trade) and 2R-room hold-backs are applied. ' + GOLD_COST_NOTE],
+    'gold_positional': [GOLD_NOTE, 'Gold positional = the swing playbook one timeframe up on gold: weekly structure, daily trigger, long and short, held up to 120 days.', GOLD_COST_NOTE]})
 ASSUMPTIONS = [
     'Entry is the close of the 1H confirmation candle (the 15m precision entry cannot be replayed: 15-minute history is about 60 days).',
     'Stop, targets and management are the live rules: half at T1 with no early breakeven, a quarter at T2 and stop to entry, the rest at T3, expiry after 28 days; the stop is assumed to fill before a target inside the same candle.',
@@ -347,13 +347,14 @@ def dimensions(segment, live):
     usd = lambda t: t.get('risk_usd') if t.get('risk_usd') is not None else abs(t['entry'] - t['sl'])
     stop_gi = ('stop', 'By stop width', 'dollars per ounce', 'Stop', lambda t: 'stop under $4' if usd(t) < 4 else 'stop $4 to $8' if usd(t) < 8 else 'stop over $8', ['stop under $4', 'stop $4 to $8', 'stop over $8'])
     stop_gs = ('stop', 'By stop width', 'dollars per ounce', 'Stop', lambda t: 'stop under $40' if usd(t) < 40 else 'stop $40 to $80' if usd(t) < 80 else 'stop over $80', ['stop under $40', 'stop $40 to $80', 'stop over $80'])
-    sess = ('session', 'By session', 'when the trade opened (IST)', 'Session', lambda t: 'London (12:30-17:30)' if '12:30' <= t['entry_t'][11:16] < '17:30' else 'London + New York (17:30-21:30)' if '17:30' <= t['entry_t'][11:16] < '21:30' else 'New York (21:30 on)',
-            ['London (12:30-17:30)', 'London + New York (17:30-21:30)', 'New York (21:30 on)'])
+    hm = lambda t: t['entry_t'][11:16]
+    sess = ('session', 'By session', 'when the trade opened (IST)', 'Session', lambda t: 'Asia (04:00-12:30)' if '02:30' <= hm(t) < '12:30' else 'London (12:30-17:30)' if hm(t) < '17:30' else 'London + New York (17:30-21:30)' if hm(t) < '21:30' else 'New York (21:30 on)',
+            ['Asia (04:00-12:30)', 'London (12:30-17:30)', 'London + New York (17:30-21:30)', 'New York (21:30 on)'])
     gside = ('side', 'Long and short', '', 'Side', lambda t: 'Long' if t.get('side', 'long') == 'long' else 'Short', None)
     if segment == 'options': extra = [side, hour, vix, dte, reg, wd, mon]
     elif segment == 'intraday': extra = [side, hour, vol, stop_i, reg, wd, mon]
     elif segment == 'gold_intraday': extra = [gside, sess, hour, vol, stop_gi, reg, wd, mon]
-    elif segment in ('gold_swing', 'gold_positional'): extra = [reg, vol, stop_gs, wd, mon]
+    elif segment in ('gold_swing', 'gold_positional'): extra = [gside, reg, vol, stop_gs, wd, mon]
     elif segment == 'positional': extra = [reg, vol, stop, sec, wd, mon]
     else: extra = [reg, vol, stop, sec, wd, mon]
     return G + extra

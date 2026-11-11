@@ -5,10 +5,17 @@ import json, os
 import datetime as dt
 import pandas as pd
 
-KEEP_DAYS = {'swing': 30, 'options': 5, 'intraday': 5}            # how long closed signals and dropped setups stay listed
+KEEP_DAYS = {'swing': 30, 'options': 5, 'intraday': 5, 'gold_intraday': 5, 'gold_swing': 30, 'gold_positional': 120}   # how long closed signals and dropped setups stay listed
 SWING_EXPIRY_DAYS = 28                                            # calendar days a swing signal may stay open
 POSITIONAL_EXPIRY_DAYS = 120                                      # positional trades (weekly structure, daily trigger) are held for weeks or months
-SWINGLIKE = ('swing', 'positional')                               # sections that follow the swing rules: half at T1 with no early breakeven, a quarter at T2
+SWINGLIKE = ('swing', 'positional', 'gold_swing', 'gold_positional')   # sections that follow the swing rules: half at T1 with no early breakeven, a quarter at T2
+GOLD_CLOCK = 'Etc/GMT-2'                                          # gold's session clock (UTC+2): its trading day ends at this clock's midnight
+GOLD_SQUARE = (22, 30)                                            # gold intraday is closed by 22:30 on that clock = 20:30 UTC = 02:00 IST
+
+def gold_square_off(made):
+    """When a gold intraday trade opened at `made` must be closed: the end of the London/New York session it belongs to."""
+    t = pd.Timestamp(made); t = t.tz_localize('Asia/Kolkata') if t.tzinfo is None else t
+    g = t.tz_convert(GOLD_CLOCK); return g.normalize() + pd.Timedelta(hours=GOLD_SQUARE[0], minutes=GOLD_SQUARE[1])
 SQUARE_OFF = (15, 15)                                             # options and intraday are closed by 15:15 IST
 LAST_ENTRY = '15:00'                                              # and no new options or intraday trade after 15:00 IST
 REASONS = {'BROKEN': 'Zone broken: price closed through the zone, so the setup is cancelled.',
@@ -84,11 +91,14 @@ def walk(sig, bars, now):
             sig['last'] = round(float(row.Close), 2); sig['r_now'] = _r(sig, sig['last']); sig['checked_to'] = pd.Timestamp(ts).isoformat()
     if sig['status'] == 'ACTIVE':
         made = pd.Timestamp(sig['created'])
-        if sig['section'] in ('options', 'intraday'):
+        if sig['section'] == 'gold_intraday':
+            cut = gold_square_off(made); nw = pd.Timestamp(now); nw = nw.tz_localize('Asia/Kolkata') if nw.tzinfo is None else nw
+            if nw >= cut: out.append(_close(sig, now, sig['last'], 'EXPIRED', f"Squared off at {sig['last']} (end of the New York session, 02:00 IST)."))
+        elif sig['section'] in ('options', 'intraday'):
             cut = made.normalize() + pd.Timedelta(hours=SQUARE_OFF[0], minutes=SQUARE_OFF[1])
             if now >= (cut if cut.tzinfo is not None else cut.tz_localize('Asia/Kolkata')): out.append(_close(sig, now, sig['last'], 'EXPIRED', f"Squared off at {sig['last']} (15:15 rule)."))
         else:
-            life = POSITIONAL_EXPIRY_DAYS if sig['section'] == 'positional' else SWING_EXPIRY_DAYS
+            life = POSITIONAL_EXPIRY_DAYS if sig['section'] in ('positional', 'gold_positional') else SWING_EXPIRY_DAYS
             if (now - (made if made.tzinfo is not None else made.tz_localize('Asia/Kolkata'))).days > life:
                 out.append(_close(sig, now, sig['last'], 'EXPIRED', f'Closed after {life} days without reaching T3.'))
     return out
@@ -116,7 +126,7 @@ def update(led, section, items, states, bars, now, can_open=True):
         w = led['watch'].pop(k); st = states.get((w['symbol'], w['direction']), 'GONE')
         if st == 'GONE': continue                                   # not scanned this run (e.g. data missing): keep nothing, decide next time
         w.update(dropped=now.isoformat(timespec='minutes'), reason=REASONS.get(st, REASONS[None]), state=st); led['dropped'].append(w)
-    cut = now - pd.Timedelta(days=KEEP_DAYS[section])
+    cut = now - pd.Timedelta(days=KEEP_DAYS.get(section, 30))
     led['signals'] = [s for s in led['signals'] if s['status'] == 'ACTIVE' or pd.Timestamp(s.get('closed') or s['created']) >= (cut if pd.Timestamp(s.get('closed') or s['created']).tzinfo is not None else cut.tz_localize(None))]
     led['dropped'] = [d for d in led['dropped'] if pd.Timestamp(d['dropped']) >= cut][-200:]
     return events
