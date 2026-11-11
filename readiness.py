@@ -64,14 +64,14 @@ def check_cron(env, now, is_trading, fetch_runs):
     if prev in days: return (OK, 'Outside timer', f'cron-job.org started the watchdog on {prev:%a %d %b}')
     return (WARN, 'Outside timer', f'no manual-trigger run of the watchdog on {prev:%a %d %b}: check your cron-job.org job and its GitHub token')
 
-def check_token(env, now):
-    v = env.get('CRON_TOKEN_EXPIRES', '').strip()
-    if not v: return (INFO, 'Token expiry', 'set the repo variable CRON_TOKEN_EXPIRES (YYYY-MM-DD) to get a reminder before your cron-job token expires')
+def check_token(env, now, var='CRON_TOKEN_EXPIRES', name='Token expiry', what='cron-job', fix='update cron-job.org'):
+    v = env.get(var, '').strip()
+    if not v: return (INFO, name, f'set the repo variable {var} (YYYY-MM-DD) to get a reminder before your {what} token expires')
     try: left = (dt.date.fromisoformat(v) - now.date()).days
-    except Exception: return (WARN, 'Token expiry', f'CRON_TOKEN_EXPIRES "{v}" is not a date (use YYYY-MM-DD)')
-    if left < 0: return (FAIL, 'Token expiry', f'your cron-job GitHub token expired {-left} days ago: the outside timer is not working')
-    if left <= 14: return (WARN if left > 3 else FAIL, 'Token expiry', f'your cron-job GitHub token expires in {left} days: create a new one and update cron-job.org')
-    return (OK, 'Token expiry', f'{left} days left')
+    except Exception: return (WARN, name, f'{var} "{v}" is not a date (use YYYY-MM-DD)')
+    if left < 0: return (FAIL, name, f'your {what} GitHub token expired {-left} days ago: it no longer works')
+    if left <= 14: return (WARN if left > 3 else FAIL, name, f'your {what} GitHub token expires in {left} days: create a new one and {fix}')
+    return (OK, name, f'{left} days left')
 
 def check_data(swing_iso, now):
     try: g = dt.datetime.fromisoformat(swing_iso).astimezone(IST)
@@ -93,7 +93,9 @@ def run_checks(env, now, is_trading, probes=None, fetch_runs=None, swing_iso=Non
     R = [check_angel(env, P['angel'])]
     ok, msg = P['yahoo'](); R.append((OK if ok else FAIL, 'Yahoo Finance', msg if ok else 'not reachable: ' + msg))
     ok, msg = P['universe'](); R.append((OK if ok else WARN, 'Nifty 500 list', msg if ok else 'live list unavailable, the local fallback list will be used (' + msg + ')'))
-    R.append(check_channels(env)); R.append(check_cron(env, now, is_trading, fetch_runs or (lambda: []))); R.append(check_token(env, now)); R.append(check_data(swing_iso or '', now)); R.append(check_backup(backup, now))
+    R.append(check_channels(env)); R.append(check_cron(env, now, is_trading, fetch_runs or (lambda: []))); R.append(check_token(env, now))
+    if env.get('BACKUP_REPO', '').strip() or env.get('BACKUP_TOKEN_EXPIRES', '').strip(): R.append(check_token(env, now, 'BACKUP_TOKEN_EXPIRES', 'Backup token', 'backup', 'update the BACKUP_TOKEN secret'))
+    R.append(check_data(swing_iso or '', now)); R.append(check_backup(backup, now))
     return R
 
 def summarize(R):
