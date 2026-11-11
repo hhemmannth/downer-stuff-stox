@@ -25,17 +25,31 @@ function forwardTest(B) {
 
 App.pages.backtest = () => {
   const B = App.lazyNow('backtest');
-  let h = `<div class="ph"><div><h1>Backtest lab</h1><p>Your swing playbook replayed on past data with the same engine and the same trade rules the live scanner uses. Evidence to tune your rules with, not a promise about the future.</p></div></div>`;
+  let h = `<div class="ph"><div><h1>Backtest lab</h1><p>Your swing playbook replayed on past data with the same engine and the same trade rules the live scanner uses. The first view takes <b>every</b> signal; "With your rules" then trades it the way your journal rules say. Evidence to tune your rules with, not a promise about the future.</p></div></div>`;
   if (!B || !B.summary) return h + `<div class="card"><div class="bd">${empty('No backtest yet', `It runs every Saturday morning. To run it now, open <a href="${App.actionsUrl()}/workflows/backtest.yml" target="_blank" rel="noopener">GitHub → backtest → Run workflow</a>. It takes 30 to 45 minutes, and this page fills in when it finishes.`)}</div></div>`;
   const s = B.summary.net, g = B.summary.gross, S = B.summary, mc = B.montecarlo || {}, o = S.outcomes || {};
   h += `<p class="help" style="margin:-8px 0 14px">${esc((B.window || {}).from || '')} to ${esc((B.window || {}).to || '')} · ${B.universe} most liquid Nifty 500 stocks · run ${esc(dateIST(B.generated_at))} <small class="muted">${esc(ago(B.generated_at))}</small></p>`;
+  h += `<p class="help" style="margin:0 0 8px"><b>Every signal the engine produced</b> (all grades from 4 up, no daily limit, no risk rules). This is the engine's raw edge, not your trading.</p>`;
   h += `<div class="kpis" style="margin-bottom:14px">${kpi('Trades', s.n, `about ${Math.round(S.trades_per_year)} a year`)}${kpi('Win rate', s.win == null ? '-' : s.win + '%', `win ${rv(s.avg_win)} · loss ${rv(s.avg_loss)}`)}${kpi('Expectancy', rv(s.avg), `after costs · ${rv(g.avg)} before`, cls(s.avg))}
     ${kpi('Profit factor', s.pf == null ? '-' : s.pf, 'wins ÷ losses', s.pf >= 1 ? 'good' : 'bad')}${kpi('Max drawdown', s.max_dd + 'R', `longest losing run ${s.streak}`)}${kpi('Average hold', (S.avg_hold_days == null ? '-' : S.avg_hold_days) + ' d', `${o.TARGET || 0} T3 · ${o.SL || 0} stopped`)}</div>`;
+  const SC = B.scenarios || [], AC = B.account || {}, CV = B.scenario_curves || {};
+  const scRow = r => `<tr><td><b>${esc(r.name)}</b></td><td class="n">${r.n}<br><small class="muted">${r.per_year} a year</small></td><td class="n">${r.win == null ? '-' : r.win + '%'}</td><td class="n ${cls(r.avg)}">${rv(r.avg)}</td><td class="n">${r.pf == null ? '-' : r.pf}</td>
+    <td class="n ${cls(r.ret)}">${r.n ? sg(r.ret) + '%' : '-'}${r.cagr != null ? `<br><small class="muted">${sg(r.cagr)}% a year</small>` : ''}</td><td class="n">${r.n ? '-' + r.max_dd + '%' : '-'}</td><td class="n">${r.streak}</td>
+    <td><small class="muted">${r.rules ? `${r.skipped.day_cap} over the daily cap · ${r.skipped.open_cap} over open risk · ${r.skipped.loss_limit} stopped by loss limits` : 'none: every trade taken'}</small></td></tr>`;
+  const SCOL = { all: 'sun', a: 'ink', ap: 'brand', p10: 'good' }, SLAB = { all: 'every signal', a: 'A and A+', ap: 'A+ only', p10: 'perfect 10' };
+  const best = SC.filter(r => r.rules && r.n >= 30).sort((a, b) => b.avg - a.avg)[0], few = SC.filter(r => r.rules && r.n > 0 && r.n < 30);
+  let acct = '';
+  if (SC.length) acct = card('With your rules', `<p class="help" style="margin:0 0 10px">The same trades, taken the way you trade: only setups at or above the score, the first ${AC.max_per_day} to trigger each day, ${AC.risk}% risk (${AC.risk_aplus}% for A+), open risk up to ${AC.open_cap}%, no more entries after a ${AC.day_stop}% losing day, a ${AC.week_stop}% losing week or a ${AC.month_stop}% losing month, half size once a month is down ${AC.month_half}%. A 100-unit account that compounds.</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Scenario</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Avg R</th><th class="n">Profit factor</th><th class="n">Account</th><th class="n">Max drawdown</th><th class="n">Worst run</th><th>Not taken</th></tr></thead><tbody>${SC.map(scRow).join('')}</tbody></table></div>
+    ${(CV.labels || []).length > 2 ? `<div style="margin-top:12px"><div id="btSc"></div><div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px">${SC.map(r => `<span class="help" style="margin:0"><b style="color:${({ all: 'var(--sun)', a: 'var(--ink-2)', ap: 'var(--brand)', p10: 'var(--good)' })[r.key]}">&#9632;</b> ${esc(SLAB[r.key])}</span>`).join('')}</div></div>` : ''}
+    <div style="height:10px"></div>${best ? callout(best.avg > 0.05 ? 'good' : best.avg > -0.05 ? 'info' : 'bad', `<b>Best with your rules: ${esc(best.name)}.</b> ${best.n} trades, ${rv(best.avg)} per trade after costs, ${sg(best.ret)}% on the account with a worst fall of -${best.max_dd}%. Taking every signal: ${rv(s.avg)} per trade.${best.avg > s.avg + 0.05 ? ' Being selective is what separates a loss from a profit here.' : ''}${best.n < 100 ? ` With only ${best.n} trades this is a lead, not proof: a few lucky trades can move the average.` : ''}`)
+      : callout('warn', 'None of your rule sets has 30 trades yet, which is too few to judge.')}
+    ${few.length ? `<p class="help" style="margin-top:8px">Fewer than 30 trades, so read as a hint only: ${few.map(r => esc(r.name) + ' (' + r.n + ')').join('; ')}.</p>` : ''}`, 'the same trades, your way', `<span class="sp"></span><span class="pill info">quick re-run: Actions &gt; backtest &gt; quick</span>`);
   const verdict = s.n < 50 ? ['warn', `<b>Only ${s.n} trades.</b> That is too few to trust any number on this page. Run the backtest on more stocks (set "top" to 0 for all 500).`]
     : s.avg >= 0.2 ? ['good', `<b>The playbook had a positive edge after costs:</b> ${rv(s.avg)} per trade over ${s.n} trades. Expect losing runs of about ${mc.streak_p50 || s.streak} trades in a normal year.`]
     : s.avg > 0 ? ['info', `<b>A thin edge after costs:</b> ${rv(s.avg)} per trade. Costs and slippage matter a lot at this level: look at which grades, regimes and filters below carry the result.`]
-    : ['bad', `<b>No edge after costs on this window:</b> ${rv(s.avg)} per trade. Before changing rules, check the grade and regime tables: the loss is often concentrated in a few conditions you can simply skip.`];
-  h += callout(verdict[0], verdict[1]) + '<div style="height:14px"></div>';
+    : ['bad', `<b>Taking every signal, there was no edge after costs on this window:</b> ${rv(s.avg)} per trade. That is not how you trade: see "With your rules" below, and the grade and regime tables, where the loss is often concentrated in a few conditions you can simply skip.`];
+  h += callout(verdict[0], verdict[1]) + '<div style="height:14px"></div>' + (acct ? acct + '<div style="height:14px"></div>' : '');
   h += `<div class="grid g-main" style="margin-bottom:14px"><div class="stack">${card('Equity curve', '<div id="btEq"></div>', 'running total in R, after costs, one unit of risk per trade')}
     ${statTable('By grade', B.by.grade, 'does your scorecard separate good setups from weak ones?', 'Grade')}${statTable('By score', B.by.score, '', 'Score /10')}${statTable('By market regime', B.by.regime, 'the regime on the day before entry', 'Regime')}</div>
     <div class="stack">${forwardTest(B)}
@@ -61,6 +75,8 @@ App.pages.backtest = () => {
 App.binds.backtest = () => {
   lazyPage('backtest', 'backtest');
   const B = App.lazyNow('backtest'), el = $('#btEq'); if (!B || !el || !(B.equity || []).length) return;
+  const sc = $('#btSc'), CV = B.scenario_curves;
+  if (sc && CV && (CV.labels || []).length > 2) sc.innerHTML = App.charts.line(['all', 'a', 'ap', 'p10'].filter(k => CV.series[k]).map(k => ({ pts: CV.series[k], c: ({ all: 'sun', a: 'ink', ap: 'brand', p10: 'good' })[k], w: k === 'p10' || k === 'ap' ? 2.4 : 1.6 })), { W: sc.clientWidth || 640, H: 220, labels: CV.labels, fmt: v => v.toFixed(0), label: 'Account value by scenario, starting at 100' });
   const draw = () => { el.innerHTML = App.charts.line([{ pts: [0].concat(B.equity.map(x => x[1])), c: B.summary.net.total >= 0 ? 'good' : 'bad', area: true }], { W: el.clientWidth || 640, H: 230, zero: true, labels: [B.equity[0][0]].concat(B.equity.map(x => x[0])), fmt: v => v.toFixed(0) + 'R', label: 'Backtest equity curve in R' }); };
   draw();
 };
