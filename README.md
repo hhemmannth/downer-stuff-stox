@@ -105,6 +105,26 @@ Lost phone: Supabase > Authentication > Users > your user > remove the factor, t
 **Backtest lab (Research > Backtest lab).** The `backtest` workflow replays your swing playbook on about two years of history with the live engine (`swing.analyse`) and the live trade tracker (`signals.walk`), every Saturday 07:00 IST or by hand (Actions > backtest > Run workflow; 30 to 45 minutes for the 250 most liquid stocks, set `top` to 0 for all 500). The page shows expectancy after costs, win rate, profit factor, drawdown, an equity curve, results by grade, score, confirmation, zone, context, market regime, sector, weekday, month, volume and stop width, a first-60% / last-40% split, rule variants (volume 1.2x / 2.0x, stop buffer 0.15 / 0.40 ATR, narrow zones) that only count as better when they win in both halves, a Monte Carlo of what a year can look like at 0.5%, 0.75% and 1% risk, and a live forward test that compares tracked signals with the backtest.
 What it cannot replay, also stated on the page: the 15m precision entry (the entry is the 1H confirmation close), results-date and sector hold-backs, and stocks that left the Nifty 500. The window is about two years because free hourly history stops there.
 
+## Backtest lab: four separate playbooks
+The Backtest lab has four tabs, one per playbook, each replayed with the same engine the live scanner uses and kept apart.
+
+| Tab | What is replayed | History | Workflow |
+|---|---|---|---|
+| **Swing** | 1D structure, 1H trigger, long only, 250 most liquid Nifty 500 stocks | about 2 years | `backtest` (Saturday 07:00) |
+| **Positional** | the swing playbook one timeframe up: WEEKLY structure, DAILY trigger, long only, held up to 120 days | about 10 years | `backtest` (same run, tick "positional") |
+| **Intraday** | 5m structure with the 15m CHoCH bias, stocks, LONG and SHORT, volume 1.5x, nothing after 15:00, square off 15:15 | Yahoo's last 60 days, growing weekly | `backtest-intraday` (Saturday 08:30) |
+| **Nifty options** | the options engine on the Nifty index (5m, 15m bias, 1H alignment, PDH/PDL sweep), CALLs and PUTs, no expiry-day afternoons, stop after 2 losses a day | Yahoo's last 60 days, growing weekly | `backtest-intraday` |
+
+**Intraday and options grow.** Free 5-minute history only reaches back about 60 days, so each Saturday run replays the last 60 days and ADDS the new trades to the ones already saved (same stock, side and entry time = same trade). Expect a small sample at first (a few dozen to a couple of hundred trades) and a more useful one after a few months. The page says so. To try for more history on day one, run `backtest-intraday` by hand with **deep** set to a number of days (for example 400): it asks Angel One for older 5m and 15m candles in windows and stops by itself when Angel One has nothing older. This is experimental, because nobody can promise how far back the free feed goes.
+
+**Options use MODELLED premiums.** There is no free historical option price data. The strike is picked by delta like the live app, and the premium is priced with Black-Scholes on the previous day's India VIX (held constant), at the index level and time of each leg (T1 half, T2 a quarter, the rest at T3, the stop or 15:15). R is measured on the premium: (value at exit - premium paid) / (premium paid - modelled premium at the index stop, never less than 8% of the premium). Costs: 40 rupees plus 0.15% of the premium turnover, lot 65. The index signals are real; the premium results are an estimate, and real results will usually be worse (volatility changes, skew, bid-ask spread).
+
+**Positional is my definition.** You had not given positional rules, so I read it as the swing playbook one timeframe up (see the table). If yours is different (other timeframes, other targets, trailing by weekly structure), tell me and I will change it.
+
+**No look-ahead, and tested that way.** Each decision uses only candles that had closed at that moment (a 15m bar counts only once it has ended). `test_backtest_tf.py` checks it with an engine whose decisions depend on the exact data it is given: cutting the history at any point leaves every earlier trade unchanged. It also caught a real pandas 3 timestamp-unit bug during development.
+
+**Your rules for each tab.** "With your rules" works on every tab: min score, first N to trigger each day, risk sizing, open-risk ceiling, day/week/month loss limits, and for options "stop after 2 losing trades in a day" (`STOP_AFTER_LOSSES`, default 2 for options only). Quick mode (Actions > backtest > quick) re-applies new rules to all four saved results in about a minute.
+
 **Backtest: your rules, and quick re-runs.** The first view of the Backtest lab takes every signal the engine produced (all grades from 4 up, no daily limit, no risk rules): that is the engine's raw edge, not your trading. **With your rules** then trades the same trades the way your journal rules say: a minimum score (6, 8 or a perfect 10), the first 2 setups to trigger each day, 0.5% risk (0.75% for A+), open risk up to 2%, no more entries after a 0.75% losing day, a 2% losing week or a 5% losing month, half size once a month is down 3%, on a 100-unit account that compounds. Change the numbers with repo variables `RISK_PCT`, `RISK_PCT_APLUS`, `OPEN_RISK_CAP`, `DAY_STOP_PCT`, `WEEK_STOP_PCT`, `MONTH_HALF_PCT`, `MONTH_STOP_PCT`, `MAX_TRADES_PER_DAY`. After a full run, Actions > backtest > Run workflow with **quick** ticked re-applies new rules to the saved trades in about a minute, with no new downloads.
 Candidates are taken first-come, first-served (no peeking at later signals that day), so the result is what you could actually have done. It still cannot apply the results-date and sector hold-backs, and the entry is the 1H confirmation close, not your 15m entry.
 
@@ -128,7 +148,7 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 | `REGIME_FILTER` | `hold` = hold back setups when the backtest says this regime is weak (default: a note only) |
 | `ALERT_CHARTS`, `NTFY_ACTIONS` | `off` switches off chart pictures or action alerts |
 | `CRON_TOKEN_EXPIRES`, `BACKUP_TOKEN_EXPIRES`, `CRON_JOB_EXPECTED` | token expiry dates (YYYY-MM-DD) for readiness reminders, and an off switch for the cron-job check |
-| `RISK_PCT`, `RISK_PCT_APLUS`, `OPEN_RISK_CAP`, `DAY_STOP_PCT`, `WEEK_STOP_PCT`, `MONTH_HALF_PCT`, `MONTH_STOP_PCT`, `MAX_TRADES_PER_DAY` | your account rules for the backtest's "With your rules" |
+| `RISK_PCT`, `RISK_PCT_APLUS`, `OPEN_RISK_CAP`, `DAY_STOP_PCT`, `WEEK_STOP_PCT`, `MONTH_HALF_PCT`, `MONTH_STOP_PCT`, `MAX_TRADES_PER_DAY`, `STOP_AFTER_LOSSES` | your account rules for the backtest's "With your rules" |
 
 **Not included:** scan results behind your login (your repo is public, so the strategy code is public anyway), and second-by-second live prices or a real-time engine (they need an always-on machine). Use Angel One's own price alerts and your stop-loss orders for second-level protection.
 
@@ -158,7 +178,7 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 **Market data.** The year of daily candles comes from Yahoo (about a minute for the whole Nifty 500, and it matched Angel One on every close we compared). Each morning a sample of stocks plus Nifty is checked against Angel One and shown under System health > Data sources. Angel One serves the Nifty candles, the hourly candles for swing candidates and the live option prices. Intraday stocks use Yahoo by design.
 
 ## Tests (no internet needed)
-`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`
+`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_backtest_tf.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`
 
 ## Limits
 Without the Angel One secrets, data is Yahoo Finance (unofficial, can be delayed) and option premiums are model prices. With them, premiums at your stop and targets are still model estimates around the live price. Results dates come from Yahoo and can be missing (check NSE). Rules-based candidates, not investment advice.

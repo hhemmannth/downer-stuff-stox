@@ -7,6 +7,8 @@ import pandas as pd
 
 KEEP_DAYS = {'swing': 30, 'options': 5, 'intraday': 5}            # how long closed signals and dropped setups stay listed
 SWING_EXPIRY_DAYS = 28                                            # calendar days a swing signal may stay open
+POSITIONAL_EXPIRY_DAYS = 120                                      # positional trades (weekly structure, daily trigger) are held for weeks or months
+SWINGLIKE = ('swing', 'positional')                               # sections that follow the swing rules: half at T1 with no early breakeven, a quarter at T2
 SQUARE_OFF = (15, 15)                                             # options and intraday are closed by 15:15 IST
 LAST_ENTRY = '15:00'                                              # and no new options or intraday trade after 15:00 IST
 REASONS = {'BROKEN': 'Zone broken: price closed through the zone, so the setup is cancelled.',
@@ -70,9 +72,9 @@ def walk(sig, bars, now):
                 if name in sig['hits']: continue
                 if (long and hi >= lvl) or (not long and lo <= lvl):
                     sig['hits'][name] = pd.Timestamp(ts).isoformat(timespec='minutes'); n = len(sig['hits'])
-                    if n == 1 and sig['section'] == 'swing':        # your rules: no breakeven just because +1R was reached
+                    if n == 1 and sig['section'] in SWINGLIKE:        # your rules: no breakeven just because +1R was reached
                         sig['booked'].append((0.5, lvl)); out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book half. Keep the original stop: no early breakeven."))
-                    elif n == 2 and sig['section'] == 'swing':
+                    elif n == 2 and sig['section'] in SWINGLIKE:
                         sig['booked'].append((0.25, lvl)); sig['stop'] = sig['entry']; out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book a quarter, protect at entry {sig['entry']} and trail behind each new daily higher low."))
                     elif n == 1: sig['booked'].append((0.5, lvl)); sig['stop'] = sig['entry']; out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book half, move the stop to entry {sig['entry']}."))
                     elif n == 2: sig['booked'].append((0.25, lvl)); sig['stop'] = ladder[0][1]; out.append(_event(sig, ts, name.lower(), f"{name} {lvl} hit ({_r(sig, lvl):+.1f}R): book a quarter, move the stop to {ladder[0][1]}."))
@@ -85,8 +87,10 @@ def walk(sig, bars, now):
         if sig['section'] in ('options', 'intraday'):
             cut = made.normalize() + pd.Timedelta(hours=SQUARE_OFF[0], minutes=SQUARE_OFF[1])
             if now >= (cut if cut.tzinfo is not None else cut.tz_localize('Asia/Kolkata')): out.append(_close(sig, now, sig['last'], 'EXPIRED', f"Squared off at {sig['last']} (15:15 rule)."))
-        elif (now - (made if made.tzinfo is not None else made.tz_localize('Asia/Kolkata'))).days > SWING_EXPIRY_DAYS:
-            out.append(_close(sig, now, sig['last'], 'EXPIRED', f'Closed after {SWING_EXPIRY_DAYS} days without reaching T3.'))
+        else:
+            life = POSITIONAL_EXPIRY_DAYS if sig['section'] == 'positional' else SWING_EXPIRY_DAYS
+            if (now - (made if made.tzinfo is not None else made.tz_localize('Asia/Kolkata'))).days > life:
+                out.append(_close(sig, now, sig['last'], 'EXPIRED', f'Closed after {life} days without reaching T3.'))
     return out
 
 def update(led, section, items, states, bars, now, can_open=True):

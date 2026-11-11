@@ -129,5 +129,5 @@ check('quick mode: re-applies new account rules to the saved trades and keeps th
 no = tempfile.mkdtemp()
 try: bt.resim(no); msg = ''
 except SystemExit as e: msg = str(e)
-check('quick mode: before any full run it says what to do instead of failing', 'full backtest first' in msg)
+check('quick mode: before any full run it says what to do instead of failing', 'backtest first' in msg)
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED'); raise SystemExit(1 if fails else 0)

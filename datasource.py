@@ -211,8 +211,12 @@ class Angel:
     def candles(self, token, interval, days, exchange='NSE'):
         now = dt.datetime.now(IST); start = now - dt.timedelta(days=min(days, MAX_DAYS[interval]))
         start = start.replace(hour=0, minute=0) if interval == '1d' else start.replace(hour=9, minute=15)
+        return self.candles_between(token, interval, start, now, exchange)
+
+    def candles_between(self, token, interval, start, end, exchange='NSE'):
+        """Candles for an explicit window (Angel One caps one request at MAX_DAYS[interval] days, so longer history is fetched in windows)."""
         data = self.call('/rest/secure/angelbroking/historical/v1/getCandleData', dict(exchange=exchange, symboltoken=str(token), interval=INTERVAL[interval],
-                         fromdate=start.strftime('%Y-%m-%d %H:%M'), todate=now.strftime('%Y-%m-%d %H:%M')), gap=self.gap)
+                         fromdate=start.strftime('%Y-%m-%d %H:%M'), todate=end.strftime('%Y-%m-%d %H:%M')), gap=self.gap)
         if not data: raise AngelError('no candles returned')
         df = pd.DataFrame(data, columns=['t'] + COLS); t = pd.to_datetime(df['t'])
         idx = pd.DatetimeIndex(t.dt.tz_localize(None) if t.dt.tz is not None else t).normalize() if interval == '1d' else pd.DatetimeIndex(t if t.dt.tz is not None else t.dt.tz_localize(IST))
@@ -399,3 +403,22 @@ def option_quotes(expiry_iso, strikes, kind):
         STATS['option_quotes'] = f'{len(out)} live strikes'; return out
     except Exception as ex:
         STATS['option_quotes'] = f'failed: {ex}'[:160]; return {}
+
+
+def deep_intraday(symbol, interval, days, now=None):
+    """Intraday candles going back up to `days` days, fetched from Angel One in windows (its 5m limit is about 95 days per request). Stops
+    after two empty windows in a row, because nobody can promise how far back free history goes. Returns a frame, or None."""
+    a = angel()
+    if a is None or interval not in INTERVAL or interval == '1d': return None
+    tk = a.token_for(symbol)
+    if tk is None: return None
+    end = now or dt.datetime.now(IST); step = dt.timedelta(days=MAX_DAYS[interval]); floor = end - dt.timedelta(days=days); frames, empties = [], 0
+    while end > floor and empties < 2:
+        start = max(floor, end - step)
+        try: frames.append(a.candles_between(tk, interval, start.replace(hour=9, minute=15), end)); empties = 0
+        except AngelError as ex:
+            if 'no candles' in str(ex): empties += 1
+            else: raise
+        end = start - dt.timedelta(minutes=1)
+    if not frames: return None
+    out = pd.concat(frames); out = out[~out.index.duplicated(keep='last')].sort_index(); _count(interval, 'Angel One (deep history)', len(frames)); return out
