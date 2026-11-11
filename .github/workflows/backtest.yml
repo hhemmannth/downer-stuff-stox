@@ -1,8 +1,9 @@
 name: backtest
 
-# Backtesting lab: replays your swing playbook on about two years of history with the live engine and the live trade tracker, then
-# publishes data/backtest.json for the Backtest lab page. Runs every Saturday morning, or by hand from the Actions tab.
-# The 250 most liquid Nifty 500 stocks take roughly 30-45 minutes; all 500 take about twice that.
+# Backtesting lab, stock playbooks: SWING (about two years, 1D structure with 1H trigger) and POSITIONAL (about ten years of daily history,
+# weekly structure with daily trigger), each replayed with the live engine and the live trade tracker. Runs every Saturday morning, or by hand.
+# INTRADAY and NIFTY OPTIONS are in the `backtest-intraday` workflow. Quick mode re-applies your account rules to all four saved results in about a minute.
+# The 250 most liquid Nifty 500 stocks take roughly 30-45 minutes for swing and about 10 for positional; all 500 take about twice that.
 on:
   schedule:
     - cron: '30 1 * * 6'               # Saturday 07:00 IST
@@ -15,8 +16,12 @@ on:
         description: Also test the rule variants (volume, stop buffer, zone width) on the 120 most liquid stocks
         type: boolean
         default: true
+      positional:
+        description: Also run the positional backtest (weekly structure, daily trigger, about ten years of history)
+        type: boolean
+        default: true
       quick:
-        description: Quick mode (about 1 minute) - only re-apply your account rules to the trades saved by the last full run
+        description: Quick mode (about 1 minute) - only re-apply your account rules to the trades saved by the last full runs (all four playbooks)
         type: boolean
         default: false
 
@@ -50,6 +55,8 @@ jobs:
           TOP_IN: ${{ inputs.top }}
           VAR_IN: ${{ inputs.variants }}
           QUICK_IN: ${{ inputs.quick }}
+          POS_IN: ${{ inputs.positional }}
+          STOP_AFTER_LOSSES: ${{ vars.STOP_AFTER_LOSSES }}
           RISK_PCT: ${{ vars.RISK_PCT }}
           RISK_PCT_APLUS: ${{ vars.RISK_PCT_APLUS }}
           OPEN_RISK_CAP: ${{ vars.OPEN_RISK_CAP }}
@@ -63,6 +70,7 @@ jobs:
           top="${TOP_IN:-250}"; extra="--variants"
           if [ "$VAR_IN" = "false" ]; then extra=""; fi
           python backtest.py --out pub/data --top "$top" $extra
+          if [ "$POS_IN" != "false" ]; then python backtest.py --segment positional --out pub/data --top "$top"; fi
       - name: Publish
         run: python publish.py push pub "$START" "backtest"
         env:

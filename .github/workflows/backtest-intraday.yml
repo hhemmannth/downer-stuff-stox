@@ -1,0 +1,82 @@
+name: backtest-intraday
+
+# Backtesting lab, INTRADAY (stocks, long and short) and NIFTY OPTIONS: the live engine replayed bar by bar on 5-minute candles.
+# Free 5-minute history only reaches back about 60 days, so each Saturday run adds the new days to the trades already saved: the sample GROWS.
+# Option premiums are MODELLED with Black-Scholes (there are no free historical option prices): the page says so.
+# Optional "deep" tries to pull longer history from Angel One (experimental; it stops by itself when Angel One has nothing older).
+on:
+  schedule:
+    - cron: '0 3 * * 6'                # Saturday 08:30 IST
+  workflow_dispatch:
+    inputs:
+      top:
+        description: How many of the most liquid Nifty 500 stocks for intraday
+        default: '100'
+      deep:
+        description: Try to pull this many days of history from Angel One (0 = Yahoo's last 60 days only; 400 = try a year or more)
+        default: '0'
+      options:
+        description: Also run the Nifty options backtest
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backtest
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Prepare
+        run: |
+          python publish.py prepare pub
+          echo "START=$(date +%s)" >> "$GITHUB_ENV"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Replay
+        env:
+          PYTHONWARNINGS: ignore
+          TOP_IN: ${{ inputs.top }}
+          DEEP_IN: ${{ inputs.deep }}
+          OPT_IN: ${{ inputs.options }}
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          RISK_PCT: ${{ vars.RISK_PCT }}
+          RISK_PCT_APLUS: ${{ vars.RISK_PCT_APLUS }}
+          OPEN_RISK_CAP: ${{ vars.OPEN_RISK_CAP }}
+          DAY_STOP_PCT: ${{ vars.DAY_STOP_PCT }}
+          WEEK_STOP_PCT: ${{ vars.WEEK_STOP_PCT }}
+          MONTH_HALF_PCT: ${{ vars.MONTH_HALF_PCT }}
+          MONTH_STOP_PCT: ${{ vars.MONTH_STOP_PCT }}
+          MAX_TRADES_PER_DAY: ${{ vars.MAX_TRADES_PER_DAY }}
+          STOP_AFTER_LOSSES: ${{ vars.STOP_AFTER_LOSSES }}
+        run: |
+          top="${TOP_IN:-100}"; deep="${DEEP_IN:-0}"
+          python backtest.py --segment intraday --out pub/data --top "$top" --deep "$deep"
+          if [ "$OPT_IN" != "false" ]; then python backtest.py --segment options --out pub/data --deep "$deep"; fi
+      - name: Publish
+        run: python publish.py push pub "$START" "backtest intraday"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tell the phone
+        if: always()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          STATUS: ${{ job.status }}
+        run: python backtest.py --notify "$STATUS"
