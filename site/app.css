@@ -449,3 +449,48 @@ select.inp{padding:6px 8px}
 .steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:14px} .steps li{line-height:1.5}
 .qr{margin-top:8px;display:inline-block;background:#fff;padding:10px;border:1px solid var(--line);border-radius:8px} .qr img{display:block;width:180px;height:180px}
 .secret{display:inline-block;margin-top:6px;padding:6px 10px;font-size:14px;letter-spacing:.06em;word-break:break-all}
+
+/* ---------- round 6: gold (XAUUSD) theme, pre-trade check, lab touches ----------
+   Gold is the one place colour is used for identity rather than meaning: a metallic gold accent, so the gold desk never
+   looks like the equity desk. Profit and loss keep their usual green and red inside it. */
+:root{ --gold:#9A6B00; --gold-2:#C8961E; --gold-ink:#6E4C00; --gold-soft:#FBF4E2; --gold-line:#E4C978;
+  --gold-grad:linear-gradient(135deg,#FFF9EA 0%,#F6E7BE 55%,#FBF4E2 100%); }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ --gold:#E7B84A; --gold-2:#F5D27A; --gold-ink:#F3D58A; --gold-soft:#1E1708; --gold-line:#5C4512;
+  --gold-grad:linear-gradient(135deg,#1C1406 0%,#2A1E08 55%,#120D04 100%); } }
+:root[data-theme="dark"]{ --gold:#E7B84A; --gold-2:#F5D27A; --gold-ink:#F3D58A; --gold-soft:#1E1708; --gold-line:#5C4512;
+  --gold-grad:linear-gradient(135deg,#1C1406 0%,#2A1E08 55%,#120D04 100%); }
+.nav a[data-nav="gold"]{color:var(--gold-2)}
+.nav a[data-nav="gold"] svg{stroke:var(--gold-2)}
+.nav a[data-nav="gold"].on{background:var(--gold-soft);color:var(--gold-ink);box-shadow:inset 3px 0 0 var(--gold-2)}
+.nav a[data-nav="gold"]:hover{background:var(--gold-soft)}
+.pill.gold{background:var(--gold-soft);color:var(--gold-ink);border-color:var(--gold-line)}
+.btn.gold-btn{border-color:var(--gold-line);color:var(--gold-ink);background:var(--gold-soft)}
+.btn.gold-btn:hover{border-color:var(--gold-2)}
+.gold-coin{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;margin-right:10px;vertical-align:-6px;font:800 13px/1 var(--disp);
+  color:#3D2A00;background:radial-gradient(circle at 32% 28%,#FFF1BF 0%,#E9BE4C 45%,#A87810 100%);box-shadow:inset 0 0 0 2px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.25)}
+.gold-coin.sm{width:24px;height:24px;font-size:10px;margin-right:8px;vertical-align:-4px}
+.gold-head{background:var(--gold-grad);border:1px solid var(--gold-line);border-radius:16px;padding:16px 18px;margin-bottom:14px}
+.gold-head h1{color:var(--gold-ink)}
+.gold-zone .card{border-color:var(--gold-line)}
+.gold-zone .card>.hd h2{color:var(--gold-ink)}
+.gold-zone .kpi{border-color:var(--gold-line);background:linear-gradient(180deg,var(--gold-soft),var(--panel) 70%)}
+.gold-zone .seg{border-color:var(--gold-line)}
+.gold-zone .seg button[aria-pressed="true"]{background:var(--gold-2);color:#2A1D00}
+.gold-card{border-color:var(--gold-line);background:var(--gold-grad)}
+.gold-card>.hd h2{color:var(--gold-ink)}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.tbl tr.hl td{background:var(--brand-soft)}
+.tbl tr.hl td:first-child{box-shadow:inset 3px 0 0 var(--brand)}
+.gold-zone .tbl tr.hl td{background:var(--gold-soft)}
+.gold-zone .tbl tr.hl td:first-child{box-shadow:inset 3px 0 0 var(--gold-2)}
+/* pre-trade check: a small badge in the order ticket's corner that opens a short list */
+.precheck{position:relative}
+.precheck>summary{list-style:none;cursor:pointer;user-select:none}
+.precheck>summary::-webkit-details-marker{display:none}
+.precheck>summary.ok{background:var(--good-soft);color:var(--good)}
+.precheck-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;width:340px;max-width:calc(100vw - 40px);padding:12px 14px;border-radius:12px;
+  background:var(--panel);border:1px solid var(--line);box-shadow:0 10px 30px rgba(0,0,0,.18)}
+.precheck-pop>b{display:block;font-size:13px;margin-bottom:8px}
+.precheck-pop .ins li{font-size:13px}
+.tbl td.nw{white-space:nowrap}
+.card>.hd .precheck{margin-left:auto}
