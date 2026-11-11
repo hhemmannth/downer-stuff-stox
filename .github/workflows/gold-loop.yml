@@ -1,0 +1,49 @@
+name: gold-loop
+
+# XAUUSD gold, live: through every gold session (Sunday night to Friday night), every 5 minutes the gold intraday scan and once an hour
+# the gold swing and positional scans, long and short, A+ only. Triggers become tracked trades (never orders) and phone alerts.
+# A job may last 6 hours, so each loop runs about 5h45m and queues the next one before it ends; gold-watchdog is the backup.
+on:
+  schedule:
+    - cron: '5 22 * * 0'               # Sunday 22:05 UTC (03:35 IST Monday): the gold week opens
+    - cron: '10 */6 * * 1-5'           # backups every 6 hours (a run that finds a loop already going simply waits its turn)
+  workflow_dispatch:
+
+permissions:
+  contents: write                      # publish to gh-pages
+  actions: write                       # queue the next gold loop
+
+env:
+  PYTHONWARNINGS: ignore
+
+concurrency:
+  group: gold-loop
+  cancel-in-progress: false
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Scan gold every 5 minutes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGE_URL: ${{ vars.PAGE_URL }}
+          ALERTS_STATE: pub/state/alerts.json
+          MIN_SCORE: ${{ vars.MIN_SCORE }}
+          MAX_TRADES_PER_DAY: ${{ vars.MAX_TRADES_PER_DAY }}
+          GOLD_SYMBOL: ${{ vars.GOLD_SYMBOL }}
+          GOLD_SESSIONS: ${{ vars.GOLD_SESSIONS }}
+          GOLD_MAX_OPEN: ${{ vars.GOLD_MAX_OPEN }}
+          GOLD_ACCOUNT: ${{ vars.GOLD_ACCOUNT }}
+          GOLD_RISK_PCT: ${{ vars.GOLD_RISK_PCT }}
+        run: python gold_loop.py --pub pub
