@@ -51,6 +51,8 @@ jobs:
           PAGE_URL: ${{ vars.PAGE_URL }}
           CRON_TOKEN_EXPIRES: ${{ vars.CRON_TOKEN_EXPIRES }}
           CRON_JOB_EXPECTED: ${{ vars.CRON_JOB_EXPECTED }}
+          BACKUP_REPO: ${{ vars.BACKUP_REPO }}
+          BACKUP_TOKEN_EXPIRES: ${{ vars.BACKUP_TOKEN_EXPIRES }}
           FORCE_IN: ${{ inputs.force }}
         run: |
           extra=""; if [ "$FORCE_IN" = "true" ]; then extra="--force"; fi

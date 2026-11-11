@@ -15,6 +15,10 @@ on:
         description: Also test the rule variants (volume, stop buffer, zone width) on the 120 most liquid stocks
         type: boolean
         default: true
+      quick:
+        description: Quick mode (about 1 minute) - only re-apply your account rules to the trades saved by the last full run
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -45,7 +49,17 @@ jobs:
           PYTHONWARNINGS: ignore
           TOP_IN: ${{ inputs.top }}
           VAR_IN: ${{ inputs.variants }}
+          QUICK_IN: ${{ inputs.quick }}
+          RISK_PCT: ${{ vars.RISK_PCT }}
+          RISK_PCT_APLUS: ${{ vars.RISK_PCT_APLUS }}
+          OPEN_RISK_CAP: ${{ vars.OPEN_RISK_CAP }}
+          DAY_STOP_PCT: ${{ vars.DAY_STOP_PCT }}
+          WEEK_STOP_PCT: ${{ vars.WEEK_STOP_PCT }}
+          MONTH_HALF_PCT: ${{ vars.MONTH_HALF_PCT }}
+          MONTH_STOP_PCT: ${{ vars.MONTH_STOP_PCT }}
+          MAX_TRADES_PER_DAY: ${{ vars.MAX_TRADES_PER_DAY }}
         run: |
+          if [ "$QUICK_IN" = "true" ]; then python backtest.py --resim --out pub/data; exit 0; fi
           top="${TOP_IN:-250}"; extra="--variants"
           if [ "$VAR_IN" = "false" ]; then extra=""; fi
           python backtest.py --out pub/data --top "$top" $extra
