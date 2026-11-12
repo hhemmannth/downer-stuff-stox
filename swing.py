@@ -9,7 +9,7 @@ Every setup gets a stage, so you see where it is in the playbook:
   1 CHoCH          alert only, wait for the BOS
   2 BOS            zone marked, set an alert and wait for the pullback
   3 In zone        price is in the daily zone, wait for the 1H
-  4 1H confirmed   wait for the 15m precision entry (no chasing the big candle)
+  4 1H confirmed   rejection/acceptance + close above the 9 EMA on >= 1.5x volume (volume REQUIRED); wait for the 15m entry
   5 Entry          the 15m trigger fired: TRIGGERED
 
 Plan: stop below the daily OB with a buffer, T1 = 1R (partial), T2 = 2R, T3 = 3R, trail by daily structure.
@@ -24,7 +24,7 @@ def bind(mod):
 
 CFG = dict(pivot=3, zz=0.8, atr_n=14, lookback=150, disp_body_atr=1.0, fvg_min_atr=0.2, stack_gap_atr=0.5, sl_buffer_atr=0.25,
            max_bos_age=60, max_zone_atr=3.5, max_zone_pct=10.0, alert_atr=4.0, choch_age=15,
-           rvol_min=1.5, bos_rvol_good=1.5, confirm_max_age=21, entry_fresh=8, entry_chase_atr=0.5,
+           rvol_min=1.5, bos_rvol_good=1.5, confirm_max_age=21, entry_fresh=8, entry_chase_atr=0.5, ran_away_atr=1.5, require_volume=True,
            min_room_r=2.0, wide_stop_pct=8.0, wide_stop_atr=2.5, results_hold_days=14)
 STAGES = {1: 'DEVELOPING (CHoCH, wait for BOS)', 2: 'SET ALERT (wait for pullback)', 3: 'IN ZONE (wait for 1H)', 4: '1H CONFIRMED (wait for 15m entry)', 5: 'TRIGGERED'}
 STAGE_SHORT = {1: 'CHoCH', 2: 'BOS', 3: 'In zone', 4: '1H confirmed', 5: 'Entry'}
@@ -33,8 +33,11 @@ STAGE_SHORT = {1: 'CHoCH', 2: 'BOS', 3: 'In zone', 4: '1H confirmed', 5: 'Entry'
 def _nan(x): return x is None or (isinstance(x, float) and math.isnan(x))
 
 def _rvol(idx, v, t, n=20, slot=False):
+    """Volume of candle t against normal: the same hour on earlier days (slot) or the last n candles. A candle with volume 0 is a gap in the
+    data feed (a Nifty 500 stock never trades nothing in an hour), so it gives NaN = 'no volume data', and zeros are left out of the average."""
+    if not v[t] > 0: return float('nan')
     base = H.slot_volumes(idx, v, t) if slot and isinstance(idx, pd.DatetimeIndex) else None
-    if base is None: base = v[max(0, t - n):t]
+    if base is None: base = v[max(0, t - n):t]; base = base[base > 0]
     m = float(np.mean(base)) if len(base) else 0.0
     return float(v[t] / m) if m > 0 else float('nan')
 
@@ -88,11 +91,17 @@ def confirm_1h(h1, s, buf, since):
     for t in range(len(full) - 1, max(t0, 1) - 1, -1):
         if c[t] > e[t] and c[t - 1] <= e[t - 1]:
             rv = _rvol(full.index, v, t, slot=True); res.update(reclaim=1, rvol=rv, rvol_ok=int(not math.isnan(rv) and rv >= CFG['rvol_min']), t_confirm=str(full.index[t])[:16], confirm_age=len(full) - 1 - t, i_confirm=t)
+            if not res['rvol_ok'] and CFG.get('require_volume', True):
+                for u in range(t + 1, len(full)):                  # your "controlled continuation above the 9 EMA": a later 1H close still above
+                    if c[u] <= e[u]: break                         # the EMA, on 1.5x volume, is the confirmation (ends if the EMA is lost)
+                    ru = _rvol(full.index, v, u, slot=True)
+                    if not math.isnan(ru) and ru >= CFG['rvol_min']:
+                        res.update(rvol=ru, rvol_ok=1, t_confirm=str(full.index[u])[:16], confirm_age=len(full) - 1 - u, i_confirm=u, continuation=True); break
             break
     return res
 
 # ------------------------------------------------------------------ 15m precision entry
-def entry_15m(m15, s, since, daily_atr):
+def entry_15m(m15, s, since, daily_atr, not_before=None):
     """Inside the daily zone on the 15m: CHoCH + BOS + FVG, a controlled retest of that FVG, then a 15m close above the 9 EMA
     on >= 1.5x volume. Returns the entry if it fired."""
     out = dict(found=False, choch=None, bos=None, fvg=None, retest=None, trigger=None, entry=None, rvol=float('nan'), age=None, note='')
@@ -113,12 +122,18 @@ def entry_15m(m15, s, since, daily_atr):
     if rt is None: out['note'] = '15m structure is there: wait for a controlled retest of the 15m FVG.'; return out
     if np.any(c[rt:] < zb - 0.1 * daily_atr): out['note'] = 'The 15m zone failed: wait for a new 15m structure.'; out['found'] = False; return out
     out['retest'] = str(f.index[rt])[:16]
+    nb = pd.Timestamp(not_before) if not_before is not None else None
+    if nb is not None and f.index.tz is not None and nb.tzinfo is None: nb = nb.tz_localize(f.index.tz)
+    early = False
     for t in range(rt, len(f)):
+        if nb is not None and f.index[t] + pd.Timedelta(minutes=15) < nb:            # never before the 1H confirmation candle has closed (your rule)
+            early = early or (c[t] > e[t] and (t == rt or c[t - 1] <= e[t - 1] or lo[t] <= zt)); continue
         if c[t] > e[t] and (t == rt or c[t - 1] <= e[t - 1] or lo[t] <= zt):
             rv = _rvol(f.index, v, t, slot=True)
             if not math.isnan(rv) and rv >= CFG['rvol_min']:
                 out.update(trigger=str(f.index[t])[:16], entry=float(c[t]), rvol=rv, age=len(f) - 1 - t, i_trigger=t); return out
-    out['note'] = 'Retest done: waiting for a 15m close above the 9 EMA on at least 1.5x volume.'
+    out['note'] = ('A 15m trigger came before the 1H confirmation closed, so it does not count: wait for a 15m close above the 9 EMA on 1.5x after it.' if early
+                   else 'Retest done: waiting for a 15m close above the 9 EMA on at least 1.5x volume.')
     return out
 
 # ------------------------------------------------------------------ the full analysis
@@ -152,11 +167,13 @@ def analyse(daily, h1=None, m15=None, weekly=None, levels=(), cfg=None):
         ctx['cf'] = cf
         if cf and cf['broken']: return dict(state='BROKEN', score=0, grade='skip')
         if st == 'IN_ZONE' or (cf and cf['touched']): ctx['stage'] = 3
-        if cf and cf['reclaim'] and (cf['rejection'] or cf['rvol_ok']) and (cf['confirm_age'] or 0) <= cfg['confirm_max_age']: ctx['stage'] = 4
+        vol_ok = cf and (cf['rvol_ok'] if cfg.get('require_volume', True) else (cf['rejection'] or cf['rvol_ok']))      # your rule: strong relative volume (1.5x) is REQUIRED
+        if cf and cf['reclaim'] and vol_ok and (cf['confirm_age'] or 0) <= cfg['confirm_max_age']: ctx['stage'] = 4
         if ctx['stage'] >= 4 and m15 is not None:
             t_since = pd.Timestamp(cf['t_touch'])
             if m15.index.tz is not None and t_since.tzinfo is None: t_since = t_since.tz_localize(m15.index.tz)
-            en = entry_15m(m15, s, t_since, a); ctx['m15'] = en
+            t_conf = pd.Timestamp(cf['t_confirm']) + pd.Timedelta(hours=1)                       # the 1H confirmation candle's close
+            en = entry_15m(m15, s, t_since, a, not_before=t_conf); ctx['m15'] = en
             if en['entry'] is not None:
                 last = float(m15.Close.iloc[-1])
                 if en['age'] <= cfg['entry_fresh'] and last - en['entry'] <= cfg['entry_chase_atr'] * a: ctx['stage'] = 5
@@ -198,8 +215,13 @@ def _result(d, ctx):
                         risk_atr=risk / a if a else None)
     # ---- status and hold-backs
     status = STAGES[stage]; holds = []
-    if stage == 5 and weekly.get('up') is False: holds.append('weekly trend against')
-    if stage == 5 and room is not None and room < cfg['min_room_r']: holds.append(f'room < {cfg["min_room_r"]:.0f}R')
+    if stage == 3 and cf.get('reclaim') and not cf.get('rvol_ok') and cfg.get('require_volume', True):           # reclaimed the 9 EMA, but not on your volume
+        rv = cf.get('rvol'); status = ('1H RECLAIM, NO VOLUME DATA (wait for a close above the 9 EMA on 1.5x)' if _nan(rv) or not rv else
+                                       f'1H RECLAIM, WEAK VOLUME ({rv:.1f}x; wait for a close above the 9 EMA on 1.5x)')
+    if stage >= 4 and weekly.get('up') is False: holds.append('weekly trend against')                       # your hold-backs apply from the 1H confirmation on,
+    if stage >= 4 and room is not None and room < cfg['min_room_r']: holds.append(f'room < {cfg["min_room_r"]:.0f}R')   # not only at the 15m entry
+    if stage == 4 and zt is not None and a and px - zt > cfg['ran_away_atr'] * a:              # confirmed, then price ran off before any 15m entry: the
+        holds.append(f'price ran {(px - zt) / a:.1f} ATR above the zone, no chasing')         # same no-chase rule the backtest uses (1.5 ATR above the zone)
     if holds: status = f'WATCH ({holds[0]})'
     notes = []
     if plan and (plan['risk_pct'] > cfg['wide_stop_pct'] or (plan['risk_atr'] or 0) > cfg['wide_stop_atr']): notes.append('wide structural stop: reduce size or skip, never widen it')

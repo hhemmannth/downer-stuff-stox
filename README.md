@@ -102,6 +102,14 @@ Needs A and the `ANGEL_*` secrets. Actions > tradebook > Run workflow (tick forc
 3. Optional, stronger: once step 2 works, run `supabase/require_2fa.sql` once in the SQL Editor. The database itself then refuses your journal without a verified code (the scanner user is exempt). To undo, run the two `drop policy` lines at the bottom of that file.
 Lost phone: Supabase > Authentication > Users > your user > remove the factor, then sign in with your password.
 
+## Swing scanner, checked against your strategy (12 Nov 2026)
+- **1H confirmation needs strong volume (1.5x)**, as your strategy says. A later 1H close still above the 9 EMA on 1.5x counts too (your "controlled continuation"). A reclaim without volume shows as **1H RECLAIM, WEAK VOLUME** (or NO VOLUME DATA when the feed has none) and waits.
+- **Your hold-backs apply from 1H CONFIRMED**, not only at the 15m entry: under 2R of room, sector index falling, results inside the hold, weekly trend against. The setup stays listed as WATCH with the reason and is left out of the shortlist and the alerts.
+- **No chasing:** a 1H-confirmed setup more than 1.5 ATR above its zone (live price) is held, the same rule the backtest uses.
+- **The 15m entry counts only after the 1H confirmation candle has closed** (your rule: execute only after confirmation, never anticipate the 1H close). A 15m trigger before that is ignored, with a note saying why.
+- **Volume gaps:** an hour with volume 0 in the data feed is treated as missing (shown as NO VOLUME DATA), never as weak or strong volume, and left out of the same-hour average.
+- Context score is unchanged: key level + fib 0.618 + MTF EMA. The backtest uses the same engine, so its next run reflects all of this.
+
 ## Live gold (XAUUSD): every session, long and short
 The **gold-loop** workflow scans gold all through the gold week (Sunday night to Friday night IST, every session: Asia, London, New York). Every 5 minutes it runs the gold **intraday** engine; once an hour, just after the hourly candle closes, the gold **swing** and **positional** engines. All three look for **long and short** setups (swing and positional shorts are found on the mirrored chart with the same rules), and only **A+** setups (score 8 to 10) are listed or taken.
 

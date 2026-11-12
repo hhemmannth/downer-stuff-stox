@@ -169,8 +169,8 @@ def slot_volumes(idx, v, t, days=10):
     """Volumes of the same time-of-day candle on earlier days (09:15 vs 09:15, 10:15 vs 10:15). The opening candle is always heavy,
     so comparing it with the average of the whole day makes volume look strong when it is only normal."""
     key = (idx[t].hour, idx[t].minute); d = idx[t].date()
-    pos = [i for i in range(t) if (idx[i].hour, idx[i].minute) == key and idx[i].date() != d]
-    return v[pos[-days:]] if len(pos) >= 3 else None
+    pos = [i for i in range(t) if (idx[i].hour, idx[i].minute) == key and idx[i].date() != d and v[i] > 0]     # 0 = a gap in the feed, not a real
+    return v[pos[-days:]] if len(pos) >= 3 else None                                                       # hour with no trades: left out of the average
 
 def confirm(trig, s, cfg):
     """Trigger-frame confirmation: rejection in the zone, close back above the 9 EMA, relative volume."""
@@ -485,6 +485,24 @@ def candles(frame, bars, fmt):
     return dict(times=[x.strftime(fmt) for x in d.index], candles=[[round(float(x), 2) for x in row] for row in d[['Open', 'High', 'Low', 'Close']].values],
                 volume=[int(x) for x in d.Volume.fillna(0).values], ema=[round(float(x), 2) for x in ema(frame.Close, 9).tail(bars).values])
 
+def hold_back(r, reason):
+    """Your swing hold-backs (sector index falling, results inside the hold, ...) apply from the 1H confirmation on (stage 4 and 5): the setup
+    stays listed, marked WATCH with the reason, and is not counted as an entry. Earlier stages only get the note."""
+    if r.get('stage', 0) < 4: return r
+    if reason not in r.get('holds', []): r['holds'] = r.get('holds', []) + [reason]
+    if not str(r.get('status', '')).startswith('WATCH'): r['status'] = f'WATCH ({reason})'
+    return r
+
+def ran_away_check(r, ltp):
+    """A swing setup that confirmed on the 1H and then ran more than 1.5 ATR above its zone before any 15m entry is no longer a 'wait for
+    the 15m entry': it is held back (no chasing), the same rule the backtest applies. Uses the live price when there is one."""
+    if r.get('stage') != 4 or ltp is None or r.get('zone_top') is None or not r.get('atr') or any('ran ' in h for h in r.get('holds', [])): return r
+    up = (ltp - r['zone_top']) / r['atr']
+    if up > swing.CFG['ran_away_atr']:
+        r['holds'] = r.get('holds', []) + [f'price ran {up:.1f} ATR above the zone, no chasing']
+        if not str(r.get('status', '')).startswith('WATCH'): r['status'] = f"WATCH ({r['holds'][-1]})"
+    return r
+
 def swing_item(sym, r, daily, h1, m15, extra, ltp=None):
     """A swing setup as the pages read it: stage, scorecard, the playbook checklist, plan and 1D / 1H / 15m charts."""
     keys = ('price', 'zone_bot', 'zone_top', 'entry', 'sl', 't1', 't2', 't3', 'fib_lo', 'fib_hi', 'ob_low', 'ob_high', 'fvg_low', 'fvg_high', 'choch_level', 'bos_level',
@@ -582,14 +600,14 @@ def run_swing(args, now):
             ex['regime_edge'] = edge
             if edge['verdict'] == 'weak':
                 r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"backtest: in a \"{edge['label']}\" market this playbook averaged {edge['avg']:+.2f}R over {edge['n']} trades: smaller size or skip"
-                if os.environ.get('REGIME_FILTER', '').strip().lower() == 'hold' and r['status'] == 'TRIGGERED': r['status'] = 'WATCH (weak regime in backtest)'; r['holds'] = r.get('holds', []) + ['weak regime in backtest']
+                if os.environ.get('REGIME_FILTER', '').strip().lower() == 'hold': hold_back(r, 'weak regime in backtest')
         if r['stage'] >= 4:
             xd = ex_dividend_info(s, now)
             if xd and xd['days'] <= 7: ex['ex_dividend'] = xd; r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"ex-dividend on {xd['date']}: the price drops by the dividend that morning, which can touch a tight stop"
         if s in checks:
             chk = checks[s]; ex['index_check'] = chk
             if chk['state'] == 'falling':
-                if r['status'] == 'TRIGGERED': r['status'] = 'WATCH (index falling)'; r['holds'] = r.get('holds', []) + ['index falling']
+                hold_back(r, 'index falling')
                 r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"{chk['sector_index']} is falling: wait for it to stabilise"
             elif chk['state'] == 'unknown': r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + 'sector index data unavailable: check the index yourself'
         if r['stage'] >= 3 and sum(1 for i in items if i.get('results')) < 30:
@@ -598,8 +616,9 @@ def run_swing(args, now):
                 ex['results'] = rs
                 if rs['days'] <= swing.CFG['results_hold_days']:
                     r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"results in {rs['days']} days: exit before them or skip"
-                    if r['status'] == 'TRIGGERED': r['status'] = 'WATCH (results inside hold)'; r['holds'] = r.get('holds', []) + ['results inside hold']
+                    hold_back(r, 'results inside hold')
         ltp = float(hmap[s].Close.iloc[-1]) if s in hmap and len(hmap[s]) else None
+        ran_away_check(r, ltp)
         items.append(swing_item(s, r, daily[s], hmap.get(s), mmap.get(s), ex, ltp))
     for it in items:
         if it['status'].startswith('WATCH'): states[(it['symbol'], 'long')] = 'OK'

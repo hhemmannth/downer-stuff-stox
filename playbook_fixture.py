@@ -12,7 +12,7 @@ def _session_after(start, n, step):
         if t.weekday() < 5 and (9 * 60 + 15) <= t.hour * 60 + t.minute <= (15 * 60 + 15): out.append(t)
     return pd.DatetimeIndex(out)
 
-def frames(n_daily=38, n_1h=23, n_15m=24, vol=100000, start='2026-04-01'):
+def frames(n_daily=38, n_1h=23, n_15m=24, vol=100000, start='2026-04-01', m15_after=13):
     """1D: a 60-day uptrend, then the playbook's sell-off, sweep, CHoCH, BOS and pullback. 1H: the pullback, rejection and trigger.
     15m: CHoCH 1,061, BOS 1,065, FVG 1,065-1,069, retest and the 1,070 entry."""
     r = np.random.default_rng(7); pre = []; px = 900.0
@@ -28,5 +28,5 @@ def frames(n_daily=38, n_1h=23, n_15m=24, vol=100000, start='2026-04-01'):
                 if len(idx) < n_1h: idx.append(pd.Timestamp(f'{day.date()} {t}', tz=TZ))
         day += pd.Timedelta(days=1)
     h1 = pd.DataFrame([row[:4] + [row[4] * vol / 100] for row in P['1H'][:n_1h]], columns=COLS, index=pd.DatetimeIndex(idx))
-    m15 = pd.DataFrame([row[:4] + [row[4] * vol / 400] for row in P['15m'][:n_15m]], columns=COLS, index=_session_after(h1.index[13], n_15m, 15))
+    m15 = pd.DataFrame([row[:4] + [row[4] * vol / 400] for row in P['15m'][:n_15m]], columns=COLS, index=_session_after(h1.index[m15_after], n_15m, 15))      # m15_after=20: the 15m sequence starts after the 1H confirmation candle
     return daily, h1, m15
