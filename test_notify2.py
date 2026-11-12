@@ -36,22 +36,32 @@ check('alert: no chart data -> plain text message, one button', LOG[-1][0] == 's
 os.environ['ALERT_CHARTS'] = 'off'; LOG.clear(); notify.send_alert('http://127.0.0.1:9', '', S, 'Swing', link, {'PBK': {'15m': tf}}, None); os.environ.pop('ALERT_CHARTS')
 check('alert: ALERT_CHARTS=off switches the pictures off', LOG[-1][0] == 'sendMessage')
 
-d = tempfile.mkdtemp(); W = lambda sym, status, score=7: dict(id=f'swing|{sym}|long|2026-08-03', symbol=sym, direction='long', status=status, score=score, zone_bot=1041, zone_top=1052, sl=1036.5)
-led = dict(signals=[], watch={w['id']: w for w in (W('AAA', 'IN ZONE (wait for 1H)', 9), W('BBB', '1H CONFIRMED (wait for 15m entry)'), W('LOW', 'IN ZONE (wait for 1H)', 3), W('MID', 'IN ZONE (wait for 1H)', 7), W('FAR', 'SET ALERT (wait for pullback)'))},
-           dropped=[dict(W('GONE', 'IN ZONE (wait for 1H)'), dropped='2026-11-11T11:00+05:30', reason='Price closed below the zone: the setup failed.'), dict(W('OLD', 'IN ZONE (wait for 1H)'), dropped='2026-11-09T11:00+05:30', reason='old'), dict(W('NEVER', 'SET ALERT (wait for pullback)'), dropped='2026-11-11T11:00+05:30', reason='far')])
-sw = dict(setups=[dict(symbol='AAA', direction='long', stage=3, index_check=dict(state='falling', sector_index='Nifty IT')), dict(symbol='BBB', direction='long', stage=4, index_check=dict(state='ok'))])
-json.dump(led, open(os.path.join(d, 'signals_swing.json'), 'w')); json.dump(sw, open(os.path.join(d, 'swing.json'), 'w'))
-state = {}; LOG.clear(); n = notify.action_alerts('http://127.0.0.1:9', '', 'https://x.github.io/app/', d, state, '2026-11-11', 6)
-titles = [json.loads(r)['text'].split('</b>')[0].split('<b>')[1] for _, _, r in LOG]
-check('actions: in zone, 1H confirmed, sector falling and setup off each send one message', n == 4 and sorted(titles) == sorted(['Swing: AAA is in its zone', 'Swing: BBB confirmed on the 1H', 'Swing: AAA on hold, sector index falling', 'Swing: GONE setup is off']), str(titles))
-check('actions: only A+ setups announce "in zone"; low scores, far-away setups, old drops and drops you were not waiting on are left out', not any(x in t for t in titles for x in ('LOW', 'MID', 'FAR', 'OLD', 'NEVER')))
+d = tempfile.mkdtemp(); W = lambda sym, status, score=9: dict(id=f'swing|{sym}|long|2026-08-03', symbol=sym, direction='long', status=status, score=score, zone_bot=1041, zone_top=1052, sl=1036.5)
+def put(dd, watch, dropped=(), setups=()):
+    json.dump(dict(signals=[], watch={w['id']: w for w in watch}, dropped=list(dropped)), open(os.path.join(dd, 'signals_swing.json'), 'w')); json.dump(dict(setups=list(setups)), open(os.path.join(dd, 'swing.json'), 'w'))
+act = lambda dd, st, day='2026-11-11': notify.action_alerts('http://127.0.0.1:9', '', 'https://x.github.io/app/', dd, st, day, 6)
+titles = lambda: [json.loads(r)['text'].split('</b>')[0].split('<b>')[1] for _, _, r in LOG]
+put(d, [W('AAA', 'SET ALERT (wait for pullback)'), W('BBB', 'IN ZONE (wait for 1H)'), W('LOW', 'SET ALERT (wait for pullback)', 3), W('MID', 'SET ALERT (wait for pullback)', 7), W('KEEP', 'IN ZONE (wait for 1H)')])
+state = {}; LOG.clear(); n0 = act(d, state)
+check('actions: the first run after the upgrade only records where every setup stands: no flood of alerts', n0 == 0 and not LOG and state['action_last'].get('swing|KEEP|long|2026-08-03') == 'zone')
+put(d, [W('AAA', 'IN ZONE (wait for 1H)'), W('BBB', '1H CONFIRMED (wait for 15m entry)'), W('LOW', 'IN ZONE (wait for 1H)', 3), W('MID', '1H CONFIRMED (wait for 15m entry)', 7), W('KEEP', 'IN ZONE (wait for 1H)'), W('NEW', 'IN ZONE (wait for 1H)')],
+    [dict(W('GONE', 'IN ZONE (wait for 1H)'), dropped='2026-11-11T11:00+05:30', reason='Price closed below the zone: the setup failed.'), dict(W('OLD', 'IN ZONE (wait for 1H)'), dropped='2026-11-09T11:00+05:30', reason='old'),
+     dict(W('NEVER', 'SET ALERT (wait for pullback)'), dropped='2026-11-11T11:00+05:30', reason='x'), dict(W('WEAK', 'IN ZONE (wait for 1H)', 7), dropped='2026-11-11T11:00+05:30', reason='x')],
+    [dict(symbol='AAA', direction='long', stage=3, index_check=dict(state='falling', sector_index='Nifty IT')), dict(symbol='BBB', direction='long', stage=4, index_check=dict(state='ok'))])
+LOG.clear(); n = act(d, state); T = titles()
+check('actions: only CHANGES are sent: entered its zone, confirmed on the 1H, a new A+ setup in its zone, sector turned down, a setup you waited on failed', n == 5 and sorted(T) == sorted(['Swing: AAA is in its zone', 'Swing: AAA on hold, sector index falling', 'Swing: BBB confirmed on the 1H', 'Swing: NEW is in its zone', 'Swing: GONE setup is off']), str(T))
+check('actions: A+ only, and nothing for a setup that has not changed (KEEP sat in its zone all along)', not any(x in t for t in T for x in ('LOW', 'MID', 'KEEP', 'OLD', 'NEVER', 'WEAK')))
 check('actions: each message says what to do', any('wait for the 1H rejection' in json.loads(r)['text'] for _, _, r in LOG) and any('Remove any price alert' in json.loads(r)['text'] for _, _, r in LOG))
-LOG.clear(); n2 = notify.action_alerts('http://127.0.0.1:9', '', 'https://x.github.io/app/', d, state, '2026-11-11', 6)
-check('actions: the same change is not repeated the same day', n2 == 0 and not LOG)
-n3 = notify.action_alerts('http://127.0.0.1:9', '', 'https://x.github.io/app/', d, state, '2026-11-12', 6)
-check('actions: a setup still in its zone the next day reminds you once more; the old drop does not', n3 == 3)
-check('actions: missing files are not an error', notify.action_alerts('http://127.0.0.1:9', '', '', tempfile.mkdtemp(), {}, '2026-11-11', 6) == 0)
-big = dict(signals=[], watch={f'w{i}': W(f'S{i}', '1H CONFIRMED (wait for 15m entry)') for i in range(15)}, dropped=[]); d2 = tempfile.mkdtemp()
-json.dump(big, open(os.path.join(d2, 'signals_swing.json'), 'w')); json.dump(dict(setups=[]), open(os.path.join(d2, 'swing.json'), 'w')); LOG.clear()
-check('actions: never more than 6 messages in one scan', notify.action_alerts('http://127.0.0.1:9', '', 'https://x.github.io/app/', d2, {}, '2026-11-11', 6) == 6 and len(LOG) == 6)
+LOG.clear(); check('actions: the next scans send nothing while nothing changes', act(d, state) == 0 and act(d, state) == 0 and not LOG)
+check('actions: no daily reminders either: the next morning, unchanged setups stay quiet', act(d, state, '2026-11-12') == 0)
+put(d, [W('AAA', 'SET ALERT (wait for pullback)')]); act(d, state, '2026-11-12'); put(d, [W('AAA', 'IN ZONE (wait for 1H)')]); LOG.clear()
+check('actions: a setup that leaves its zone and comes back on another day is a new change and is sent again', act(d, state, '2026-11-13') == 1 and titles() == ['Swing: AAA is in its zone'])
+check('actions: setups that left the watch list are forgotten (the stored state stays small)', set(state['action_last']) <= {'swing|AAA|long|2026-08-03', 'swing|AAA|long|2026-08-03|sector'})
+check('actions: missing files are not an error', act(tempfile.mkdtemp(), {}) == 0)
+d2 = tempfile.mkdtemp(); put(d2, [W(f'S{i}', 'SET ALERT (wait for pullback)') for i in range(15)]); s2 = {}; act(d2, s2)
+put(d2, [W(f'S{i}', '1H CONFIRMED (wait for 15m entry)') for i in range(15)]); LOG.clear(); r1, r2, r3, r4 = act(d2, s2), act(d2, s2), act(d2, s2), act(d2, s2)
+check('actions: never more than 6 in one scan; the rest follow on the next scans, each one exactly once (15 = 6 + 6 + 3 + 0)', (r1, r2, r3, r4) == (6, 6, 3, 0) and len(set(titles())) == 15, str((r1, r2, r3, r4)))
+sf = os.path.join(tempfile.mkdtemp(), 'n.json'); json.dump({'date': '2026-01-01', 'sent': [], 'updated': {}, 'action_last': {'swing|ZZZ|long|x': 'zone'}}, open(sf, 'w'))
+import sys as _sys; _argv = _sys.argv; _sys.argv = ['notify.py', '--dir', tempfile.mkdtemp(), '--state', sf]; notify.main(); _sys.argv = _argv
+check('actions: the record of where each setup stood carries over to the next day (the daily reset keeps it)', json.load(open(sf)).get('action_last', {}).get('swing|ZZZ|long|x') == 'zone')
 srv.shutdown(); print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED'); raise SystemExit(1 if fails else 0)

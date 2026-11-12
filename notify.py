@@ -107,29 +107,38 @@ def send_alert(base, topic, s, section, click, charts=None, log_url=None):
          photo=alert_chart(s, charts), buttons=[('Log this trade', log_url)] if log_url else None)
 
 def action_alerts(base, topic, click, data_dir, state, today, min_score):
-    """Item 16: tell you when a watched swing setup changes in a way that needs you: an A+ setup (score 8 or more) enters its zone,
-    the 1H confirms, a setup you were waiting on is invalidated, or its sector index turns down. Once per setup and state per day,
-    and never more than 6 messages per scan."""
-    n = 0; seen = state.setdefault('actions', {})
+    """Item 16: tell you when a watched A+ swing setup CHANGES in a way that needs you: it enters its zone, the 1H confirms, its sector
+    index turns down, or a setup you were waiting on fails. Only changes, never the same state again: the last state of every setup is
+    kept (state['action_last'], across days), and the very first run only records where everything stands. A+ only (score 8 or more,
+    your rule). Never more than 6 messages per scan; anything over waits for the next scan."""
+    n = 0; seen = state.setdefault('actions', {}); first = 'action_last' not in state; last = state.setdefault('action_last', {}); bar = max(min_score, 8)
     try: led = json.load(open(os.path.join(data_dir, 'signals_swing.json'))); sw = json.load(open(os.path.join(data_dir, 'swing.json')))
     except Exception: return 0
     by = {f"{s['symbol']}|{s['direction']}": s for s in sw.get('setups', [])}
     def push(key, title, body, tags, sym):
         nonlocal n
-        if seen.get(key) == today or n >= 6: return                    # at most 6 action alerts per scan: the rest wait for the next one
-        try: post(base, topic, title, body, tags, deep(click, s='swing', id=f'{sym}|long')); seen[key] = today; n += 1
-        except Exception as ex: print(f'  could not send action alert: {ex}', file=sys.stderr)
+        if first or seen.get(key) == today: return True                 # first run: record only; same change already sent today: done
+        if n >= 6: return False                                         # at most 6 a scan: the rest wait for the next one (state not recorded)
+        try: post(base, topic, title, body, tags, deep(click, s='swing', id=f'{sym}|long')); seen[key] = today; n += 1; return True
+        except Exception as ex: print(f'  could not send action alert: {ex}', file=sys.stderr); return False
+    now_ids = set()
     for wid, w in (led.get('watch') or {}).items():
-        if (w.get('score') or 0) < min_score: continue
-        st = str(w.get('status', '')).upper(); sym = w['symbol']; z = f"{w.get('zone_bot')}-{w.get('zone_top')}"
-        if st.startswith('IN ZONE') and (w.get('score') or 0) >= 8: push(f'{wid}|zone', f'Swing: {sym} is in its zone', f"Price is inside the daily zone {z}. Nothing to do yet: wait for the 1H rejection and a close above the 9 EMA on volume.", 'mag', sym)
-        elif st.startswith('1H CONFIRMED'): push(f'{wid}|1h', f'Swing: {sym} confirmed on the 1H', f"The 1H confirmation is in. Watch the 15m for the precision entry (CHoCH, BOS, retest, close above the 9 EMA on volume). Planned stop {w.get('sl')}.", 'bell', sym)
-        it = by.get(f"{sym}|{w.get('direction', 'long')}")
-        if it and (it.get('index_check') or {}).get('state') == 'falling' and it.get('stage', 0) >= 3:
-            push(f'{wid}|sector', f'Swing: {sym} on hold, sector index falling', f"{it['index_check'].get('sector_index', 'The sector index')} has turned down. Your rule: wait for it to stabilise before taking the setup.", 'warning', sym)
+        now_ids.add(wid); st = str(w.get('status', '')).upper(); sym = w['symbol']; z = f"{w.get('zone_bot')}-{w.get('zone_top')}"; a_plus = (w.get('score') or 0) >= bar
+        cur = 'zone' if st.startswith('IN ZONE') else '1h' if st.startswith('1H CONFIRMED') else 'other'
+        if cur != last.get(wid):
+            done = True
+            if a_plus and cur == 'zone': done = push(f'{wid}|zone', f'Swing: {sym} is in its zone', f"Price is inside the daily zone {z}. Nothing to do yet: wait for the 1H rejection and a close above the 9 EMA on volume.", 'mag', sym)
+            elif a_plus and cur == '1h': done = push(f'{wid}|1h', f'Swing: {sym} confirmed on the 1H', f"The 1H confirmation is in. Watch the 15m for the precision entry (CHoCH, BOS, retest, close above the 9 EMA on volume). Planned stop {w.get('sl')}.", 'bell', sym)
+            if done: last[wid] = cur
+        it = by.get(f"{sym}|{w.get('direction', 'long')}"); falling = bool(it and (it.get('index_check') or {}).get('state') == 'falling' and it.get('stage', 0) >= 3)
+        if falling != bool(last.get(wid + '|sector')):
+            done = True
+            if falling and a_plus: done = push(f'{wid}|sector', f'Swing: {sym} on hold, sector index falling', f"{it['index_check'].get('sector_index', 'The sector index')} has turned down. Your rule: wait for it to stabilise before taking the setup.", 'warning', sym)
+            if done: last[wid + '|sector'] = falling
     for d in (led.get('dropped') or []):
-        if str(d.get('dropped', ''))[:10] != today or (d.get('score') or 0) < min_score or not str(d.get('status', '')).upper().startswith(('IN ZONE', '1H CONFIRMED')): continue   # only setups you were actively waiting on
+        if str(d.get('dropped', ''))[:10] != today or (d.get('score') or 0) < bar or not str(d.get('status', '')).upper().startswith(('IN ZONE', '1H CONFIRMED')): continue   # only A+ setups you were actively waiting on
         push(f"{d.get('id')}|dropped", f"Swing: {d['symbol']} setup is off", f"{d.get('reason') or 'The setup is no longer valid.'} Remove any price alert or pending order for it.", 'x', d['symbol'])
+    for k in [k for k in last if k.split('|sector')[0] not in now_ids]: del last[k]           # forget setups that left the watch list
     return n
 
 def fresh(data, now):
@@ -162,7 +171,7 @@ def main():
     statuses = tuple(x.strip().upper() for x in os.environ.get('NTFY_STATUSES', 'TRIGGER').split(',') if x.strip()); now = ist_now(); today = now.strftime('%Y-%m-%d')
     try: state = json.load(open(a.state))
     except Exception: state = {}
-    if state.get('date') != today: state = {'date': today, 'sent': [], 'updated': {}}
+    if state.get('date') != today: state = {'date': today, 'sent': [], 'updated': {}, **({'action_last': state['action_last']} if 'action_last' in state else {})}     # the last state of each swing setup carries over to the next day
     state.setdefault('updated', {}); sent = ups = 0
     try: charts = json.load(open(os.path.join(a.dir, 'swing_charts.json'))).get('charts', {})
     except Exception: charts = {}

@@ -130,4 +130,7 @@ cf_, ltp_ = sc.with_today(d_, hh_)
 check('chart gets today\'s candle: open of the first 1H, high/low so far, last 1H close, summed volume', len(cf_) == len(d_) + 1 and list(cf_.iloc[-1]) == [1100, 1115, 1096, 1101, 150] and str(cf_.index[-1].date()) == '2026-10-21')
 check('LTP is the latest closed 1H close, the rules still see closed daily candles only', ltp_ == 1101 and len(d_) == len(D))
 cf2, ltp2 = sc.with_today(d_, None); check('no hourly data: chart unchanged', cf2 is d_ and ltp2 is None)
+csv_ = 'Company Name,Industry,Symbol,Series\nTata,IT,TCS,EQ\nPlaceholder,Diversified,DUMMYHEG,EQ\nInfosys,IT,INFY,EQ\n'
+u_, ind_ = sc.parse_universe_csv(csv_, True)
+check('universe: NSE\'s DUMMY placeholder rows are skipped, real stocks kept', u_ == ['TCS', 'INFY'] and 'DUMMYHEG' not in u_)
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: {fails}'); sys.exit(1 if fails else 0)

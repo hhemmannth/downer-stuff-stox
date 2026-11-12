@@ -300,7 +300,7 @@ def has_volume(df): return len(df) > 0 and float((df.Volume > 0).mean()) > 0.5
 def parse_universe_csv(text, with_industry=False):
     df = pd.read_csv(io.StringIO(text)); col = next((c for c in df.columns if c.strip().lower() == 'symbol'), None)
     if col is None: raise ValueError('no Symbol column')
-    syms = [str(x).strip() for x in df[col].dropna() if str(x).strip()]
+    syms = [str(x).strip() for x in df[col].dropna() if str(x).strip() and not str(x).strip().upper().startswith('DUMMY')]      # NSE puts DUMMY... placeholder rows in index files during demergers: not real stocks
     if not with_industry: return syms
     icol = next((c for c in df.columns if c.strip().lower() == 'industry'), None)
     ind = {str(r[col]).strip(): str(r[icol]).strip() for _, r in df.iterrows() if icol and pd.notna(r[col]) and pd.notna(r[icol])}
