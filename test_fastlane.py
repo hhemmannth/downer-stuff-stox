@@ -126,4 +126,18 @@ far = [k for k, (dist, listed) in outcomes.items() if dist > 2.0]
 check('SET ALERT: the old 4 ATR rule WOULD have listed the same far-away setups (that is what changed)', all('stage' in (swing.analyse(far_above(D, k), cfg=dict(swing.CFG, alert_atr=4.0)) or {}) for k in far), str(outcomes))
 check('SET ALERT: both sides of the 2 ATR line were exercised', any(l for _, l in outcomes.values()) and bool(far), str(outcomes))
 
+# ---------------------------------------------------------------- the target ladder of the 5m/15m playbook is always nearest first
+check('ladder: a leg high more than 2R away (Nifty options 9 Nov: 2.9R) is no longer a T1 beyond T2: T1 < T2 < T3', sc.ladder(24931.65, 68.15, 25131.85) == sorted(sc.ladder(24931.65, 68.15, 25131.85)) and sc.ladder(24931.65, 68.15, 25131.85)[0] < 24931.65 + 2 * 68.15 + 0.01)
+check('ladder: a near leg high stays T1 (0.7R), then 2R and 3R', sc.ladder(100, 10, 107) == [107, 120, 130])
+check('ladder: a leg high already behind price is no target: T1 is 1R (the backtest\'s own fallback)', sc.ladder(100, 10, 95) == [110, 120, 130] and sc.ladder(100, 10, float('nan')) == [110, 120, 130])
+import tf_fixture as fx
+saved = dict(sc.CFG_I); sc.CFG_I.update(min_turnover_cr=0, min_bars=30, rvol_n=10, max_zone_pct=6, max_zone_atr=5); sc.CFG_B.update(min_bars=20)
+try:
+    for mirror in (False, True):
+        f5, f15 = fx.engineered('2026-11-11 15:00', mirror=mirror); side = 'short' if mirror else 'long'; lv = sc.prev_day_levels(f5)
+        r = sc.scan_intraday(f5, f15, side, sc.CFG_I, lv, section='intraday')
+        t = [r['t1'], r['t2'], r['t3']]; e = r['entry']
+        ordered = (t[0] < t[1] < t[2]) if side == 'long' else (t[0] > t[1] > t[2])
+        check(f'scanner ({side}): T1, T2, T3 come out nearest first and on the profit side of the entry', ordered and ((t[0] > e) if side == 'long' else (t[0] < e)), str((e, t)))
+finally: sc.CFG_I.clear(); sc.CFG_I.update(saved)
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: {fails}'); sys.exit(1 if fails else 0)

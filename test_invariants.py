@@ -18,12 +18,12 @@ def check_setup(r, side, tag):
     if r['status'] not in ALLOWED: bad.append('status ' + r['status'])
     if r['grade'] != sc.grade(r['score']) or not 0 <= r['score'] <= 10: bad.append('score/grade')
     if side == 'long':
-        if not (r['sl'] < r['zone_bot'] and r['sl'] < r['entry'] < r['t2'] < r['t3']): bad.append('long levels')
-        if not r['t1'] > r['zone_bot']: bad.append('long T1')
+        if not (r['sl'] < r['zone_bot'] and r['sl'] < r['entry'] < r['t1'] < r['t2'] < r['t3']): bad.append('long levels (stop below the zone, targets above the entry, nearest first)')
     else:
-        if not (r['sl'] > r['zone_top'] and r['sl'] > r['entry'] > r['t2'] > r['t3']): bad.append('short levels')
-        if not r['t1'] < r['zone_top']: bad.append('short T1')
-    if abs(abs(r['t2'] - r['entry']) - 2 * abs(r['entry'] - r['sl'])) > 1e-6 * max(1, abs(r['entry'])): bad.append('2R')
+        if not (r['sl'] > r['zone_top'] and r['sl'] > r['entry'] > r['t1'] > r['t2'] > r['t3']): bad.append('short levels (stop above the zone, targets below the entry, nearest first)')
+    risk_ = abs(r['entry'] - r['sl']); tol = 1e-6 * max(1, abs(r['entry']))
+    for m_ in (2, 3):                                  # the ladder is the prior leg's extreme, 2R and 3R, sorted: 2R and 3R are always among the targets
+        if not any(abs(abs(t_ - r['entry']) - m_ * risk_) <= tol for t_ in (r['t1'], r['t2'], r['t3'])): bad.append(f'{m_}R missing from the ladder')
     if bad: fails.append(f"{tag}: {bad} {({k: r.get(k) for k in ('status', 'entry', 'sl', 't1', 't2', 't3', 'zone_bot', 'zone_top')})}")
 cfg_s = dict(sc.CFG, min_turnover_cr=0, min_price=0)
 for seed in range(60):                                    # swing: daily + hourly

@@ -229,7 +229,9 @@ def detect(struct, trig, cfg, K=None, section='swing', bias=None, levels=(), ext
     entry = last_t if status == 'TRIGGERED' else s['zone_top'] - .25 * (s['zone_top'] - s['zone_bot'])
     base = s['ob_low'] if not math.isnan(s['ob_low']) else s['zone_bot']
     sl = min(base, cf['pullback_low'] if not math.isnan(cf['pullback_low']) else base) - cfg['sl_buffer_atr'] * a; risk = entry - sl; plan = {}
-    if risk > 0: plan = dict(entry=entry, sl=sl, t1=s['leg_high'], t2=entry + 2 * risk, t3=entry + 3 * risk, risk_pct=100 * risk / conv(entry), r_t1=(s['leg_high'] - entry) / risk)
+    if risk > 0:
+        t1, t2, t3 = ladder(entry, risk, s['leg_high'])
+        plan = dict(entry=entry, sl=sl, t1=t1, t2=t2, t3=t3, risk_pct=100 * risk / conv(entry), r_t1=(s['leg_high'] - entry) / risk)       # r_t1 = room to the prior high, as before
     lv = [conv(x) for x in levels]; zb_o, zt_o = (s['zone_bot'], s['zone_top']) if K is None else (K - s['zone_top'], K - s['zone_bot'])      # zone in real prices, for round numbers
     if round_in_zone(zb_o, zt_o) or (s['zone_bot'] - .25 * a <= s['bos_level'] <= s['zone_top'] + .25 * a) or any(s['zone_bot'] - .25 * a <= x <= s['zone_top'] + .25 * a for x in lv): ticks.append('key level')
     if min(s['fib_hi'], s['zone_top']) >= max(s['fib_lo'], s['zone_bot']): ticks.append('fib')
@@ -252,6 +254,14 @@ def detect(struct, trig, cfg, K=None, section='swing', bias=None, levels=(), ext
                notes='; '.join(notes), atr=a, pullback_low=cf['pullback_low'], rejection=cf['rejection'], reclaim=cf['reclaim'], rvol_ok=cf['rvol_ok'], **plan)
     if b: out.update(b15_level=b['level'], b15_base=b['base_low'], b15_date=b['date'], b15_kind=b.get('kind', 'CHoCH'), b15_ob_low=b['ob_low'], b15_ob_high=b['ob_high'])
     return out
+
+def ladder(entry, risk, leg_high):
+    """The three targets of a 5m/15m playbook plan, in the long picture (shorts are mirrored back afterwards): the prior leg's extreme, 2R and 3R,
+    always ordered nearest first, so T1 < T2 < T3 for a long and T1 > T2 > T3 for a short. Before, T1 was the leg high wherever it was, so a leg
+    high more than 2R away became a T1 beyond T2 (even T3): alerts, plan cards and the option-premium estimate read a scrambled ladder. A leg high
+    already behind price is no target at all: T1 is then 1R (the same fallback the backtest already used)."""
+    t1 = leg_high if leg_high is not None and not (isinstance(leg_high, float) and math.isnan(leg_high)) and leg_high > entry else entry + risk
+    return sorted([t1, entry + 2 * risk, entry + 3 * risk])
 
 def unflip(r, K):
     for lo, hi in PAIRS:
