@@ -126,9 +126,9 @@ small{font-size:12.5px}
 .stack{display:flex;flex-direction:column;gap:14px;min-width:0}
 .kpi{padding:12px 14px;border-radius:14px;background:var(--panel);border:1px solid var(--line);min-width:0}
 .kpi .l{font-size:12px;font-weight:650;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kpi .v{font:700 22px/1.2 var(--disp);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kpi .s{font-size:12.5px;color:var(--ink-3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px}
+.kpi .v{font:700 22px/1.2 var(--disp);margin-top:3px;white-space:normal;overflow-wrap:break-word}    /* a long value wraps at its spaces instead of being cut with an ellipsis */
+.kpi .s{font-size:12.5px;color:var(--ink-3);margin-top:1px;white-space:normal;overflow-wrap:break-word}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px}                 /* 6 cards fit one row on a desktop: no orphan card */
 .callout{display:flex;gap:10px;padding:11px 14px;border-radius:12px;background:var(--brand-soft);color:var(--ink);font-size:14px;line-height:1.5}
 .callout .ic{flex:none;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;background:var(--brand);color:var(--on)}
 .callout.warn{background:var(--warn-soft)} .callout.warn .ic{background:var(--warn)}
@@ -494,3 +494,11 @@ select.inp{padding:6px 8px}
 .precheck-pop .ins li{font-size:13px}
 .tbl td.nw{white-space:nowrap}
 .card>.hd .precheck{margin-left:auto}
+
+/* ---------- live now (dashboard) ---------- */
+.live-row{display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:10px 0;border-top:1px solid var(--line);color:inherit;text-decoration:none}
+.live-row:first-child{border-top:0;padding-top:2px}
+.live-row>b{min-width:96px;font-size:14px}
+.live-row>span{flex:1;text-align:right;font-size:13.5px;color:var(--ink-2)}
+.live-row:hover>b{text-decoration:underline}
+.live-row .hot{color:var(--good);font-weight:700}
