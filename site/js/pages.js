@@ -71,7 +71,7 @@ App.pages.dashboard = () => {
   // swing shortlist
   if (sw) { const S = sw.setups, short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
     h += `<div class="card"><div class="hd"><h2>Swing: today's shortlist</h2><span class="cap">max 5, pick 1 or 2 (your stock-selection rule)</span><span class="sp"></span><a class="btn sm" href="#/swing">All swing setups</a></div>
-      <div class="bd"><div class="pipeline" style="margin-bottom:12px">${[5, 4, 3, 2, 1].map(k => `<a class="pipe p${k}" href="#/swing" onclick="App.ui.sw=Object.assign(App.ui.sw||{view:'setups',grade:'all',q:''},{stage:'${k}',view:'setups'})" style="text-decoration:none;color:inherit"><div class="k">${SC.STG[k][0]}</div><div class="v">${S.filter(s => s.stage === k).length}</div></a>`).join('')}</div>
+      <div class="bd"><div class="pipeline" style="margin-bottom:12px">${[5, 4, 3, 2, 1].map(k => `<a class="pipe p${k}" href="#/swing" onclick="App.ui.sw=Object.assign(App.ui.sw||{view:'setups',grade:'all',q:''},{stage:'${k}',view:'setups'})" style="text-decoration:none;color:inherit"><div class="k">${SC.STG[k][0]}</div><div class="v">${S.filter(s => s.stage === k && !SC.held(s)).length}</div></a>`).join('')}</div>
       ${short.length ? `<div class="cards">${short.map(s => SC.card('swing', s)).join('')}</div>` : App.ui.empty('No swing setup is in its zone right now', 'Waiting is part of the plan. Stage 2 setups are the ones to set alerts on.')}</div></div>`; }
   // open trades and signals
   const open = T.filter(t => t.open), act = ['swing', 'options', 'intraday'].flatMap(k => App.LED(k).signals.filter(s => s.status === 'ACTIVE').map(s => [k, s]));

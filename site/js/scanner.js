@@ -2,6 +2,8 @@
 'use strict';
 (function () {
 const SC = App.scanner = {};
+/* A swing setup your rules hold back (ran away, sector falling, under 2R room, ...) stays listed with its reason but is not counted as actionable. */
+SC.held = s => (s.holds || []).length > 0 || String(s.status || '').startsWith('WATCH');
 const STG = { 5: ['Entry', '15m trigger fired: take it if the checklist is clean'], 4: ['1H confirmed', 'wait for the 15m precision entry'], 3: ['In zone', 'wait for the 1H confirmation'], 2: ['Set alert', 'BOS done: wait for the pullback'], 1: ['Developing', 'CHoCH only: wait for the BOS'] };
 const stCls = it => it.status.startsWith('WATCH') ? 'hold' : 's' + (it.stage || (it.status === 'TRIGGERED' ? 5 : it.status.startsWith('WATCH') ? 3 : 2));
 const key = (sec, it) => `${sec}|${it.symbol}|${it.direction}|${it.bos_date}`;
@@ -41,7 +43,7 @@ function ledgerView(sec, view) {
 }
 const viewSeg = (sec, view) => { const L = App.LED(sec), a = L.signals.filter(s => s.status === 'ACTIVE').length, c = L.signals.filter(s => s.status === 'CLOSED').length + (L.dropped || []).length;
   return App.ui.seg('view_' + sec, [['setups', 'Setups'], ['active', `Open trades ${a}`], ['closed', `Closed / invalidated ${c}`]], view); };
-const meta = d => d ? `<span class="pill info">${esc(dateIST(d.generated_at))} ${esc(hmIST(d.generated_at))} · ${esc(ago(d.generated_at))}</span>` : '';
+const meta = d => d ? `<span class="pill info">${esc(dateIST(d.generated_at))} ${esc(hmIST(d.generated_at))} · ${esc(ago(d.generated_at))}</span>${d.fast_at ? `<span class="pill" title="Between the hourly scans the 1H-confirmed setups are re-checked for a 15m entry every 15 minutes">15m entries checked ${esc(hmIST(d.fast_at))}</span>` : ''}` : '';
 
 /* ---------- swing ---------- */
 const SU = () => App.ui.sw || (App.ui.sw = { view: 'setups', stage: 'all', grade: 'all', q: '' });
@@ -51,13 +53,14 @@ App.pages.swing = () => {
   h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">${viewSeg('swing', u.view)}</div>`;
   if (u.view !== 'setups') return h + ledgerView('swing', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'The swing scan runs before the open, every hour at :25 and after the close.')}</div></div>`;
-  const S = d.setups, cnt = k => S.filter(s => s.stage === k).length;
+  const S = d.setups, cnt = k => S.filter(s => s.stage === k && !SC.held(s)).length, nHeld = S.filter(s => s.stage >= 3 && SC.held(s)).length;
   h += `<div class="pipeline" style="margin-bottom:14px">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${STG[k][1]}</div></button>`).join('')}</div>`;
   const short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
   if (short.length) h += App.ui.callout('good', `<b>Today's shortlist (max 5, pick 1 or 2):</b> ${short.map(s => `<a href="#/trade?s=swing&id=${encodeURIComponent(s.symbol + '|long')}"><b>${esc(s.symbol)}</b></a> <small>${STG[s.stage][0]} · ${s.grade} ${s.score}/10</small>`).join(' &nbsp;·&nbsp; ')}`) + '<div style="height:12px"></div>';
-  let L = S.filter(s => (u.stage === 'all' ? s.stage >= 2 : s.stage === +u.stage) && (u.grade === 'all' || (u.grade === 'A' ? ['A', 'A+'].includes(s.grade) : s.grade === 'A+')) && (!u.q || s.symbol.includes(u.q.toUpperCase()) || (s.sector || '').toLowerCase().includes(u.q.toLowerCase())));
-  h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${App.ui.seg('swstage', [['all', 'All active'], ...[5, 4, 3, 2, 1].map(k => [k, STG[k][0]])], u.stage)}${App.ui.seg('swgrade', [['all', 'Any grade'], ['A', 'A and A+'], ['A+', 'A+ only']], u.grade)}<input class="inp" style="width:180px" id="swQ" placeholder="Symbol or sector" value="${esc(u.q)}" aria-label="Filter"></div>`;
-  h += L.length ? `<div class="cards">${L.map(s => card('swing', s)).join('')}</div>` : `<div class="card"><div class="bd">${App.ui.empty('Nothing at this stage right now', u.stage === 'all' ? 'No stock is past the BOS with a pullback zone. Developing setups (CHoCH only) are in stage 1.' : '')}</div></div>`;
+  let L = S.filter(s => (u.stage === 'all' ? s.stage >= 2 : u.stage === 'held' ? s.stage >= 3 && SC.held(s) : s.stage === +u.stage && !SC.held(s)) && (u.grade === 'all' || (u.grade === 'A' ? ['A', 'A+'].includes(s.grade) : s.grade === 'A+')) && (!u.q || s.symbol.includes(u.q.toUpperCase()) || (s.sector || '').toLowerCase().includes(u.q.toLowerCase())));
+  h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${App.ui.seg('swstage', [['all', 'All listed'], ...[5, 4, 3, 2, 1].map(k => [k, STG[k][0]]), ['held', 'Held back ' + nHeld]], u.stage)}${App.ui.seg('swgrade', [['all', 'Any grade'], ['A', 'A and A+'], ['A+', 'A+ only']], u.grade)}<input class="inp" style="width:180px" id="swQ" placeholder="Symbol or sector" value="${esc(u.q)}" aria-label="Filter"></div>`;
+  L = L.slice().sort((a, b) => SC.held(a) - SC.held(b) || b.stage - a.stage || b.score - a.score);                // actionable first, held-back ones after them
+  h += L.length ? `<div class="cards">${L.map(s => card('swing', s)).join('')}</div>` : `<div class="card"><div class="bd">${App.ui.empty('Nothing at this stage right now', u.stage === 'all' ? 'No stock is past the BOS with a pullback zone. Developing setups (CHoCH only) are in stage 1.' : u.stage === 'held' ? 'No setup is being held back by your rules right now.' : '')}</div></div>`;
   h += whyCard();
   h += `<p class="help" style="margin-top:12px">${d.scanned}/${d.universe} stocks scanned (${esc(d.note || '')}). Nifty ${d.nifty_trend ? 'is above' : 'is below'} its 21 EMA. Stages 1 and 2 never alert; only a 15m entry with a clean checklist does.</p>`;
   return h;
@@ -305,8 +308,8 @@ App.binds.trade = q => {
   const draw = () => { const b = $('#chBox'); if (b) b.innerHTML = chartFor(R.it, App.ui.tfCur, R.sig, b.clientWidth - 32); };
   draw();
   if (!R.it.charts && R.it.section === 'swing' && R.it.tfs) {
-    const gen = (App.data.swing || {}).generated_at, have = App.lazyNow('swing_charts');
-    App.lazy('swing_charts', have && have.generated_at === gen ? 3600e3 : 0).then(draw);       // loads once per swing scan
+    const sw_ = App.data.swing || {}, gen = sw_.charts_at || sw_.generated_at, have = App.lazyNow('swing_charts');
+    App.lazy('swing_charts', have && (have.charts_at || have.generated_at) === gen ? 3600e3 : 0).then(draw);       // loads once per swing scan, and again when the fast lane refreshes the charts
   } let t; window.onresize = () => { clearTimeout(t); t = setTimeout(draw, 150); };
 };
 SC.card = card; SC.STG = STG;
