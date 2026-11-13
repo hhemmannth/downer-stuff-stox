@@ -115,7 +115,7 @@ App.binds.options = () => bindView('options', OU());
 const IU = () => App.ui.in || (App.ui.in = { view: 'setups', side: 'all' });
 App.pages.intraday = () => {
   const u = IU(), d = App.data.intraday;
-  let h = `<div class="ph"><div><h1>Intraday</h1><p>The most liquid Nifty 500 stocks, long and short: 15m CHoCH → 5m CHoCH + BOS → FVG + OB pullback → 5m 9 EMA close on 1.5x volume. MIS, SL-M, square off by 15:10, max two trades a day.</p></div><span class="sp"></span>${meta(d)}</div>
+  let h = `<div class="ph"><div><h1>Intraday</h1><p>The most liquid Nifty 500 stocks, long and short: 15m CHoCH → 5m CHoCH + BOS → FVG + OB pullback → 5m 9 EMA close on 1.5x volume. MIS, SL-M, square off by 15:10, two trades a day, more only if A+.</p></div><span class="sp"></span>${meta(d)}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${viewSeg('intraday', u.view)}${u.view === 'setups' ? App.ui.seg('inside', [['all', 'Both'], ['long', 'Long'], ['short', 'Short']], u.side) : ''}</div>`;
   if (u.view !== 'setups') return h + ledgerView('intraday', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No intraday data yet', '')}</div></div>`;

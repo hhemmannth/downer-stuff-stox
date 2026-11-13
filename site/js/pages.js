@@ -58,6 +58,29 @@ App.binds.health = () => {
 };
 
 /* ---------- dashboard ---------- */
+/* Live now: the time-critical part of the day on one card, so the dashboard answers "is anything happening?" without opening three pages. */
+function liveNowCard() {
+  const o = App.data.options || {}, sn = o.snapshot || {}, it = App.data.intraday || {}, sw = App.data.swing || {};
+  if (!o.generated_at && !it.generated_at && !sw.generated_at) return '';
+  const act = k => { try { return App.LED(k).signals.filter(s => s.status === 'ACTIVE'); } catch (e) { return []; } };
+  const row = (name, href, body) => `<a class="live-row" href="${href}"><b>${name}</b><span>${body}</span></a>`;
+  const rows = [];
+  if (o.generated_at) {
+    const trig = (o.setups || []).filter(s => s.status === 'TRIGGERED'), watch = (o.setups || []).filter(s => s.status !== 'TRIGGERED'), open = act('options').length;
+    const align = sn.above_1h == null ? '' : sn.above_1h ? '1H above 9 EMA (calls)' : '1H below 9 EMA (puts)', bias = sn.bias_up ? '15m up' : sn.bias_down ? '15m down' : '15m no bias';
+    const why = !trig.length && !watch.length && sn.why_none ? Object.values(sn.why_none)[0] : '';
+    rows.push(row('Nifty options', '#/options', `${trig.length ? `<span class="hot">${trig.map(s => esc(s.label || s.direction)).join(', ')} TRIGGERED</span> · ` : watch.length ? `${watch.length} watching · ` : 'No setup · '}${[align, bias].filter(Boolean).join(' · ')}${open ? ` · ${open} open` : ''}${why ? `<br><small class="muted">${esc(why)}</small>` : ''}`));
+  }
+  if (it.generated_at) {
+    const S = it.setups || [], trig = S.filter(s => s.status === 'TRIGGERED').length, watch = S.length - trig, open = act('intraday').length;
+    rows.push(row('Intraday', '#/intraday', `${trig ? `<span class="hot">${trig} triggered</span> · ` : 'None triggered · '}${watch} watching · ${open} open trade${open === 1 ? '' : 's'}`));
+  }
+  if (sw.generated_at) {
+    const S = sw.setups || [], held = s => SC.held(s), ent = S.filter(s => s.stage === 5 && !held(s)).length, conf = S.filter(s => s.stage === 4 && !held(s)).length;
+    rows.push(row('Swing', '#/swing', `${ent ? `<span class="hot">${ent} entry</span> · ` : 'No entry · '}${conf} 1H confirmed waiting for the 15m entry · ${sw.fast_at ? `15m checked ${esc(hmIST(sw.fast_at))}` : `scanned ${esc(hmIST(sw.generated_at))}`}`));
+  }
+  return `<div class="card"><div class="hd"><h2>Live now</h2><span class="cap">${App.marketOpen() ? 'market open' : 'market closed'}</span></div><div class="bd">${rows.join('')}</div></div>`;
+}
 App.pages.dashboard = () => {
   const m = App.data.market || {}, idx = m.indices || {}, sw = App.data.swing, nw = App.data.news || {}, rs = JR.riskStatus(), J = JR.J(), T = JR.enrich(J);
   const mo = todayIST().slice(0, 7), M = T.filter(t => t.mkey === mo), st = App.analytics.stats(M, J.set), all = App.analytics.stats(T, J.set);
@@ -68,6 +91,7 @@ App.pages.dashboard = () => {
     ${App.ui.kpi('This month', inrS(st.net), `${st.n} closed · ${st.n ? pct(st.winRate, 0) + ' wins' : 'no trades yet'}`, cls(st.net))}${App.ui.kpi('Expectancy', rr(all.expR), `all time, ${all.n} trades`, cls(all.expR))}</div>`;
   const lvl = { ok: ['good', 'Normal: trade your plan'], warn: ['warn', 'Caution'], bad: ['bad', 'Stop'] }[rs.level];
   h += `<div class="grid g-main" style="margin-bottom:14px"><div class="stack">`;
+  h += liveNowCard();
   // swing shortlist
   if (sw) { const S = sw.setups, short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
     h += `<div class="card"><div class="hd"><h2>Swing: today's shortlist</h2><span class="cap">max 5, pick 1 or 2 (your stock-selection rule)</span><span class="sp"></span><a class="btn sm" href="#/swing">All swing setups</a></div>
