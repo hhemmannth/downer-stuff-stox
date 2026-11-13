@@ -156,6 +156,50 @@ function paintChrome() {
 App.paintChrome = paintChrome;
 
 /* ---------- render ---------- */
+/* ---------- the orb: a monochrome 3D particle sphere (canvas, no library) ----------
+   <canvas data-orb data-energy="0..1"> anywhere in a page becomes a slowly turning sphere of points with depth (near points larger and brighter),
+   a tilted orbit ring and a ring of fine ticks. Energy (for example how far Nifty moved, or how many setups are live) speeds it up and widens the
+   tick wave. Colours follow the theme (white on black, black on white). It stops when the page re-renders, sleeps while the tab is hidden and
+   draws one still frame when the phone asks for reduced motion. */
+App._orbs = [];
+App.orbsInit = () => {
+  App._orbs.forEach(f => f()); App._orbs = [];
+  const still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll('canvas[data-orb]').forEach(cv => {
+    const ctx = cv.getContext && cv.getContext('2d'); if (!ctx) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2), box = cv.getBoundingClientRect(), W = Math.max(60, box.width), H = Math.max(60, box.height);
+    cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const ink = (getComputedStyle(document.documentElement).getPropertyValue('--ink') || '#ffffff').trim().toLowerCase(), rgb = ink.startsWith('#f') ? '255,255,255' : '0,0,0';      // dark theme: ink is white
+    const E = Math.max(0, Math.min(1, +cv.dataset.energy || 0)), N = W < 160 ? 380 : 760, R = Math.min(W, H) * 0.30, cx = W / 2, cy = H / 2, ga = Math.PI * (3 - Math.sqrt(5));
+    const P = Array.from({ length: N }, (_, i) => { const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), t = ga * i; return [Math.cos(t) * r, y, Math.sin(t) * r]; });
+    const ticks = Array.from({ length: 140 }, (_, i) => 0.35 + 0.65 * Math.abs(Math.sin(i * 0.37) * Math.cos(i * 0.11)));
+    let a = 0.6, raf = 0, last = 0;
+    const draw = now => {
+      const dt = Math.min(64, now - (last || now)); last = now; a += dt * (0.00012 + 0.00042 * E);
+      ctx.clearRect(0, 0, W, H);
+      const halo = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.9); halo.addColorStop(0, `rgba(${rgb},${0.10 + 0.08 * E})`); halo.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
+      const ca = Math.cos(a), sa = Math.sin(a), tilt = 0.42, ct = Math.cos(tilt), st = Math.sin(tilt);
+      for (const [x0, y0, z0] of P) {
+        const x = x0 * ca + z0 * sa, z1 = -x0 * sa + z0 * ca, y = y0 * ct - z1 * st, z = y0 * st + z1 * ct;
+        const k = 2.6 / (2.6 + z), d = (1 - z) / 2;
+        ctx.globalAlpha = 0.10 + 0.85 * d * d; ctx.fillStyle = `rgb(${rgb})`;
+        ctx.fillRect(cx + x * R * k, cy + y * R * k, 0.5 + 1.25 * d * k, 0.5 + 1.25 * d * k);
+      }
+      ctx.globalAlpha = 0.28; ctx.strokeStyle = `rgb(${rgb})`; ctx.lineWidth = 0.7;
+      ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.32, R * 0.36, -0.32 + Math.sin(a * 0.7) * 0.05, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+      for (let i = 0; i < ticks.length; i++) {
+        const th = (i / ticks.length) * Math.PI * 2, w = ticks[i] * (0.5 + 0.5 * Math.sin(a * 3 + i * 0.5)) * (4 + 10 * E), r0 = R * 1.12;
+        ctx.globalAlpha = 0.12 + 0.35 * ticks[i]; ctx.beginPath(); ctx.moveTo(cx + Math.cos(th) * r0, cy + Math.sin(th) * r0); ctx.lineTo(cx + Math.cos(th) * (r0 + w), cy + Math.sin(th) * (r0 + w)); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      if (!still) raf = requestAnimationFrame(t => { if (document.hidden) { last = 0; raf = requestAnimationFrame(draw); } else draw(t); });
+    };
+    draw(performance.now()); App._orbs.push(() => cancelAnimationFrame(raf));
+  });
+};
+
 App.render = () => {
   const { page } = App.route(), fn = App.pages[page] || App.pages.dashboard, el = $('#page');
   $$('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === page || (page === 'trade' && a.dataset.nav === App.route().q.get('s'))));
@@ -164,6 +208,7 @@ App.render = () => {
   const keep = App._lastPage === page ? window.scrollY : 0;
   try { el.innerHTML = App.staleBanner() + App.riskBanner() + fn(App.route().q); } catch (e) { console.error(e); el.innerHTML = `<div class="callout bad"><span class="ic">!</span><div><b>This page hit an error.</b> ${esc(e.message)}</div></div>`; }
   if (App.binds[page]) try { App.binds[page](App.route().q); } catch (e) { console.error(e); }
+  try { App.orbsInit(); } catch (e) { console.error(e); }                                   // start the orbs of the page just drawn (and stop the old ones)
   if (App._lastPage !== page) window.scrollTo(0, 0); else window.scrollTo(0, keep);
   App._lastPage = page; paintChrome();
 };

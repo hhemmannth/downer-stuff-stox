@@ -17,17 +17,23 @@ SC.sigStatus = sigStatus;
 
 /* ---------- setup card ---------- */
 function card(sec, it) {
+  /* The condensed card: name and score, one status line, a thin chart, three levels, one footer line. Everything else (T2/T3, the full
+     checklist, every caution) is on the trade page, one tap away. */
   const d = dec(it), hot = it.status === 'TRIGGERED', href = `#/trade?s=${sec}&id=${encodeURIComponent(it.symbol + '|' + it.direction)}`, tracked = App.LED(sec).signals.some(s => s.id === key(sec, it));
-  const ot = it.options_trade, stage = it.stage, warn = [...(it.holds || []).map(x => 'Held: ' + x), ...(it.notes || [])].slice(0, 2);
-  const lv = it.entry != null ? [['e', it.stage >= 5 || hot ? 'Entry' : 'Plan entry', it.entry], ['s', 'Stop', it.sl], ['t', 'T1', it.t1], ['t', 'T2', it.t2]] : [['', 'CHoCH', it.choch_level], ['', 'Price', it.price]];
-  const sub = sec === 'options' ? (ot ? `${esc(ot.instrument)} · Δ ${fmt(ot.delta)} · ₹${fmt(ot.premium)}` : 'Nifty 50 index') : [it.sector, it.sector_state ? it.sector_state + ' sector' : '', it.results && it.results.days != null ? `results in ${it.results.days}d` : ''].filter(Boolean).join(' · ');
+  const ot = it.options_trade, stage = it.stage, cautions = [...(it.holds || []).map(x => 'Held: ' + x), ...(it.notes || [])];
+  const sub = sec === 'options' ? (ot ? `${esc(ot.instrument)} · Δ ${fmt(ot.delta)} · ₹${fmt(ot.premium)}` : 'Nifty 50 index') : [it.sector, it.rs_rank != null ? 'RS ' + it.rs_rank : ''].filter(Boolean).map(esc).join(' · ');
   const sp = it.spark || (it.candles ? it.candles.slice(-60).map(c => c[3]) : null), spark = sp && sp.length ? App.charts.spark(sp, { lo: it.zone_bot, hi: it.zone_top, sl: it.sl }) : '';
-  return `<a class="sc${hot ? ' hot' : ''}" href="${href}"><div class="sc-h"><div class="nm"><b>${esc(it.symbol)} ${sec !== 'swing' ? `<span class="tag ${it.direction}">${esc(it.label)}</span>` : ''}</b><small>${sub || '&nbsp;'}</small></div><div class="score">${App.ui.ring(it.score)}${App.ui.grade(it.grade)}</div></div>
-    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="st ${stCls(it)}">${esc(it.status)}</span>${tracked ? '<span class="pill ok">tracked</span>' : ''}${App.journal.findByTag(key(sec, it)) ? '<span class="pill info">in journal</span>' : ''}</div>
-    ${stage ? `<div class="stages${stage === 5 ? ' s5' : ''}" title="Playbook stage ${stage} of 5">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= stage ? 'on' : ''}"></i>`).join('')}</div>` : ''}
-    ${spark}<div class="lv">${lv.map(([c, l, v]) => `<div class="${c}"><small>${l}</small><b>${fmt(v, d)}</b></div>`).join('')}</div>
-    <div style="display:flex;gap:5px;flex-wrap:wrap">${(it.ticks || []).map(t => `<span class="tick">✓ ${esc(t)}</span>`).join('')}${it.rs_rank != null ? `<span class="tick ${it.rs_rank >= 70 ? '' : 'off'}" title="Relative strength: 20-day move against Nifty, ranked within the Nifty 500 (100 = strongest)">RS ${it.rs_rank}</span>` : ''}${it.risk_pct != null ? `<span class="tick off">risk ${it.risk_pct.toFixed(1)}%</span>` : ''}${it.room_r != null ? `<span class="tick ${it.room_r >= 2 ? 'off' : ''}" style="${it.room_r < 2 ? 'background:var(--warn-soft);color:var(--warn)' : ''}">room ${it.room_r.toFixed(1)}R</span>` : ''}</div>
-    ${warn.map(w => `<div class="warnline">⚠ ${esc(w)}</div>`).join('')}</a>`;
+  const lv = it.entry != null ? [['e', hot || stage >= 5 ? 'Entry' : 'Plan', it.entry], ['s', 'Stop', it.sl], ['t', 'T1', it.t1]] : [['', 'CHoCH', it.choch_level], ['', 'Price', it.price]];
+  const ticks = (it.ticks || []).length, foot = [ticks ? `<span class="cf" title="${esc((it.ticks || []).join(', '))}">${'●'.repeat(ticks)}${'○'.repeat(Math.max(0, 3 - ticks))}<em>context</em></span>` : '',
+    it.risk_pct != null ? `<span>risk ${fmt(it.risk_pct, 1)}%</span>` : '', tracked ? '<span class="trk">tracked</span>' : '', App.journal.findByTag(key(sec, it)) ? '<span class="trk">in journal</span>' : '',
+    cautions.length ? `<span class="cau" title="${esc(cautions.join(' · '))}">⚠ ${cautions.length}</span>` : ''].filter(Boolean).join('');
+  const full = String(it.status || ''), held_ = sec === 'swing' && (it.holds || []).length;      // the card shows the stage; the full status is on hover and on the trade page
+  const label = held_ ? 'HELD · ' + (it.holds || [])[0] : full.startsWith('WATCH') ? full.replace(/ \(/, ' · ').replace(/\)$/, '') : full.split(' (')[0];
+  return `<a class="sc${hot ? ' hot' : ''}" href="${href}"><div class="sc-h"><div class="nm"><b>${esc(it.symbol)}${sec !== 'swing' ? ` <span class="tag ${it.direction}">${esc(it.label)}</span>` : ''}</b><small>${sub || '&nbsp;'}</small></div>
+    <div class="sc-score" title="Score ${it.score}/10, grade ${esc(it.grade)}"><b>${it.score}</b><span class="g ${String(it.grade).replace('+', 'p').toLowerCase()}">${esc(it.grade)}</span></div></div>
+    <div class="sc-st ${stCls(it)}" title="${esc(full)}"><i></i><span>${esc(label)}</span>${stage ? `<span class="dots${stage === 5 ? ' s5' : ''}" title="Playbook stage ${stage} of 5">${[1, 2, 3, 4, 5].map(k => `<b class="${k <= stage ? 'on' : ''}"></b>`).join('')}</span>` : ''}</div>
+    ${spark}<div class="sc-lv">${lv.map(([c, l, v]) => `<span class="${c}"><small>${l}</small><b>${fmt(v, d)}</b></span>`).join('')}</div>
+    ${foot ? `<div class="sc-f">${foot}</div>` : ''}</a>`;
 }
 
 /* ---------- tracked trades (signals) ---------- */
@@ -52,9 +58,17 @@ App.pages.swing = () => {
   let h = `<div class="ph"><div><h1>Swing scanner</h1><p>Your swing playbook on the Nifty 500, long only: Weekly location → 1D CHoCH, BOS, FVG + OB, fib → 1H rejection and 9 EMA close on volume → 15m precision entry. Each setup shows how far along the playbook it is.</p></div><span class="sp"></span>${meta(d)}</div>`;
   h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">${viewSeg('swing', u.view)}</div>`;
   if (u.view !== 'setups') return h + ledgerView('swing', u.view);
-  if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'The swing scan runs before the open, every hour at :25 and after the close.')}</div></div>`;
+  if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'The swing scan runs before the open, right after each 1H candle closes and after the close.')}</div></div>`;
   const S = d.setups, cnt = k => S.filter(s => s.stage === k && !SC.held(s)).length, nHeld = S.filter(s => s.stage >= 3 && SC.held(s)).length;
-  h += `<div class="pipeline" style="margin-bottom:14px">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${STG[k][1]}</div></button>`).join('')}</div>`;
+  /* the playbook as a node graph (desktop): the scanned universe as an orb, a filament to each stage, the counts on the stage cards and a summary
+     panel. The stage cards are the same buttons as before (they filter the list); on a phone it falls back to the strip of five. */
+  const ready = cnt(5) + cnt(4), inplay = [5, 4, 3, 2].reduce((n, k) => n + cnt(k), 0), act = ready, sel = String(u.stage), ys = [10, 30, 50, 70, 90];
+  const links = [5, 4, 3, 2, 1].map((k, i) => `<path d="M0,50 C55,50 45,${ys[i]} 100,${ys[i]}" class="${sel === String(k) ? 'on' : ''}${k >= 4 && cnt(k) ? ' live' : ''}"/>`).join('');
+  h += `<div class="hero-pipe" style="margin-bottom:14px"><div class="hp-orb"><canvas data-orb data-energy="${Math.min(1, (ready * 3 + inplay / 6) / 12).toFixed(2)}" aria-hidden="true"></canvas><div class="hp-cap"><b>Nifty 500</b><small>${d.scanned || ''} scanned</small></div></div>
+    <svg class="hp-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${links}</svg>
+    <div class="pipeline hp-nodes">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${STG[k][1]}</div></button>`).join('')}</div>
+    <div class="hp-panel"><div class="cap">Swing scan</div><div class="big">${ready}</div><div class="sub">ready: 1H confirmed or entry</div>
+      <div class="hp-kv"><span>In play</span><b>${inplay}</b><span>Listed</span><b>${S.length}</b><span>Held back</span><b>${nHeld}</b><span>Full scan</span><b>${esc(hmIST(d.generated_at))}</b><span>15m entries</span><b>${d.fast_at ? esc(hmIST(d.fast_at)) : 'hourly'}</b></div></div></div>`;
   const short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
   if (short.length) h += App.ui.callout('good', `<b>Today's shortlist (max 5, pick 1 or 2):</b> ${short.map(s => `<a href="#/trade?s=swing&id=${encodeURIComponent(s.symbol + '|long')}"><b>${esc(s.symbol)}</b></a> <small>${STG[s.stage][0]} · ${s.grade} ${s.score}/10</small>`).join(' &nbsp;·&nbsp; ')}`) + '<div style="height:12px"></div>';
   let L = S.filter(s => (u.stage === 'all' ? s.stage >= 2 : u.stage === 'held' ? s.stage >= 3 && SC.held(s) : s.stage === +u.stage && !SC.held(s)) && (u.grade === 'all' || (u.grade === 'A' ? ['A', 'A+'].includes(s.grade) : s.grade === 'A+')) && (!u.q || s.symbol.includes(u.q.toUpperCase()) || (s.sector || '').toLowerCase().includes(u.q.toLowerCase())));
