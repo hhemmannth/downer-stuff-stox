@@ -23,7 +23,7 @@ def bind(mod):
     global H; H = mod
 
 CFG = dict(pivot=3, zz=0.8, atr_n=14, lookback=150, disp_body_atr=1.0, fvg_min_atr=0.2, stack_gap_atr=0.5, sl_buffer_atr=0.25,
-           max_bos_age=60, max_zone_atr=3.5, max_zone_pct=10.0, alert_atr=4.0, choch_age=15,
+           max_bos_age=60, max_zone_atr=3.5, max_zone_pct=10.0, alert_atr=2.0, choch_age=15,
            rvol_min=1.5, bos_rvol_good=1.5, confirm_max_age=21, entry_fresh=8, entry_chase_atr=0.5, ran_away_atr=1.5, require_volume=True,
            min_room_r=2.0, wide_stop_pct=8.0, wide_stop_atr=2.5, results_hold_days=14)
 STAGES = {1: 'DEVELOPING (CHoCH, wait for BOS)', 2: 'SET ALERT (wait for pullback)', 3: 'IN ZONE (wait for 1H)', 4: '1H CONFIRMED (wait for 15m entry)', 5: 'TRIGGERED'}
@@ -220,8 +220,9 @@ def _result(d, ctx):
                                        f'1H RECLAIM, WEAK VOLUME ({rv:.1f}x; wait for a close above the 9 EMA on 1.5x)')
     if stage >= 4 and weekly.get('up') is False: holds.append('weekly trend against')                       # your hold-backs apply from the 1H confirmation on,
     if stage >= 4 and room is not None and room < cfg['min_room_r']: holds.append(f'room < {cfg["min_room_r"]:.0f}R')   # not only at the 15m entry
-    if stage == 4 and zt is not None and a and px - zt > cfg['ran_away_atr'] * a:              # confirmed, then price ran off before any 15m entry: the
-        holds.append(f'price ran {(px - zt) / a:.1f} ATR above the zone, no chasing')         # same no-chase rule the backtest uses (1.5 ATR above the zone)
+    if stage in (3, 4) and zt is not None and a and px - zt > cfg['ran_away_atr'] * a:         # price ran off before any 15m entry (stage 4), or touched the zone and left
+        holds.append(f'price ran {(px - zt) / a:.1f} ATR above the zone, no chasing' if stage == 4 else        # without a confirmed 1H reclaim (stage 3): not "in zone" any more.
+                     f'price left the zone and is {(px - zt) / a:.1f} ATR above it: wait for a new pullback')    # Same 1.5 ATR no-chase rule the backtest uses.
     if holds: status = f'WATCH ({holds[0]})'
     notes = []
     if plan and (plan['risk_pct'] > cfg['wide_stop_pct'] or (plan['risk_atr'] or 0) > cfg['wide_stop_atr']): notes.append('wide structural stop: reduce size or skip, never widen it')

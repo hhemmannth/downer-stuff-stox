@@ -9,7 +9,7 @@ Scanner, journal, analytics, market and news in one app, built on your swing pla
 4. Open the site, go to **Settings** and sign in with your Trade Insight account: your journal syncs (same cloud data as Trade Insight).
 5. On the iPhone: Safari > Share > Add to Home Screen (the icon is new).
 
-Nothing else changes: the market loop still scans every 5 minutes during market hours, swing hourly at :25 plus 08:37 and 16:17, and phone alerts still come from ntfy (they now open the exact trade).
+Nothing else changes: the market loop still scans every 5 minutes during market hours, swing right after each 1H candle closes (:15, and 15:30 for the last one) plus 08:37 and 16:17, and phone alerts still come from ntfy (they now open the exact trade).
 
 ## What is in the app
 | Page | What it does |
@@ -28,7 +28,7 @@ Nothing else changes: the market loop still scans every 5 minutes during market 
 | **Settings** | Cloud sign-in, journals, risk rules (capital, risk per trade, loss limits), theme |
 
 ## Keeping the live scans running
-- **market-loop** scans every 5 minutes from about 09:05 to 15:40 and runs the swing scan hourly at :25. It writes a heartbeat (`data/health/loop.json`) on every tick.
+- **market-loop** scans every 5 minutes from about 09:05 to 15:40 and runs the swing scan right after each 1H candle closes (:15, and 15:30 for the last candle). It writes a heartbeat (`data/health/loop.json`) on every tick.
 - **watchdog** runs every 10 minutes in market hours. No loop running or queued: it starts one. Loop silent for 20 minutes: it cancels and restarts it. It sends a phone push only when it acts, and does nothing on weekends, NSE holidays and outside 09:10-15:25.
 - **In the app** a red banner appears on every page when live data is more than 11 minutes old in market hours, with a link to start the loop.
 - **On-time starts (recommended):** GitHub sometimes skips scheduled runs. On cron-job.org (free, time zone Asia/Kolkata) add one job, Monday to Friday, every 10 minutes from 09:05 to 15:25:
@@ -101,6 +101,15 @@ Needs A and the `ANGEL_*` secrets. Actions > tradebook > Run workflow (tick forc
 2. Sign out, sign in again: after the password you are asked for the code. Nothing loads until it is entered.
 3. Optional, stronger: once step 2 works, run `supabase/require_2fa.sql` once in the SQL Editor. The database itself then refuses your journal without a verified code (the scanner user is exempt). To undo, run the two `drop policy` lines at the bottom of that file.
 Lost phone: Supabase > Authentication > Users > your user > remove the factor, then sign in with your password.
+
+## Tuning round (13 Nov 2026): no stale or contradictory setups, faster swing scan
+- **A setup that became a trade never appears as watched, dropped or invalidated.** The trade lives in the trades list only. Old files heal themselves on the next run (the earlier files had 25 traded setups still "watching" in intraday, and 14 intraday and 7 options setups listed as both traded and dropped).
+- **One dropped entry per setup** (the latest reason). A setup that returns after being dropped leaves the dropped list; one that was dropped and later triggers is a trade, not a drop.
+- **"IN ZONE" means in the zone:** a setup that touched the zone and then left it, more than 1.5 ATR above (the backtest's no-chase distance), is held as WATCH with the reason, and stays out of the shortlist, counts and alerts. Same rule for a 1H-confirmed setup that ran away.
+- **The Swing page counts only actionable setups** in each stage. Held-back setups have their own "Held back" filter with the reason on each card, and come after the actionable ones in the list.
+- **Swing fast lane (15m entries):** between the hourly scans the loop re-checks ONLY the 1H-confirmed setups (stage 4 and up, at most 12, the actionable ones first) for a 15m entry, right after each 15m candle closes: at :00, :30 and :45 from 09:30 to 15:30 (the :15 slot is the full scan). Together with the full scans there is now a swing check at every quarter hour, so a trigger reaches you within about a minute of its 15m candle closing instead of up to an hour later, and the first entries of the morning (09:30 to 10:15), which no scan covered before, are seen at once. It runs the same engine and the same context rules as the full scan on fresh 1D, 1H and 15m candles for those few setups, merges the result into `swing.json`, the charts, the explain file and the trade ledger, and leaves every other setup exactly as it was. A setup whose data did not download, or whose structure changed, is left alone for the next full scan. It never runs while a full scan is running, never invents or deletes setups, and has a time limit so it cannot hold up the 5-minute loop. The Swing page shows "15m entries checked HH:MM". Command: `python strategy_scanner.py --mode swing-fast`.
+- **SET ALERT distance is now 2 ATR** (it was 4): a setup with a finished CHoCH + BOS and a zone is listed as "SET ALERT" only while price is within 2 ATR above the zone. Further away it drops out, with the reason "price far above the zone: wait for a new structure, no chasing". It comes back when price pulls back.
+- **Swing scan timing:** it now starts on the first tick after each 1H candle closes (10:15, 11:15 ... 15:15), and again at 15:30 for the day's last candle (15:15 to 15:30), which used to wait for the next morning. Before, it ran at :25, so a confirmation reached you 16 or more minutes late.
 
 ## Swing scanner, checked against your strategy (12 Nov 2026)
 - **1H confirmation needs strong volume (1.5x)**, as your strategy says. A later 1H close still above the 9 EMA on 1.5x counts too (your "controlled continuation"). A reclaim without volume shows as **1H RECLAIM, WEAK VOLUME** (or NO VOLUME DATA when the feed has none) and waits.
@@ -219,7 +228,7 @@ Candidates are taken first-come, first-served (no peeking at later signals that 
 **Market data.** The year of daily candles comes from Yahoo (about a minute for the whole Nifty 500, and it matched Angel One on every close we compared). Each morning a sample of stocks plus Nifty is checked against Angel One and shown under System health > Data sources. Angel One serves the Nifty candles, the hourly candles for swing candidates and the live option prices. Intraday stocks use Yahoo by design.
 
 ## Tests (no internet needed)
-`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_backtest_tf.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`, `test_rules.py`, `test_gold_live.py`
+`python test_swing.py`, `test_scanner.py`, `test_pipeline.py`, `test_signals.py`, `test_publish.py`, `test_invariants.py`, `test_watchdog.py`, `test_datasource.py`, `test_alerts.py`, `test_digest.py`, `test_backtest.py`, `test_quality.py`, `test_notify2.py`, `test_bot.py`, `test_vault.py`, `test_fills.py`, `test_backtest_tf.py`, `test_data.py`, `test_greeks.py`, `test_market.py`, `test_news.py`, `test_sector.py`, `test_rules.py`, `test_gold_live.py`, `test_fastlane.py`
 
 ## Limits
 Without the Angel One secrets, data is Yahoo Finance (unofficial, can be delayed) and option premiums are model prices. With them, premiums at your stop and targets are still model estimates around the live price. Results dates come from Yahoo and can be missing (check NSE). Rules-based candidates, not investment advice.

@@ -109,6 +109,9 @@ def update(led, section, items, states, bars, now, can_open=True):
     late = lambda s: s['section'] in ('options', 'intraday') and pd.Timestamp(s['created']).strftime('%H:%M') >= LAST_ENTRY
     led['signals'] = [s for s in led['signals'] if not (s['status'] == 'ACTIVE' and late(s))]   # no new trades after 15:00
     events = []; known = {s['id'] for s in led['signals']}
+    for k in [k for k in led['watch'] if k in known]: del led['watch'][k]                                   # a setup that is already a trade lives in the trades list only:
+    seen_ids = set()                                                                                       # never in the watch or dropped lists (this also heals old files);
+    led['dropped'] = [d for d in reversed(led['dropped']) if d.get('id') not in known and not (d.get('id') in seen_ids or seen_ids.add(d.get('id')))][::-1]    # one entry per setup, the latest
     for sig in led['signals']:
         if sig['status'] == 'ACTIVE': events += walk(sig, bars.get(sig['symbol']), now)
     current = {key(section, it): it for it in items}
@@ -117,7 +120,10 @@ def update(led, section, items, states, bars, now, can_open=True):
         if section in ('options', 'intraday') and pd.Timestamp(ts).strftime('%H:%M') >= LAST_ENTRY: can_open = False
         if it['status'] == 'TRIGGERED' and k not in known and can_open:
             sig = new_signal(section, it, ts); led['signals'].append(sig); events.append(dict(sig['events'][0], id=sig['id'], symbol=sig['symbol'], section=section, label=sig['label'])); led['watch'].pop(k, None)
+            led['dropped'] = [d for d in led['dropped'] if d.get('id') != k]                               # it was dropped earlier but came back and triggered: it is a trade now
         elif not it['status'].startswith('TRIGGER'):
+            if k in known: continue                                                                        # already a trade (even if the trigger candle has passed): not a watch item again
+            led['dropped'] = [d for d in led['dropped'] if d.get('id') != k]                               # back in play: no longer 'dropped'
             w = led['watch'].get(k) or dict(first_seen=now.isoformat(timespec='minutes'))
             w.update(id=k, section=section, symbol=it['symbol'], direction=it['direction'], label=it.get('label'), status=it['status'], grade=it['grade'], score=it['score'], entry=it['entry'], sl=it['sl'], t1=it['t1'],
                      zone_bot=it['zone_bot'], zone_top=it['zone_top'], last_seen=now.isoformat(timespec='minutes')); led['watch'][k] = w
@@ -125,7 +131,8 @@ def update(led, section, items, states, bars, now, can_open=True):
         if k in current or k in known: continue
         w = led['watch'].pop(k); st = states.get((w['symbol'], w['direction']), 'GONE')
         if st == 'GONE': continue                                   # not scanned this run (e.g. data missing): keep nothing, decide next time
-        w.update(dropped=now.isoformat(timespec='minutes'), reason=REASONS.get(st, REASONS[None]), state=st); led['dropped'].append(w)
+        w.update(dropped=now.isoformat(timespec='minutes'), reason=REASONS.get(st, REASONS[None]), state=st)
+        led['dropped'] = [d for d in led['dropped'] if d.get('id') != k] + [w]                             # one dropped entry per setup, the latest
     cut = now - pd.Timedelta(days=KEEP_DAYS.get(section, 30))
     led['signals'] = [s for s in led['signals'] if s['status'] == 'ACTIVE' or pd.Timestamp(s.get('closed') or s['created']) >= (cut if pd.Timestamp(s.get('closed') or s['created']).tzinfo is not None else cut.tz_localize(None))]
     led['dropped'] = [d for d in led['dropped'] if pd.Timestamp(d['dropped']) >= cut][-200:]

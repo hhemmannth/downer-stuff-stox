@@ -485,6 +485,27 @@ def candles(frame, bars, fmt):
     return dict(times=[x.strftime(fmt) for x in d.index], candles=[[round(float(x), 2) for x in row] for row in d[['Open', 'High', 'Low', 'Close']].values],
                 volume=[int(x) for x in d.Volume.fillna(0).values], ema=[round(float(x), 2) for x in ema(frame.Close, 9).tail(bars).values])
 
+def apply_swing_context(r, ex):
+    """Your context rules for one swing setup, from the facts stored in `ex` (data check, backtest regime, ex-dividend, sector index, results):
+    each adds a note and, where your rules say so, holds the setup back. The full scan gathers the facts fresh; the 15-minute fast lane
+    re-uses the ones stored on the setup, so both apply exactly the same rules."""
+    add = lambda t: r.__setitem__('notes', (r['notes'] + '; ' if r['notes'] else '') + t)
+    if ex.get('data_flags'): add('data check: ' + ex['data_flags'][0]['text'])
+    edge = ex.get('regime_edge')
+    if edge and r['stage'] >= 3 and edge.get('verdict') == 'weak':
+        add(f"backtest: in a \"{edge['label']}\" market this playbook averaged {edge['avg']:+.2f}R over {edge['n']} trades: smaller size or skip")
+        if os.environ.get('REGIME_FILTER', '').strip().lower() == 'hold': hold_back(r, 'weak regime in backtest')
+    xd = ex.get('ex_dividend')
+    if xd and r['stage'] >= 4: add(f"ex-dividend on {xd['date']}: the price drops by the dividend that morning, which can touch a tight stop")
+    chk = ex.get('index_check')
+    if chk:
+        if chk['state'] == 'falling': hold_back(r, 'index falling'); add(f"{chk['sector_index']} is falling: wait for it to stabilise")
+        elif chk['state'] == 'unknown': add('sector index data unavailable: check the index yourself')
+    rs = ex.get('results')
+    if rs and r['stage'] >= 3 and rs['days'] <= swing.CFG['results_hold_days']:
+        add(f"results in {rs['days']} days: exit before them or skip"); hold_back(r, 'results inside hold')
+    return r
+
 def hold_back(r, reason):
     """Your swing hold-backs (sector index falling, results inside the hold, ...) apply from the 1H confirmation on (stage 4 and 5): the setup
     stays listed, marked WATCH with the reason, and is not counted as an entry. Earlier stages only get the note."""
@@ -494,12 +515,13 @@ def hold_back(r, reason):
     return r
 
 def ran_away_check(r, ltp):
-    """A swing setup that confirmed on the 1H and then ran more than 1.5 ATR above its zone before any 15m entry is no longer a 'wait for
-    the 15m entry': it is held back (no chasing), the same rule the backtest applies. Uses the live price when there is one."""
-    if r.get('stage') != 4 or ltp is None or r.get('zone_top') is None or not r.get('atr') or any('ran ' in h for h in r.get('holds', [])): return r
+    """A swing setup more than 1.5 ATR above its zone is no longer actionable, with the live price as the judge: a 1H-confirmed one 'ran away'
+    before any 15m entry (no chasing, the backtest's rule), and an 'IN ZONE' one has left the zone without a confirmed 1H reclaim. Both are
+    held as WATCH with the reason, so they stay out of the shortlist, the counts and the alerts."""
+    if r.get('stage') not in (3, 4) or ltp is None or r.get('zone_top') is None or not r.get('atr') or any(('ran ' in h or 'left the zone' in h) for h in r.get('holds', [])): return r
     up = (ltp - r['zone_top']) / r['atr']
     if up > swing.CFG['ran_away_atr']:
-        r['holds'] = r.get('holds', []) + [f'price ran {up:.1f} ATR above the zone, no chasing']
+        r['holds'] = r.get('holds', []) + [f'price ran {up:.1f} ATR above the zone, no chasing' if r['stage'] == 4 else f'price left the zone and is {up:.1f} ATR above it: wait for a new pullback']
         if not str(r.get('status', '')).startswith('WATCH'): r['status'] = f"WATCH ({r['holds'][-1]})"
     return r
 
@@ -594,29 +616,16 @@ def run_swing(args, now):
     for s, r in keep:
         ex = dict(per.get(s, {}))
         if ex.get('rs20') is not None and len(rs_all) > 1: ex['rs_rank'] = int(round(100 * bisect.bisect_left(rs_all, ex['rs20']) / (len(rs_all) - 1)))   # 100 = strongest 20-day move against Nifty in the universe
-        if s in dflags:
-            ex['data_flags'] = dflags[s]; r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + 'data check: ' + dflags[s][0]['text']
-        if edge and r['stage'] >= 3:
-            ex['regime_edge'] = edge
-            if edge['verdict'] == 'weak':
-                r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"backtest: in a \"{edge['label']}\" market this playbook averaged {edge['avg']:+.2f}R over {edge['n']} trades: smaller size or skip"
-                if os.environ.get('REGIME_FILTER', '').strip().lower() == 'hold': hold_back(r, 'weak regime in backtest')
+        if s in dflags: ex['data_flags'] = dflags[s]
+        if edge and r['stage'] >= 3: ex['regime_edge'] = edge
         if r['stage'] >= 4:
             xd = ex_dividend_info(s, now)
-            if xd and xd['days'] <= 7: ex['ex_dividend'] = xd; r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"ex-dividend on {xd['date']}: the price drops by the dividend that morning, which can touch a tight stop"
-        if s in checks:
-            chk = checks[s]; ex['index_check'] = chk
-            if chk['state'] == 'falling':
-                hold_back(r, 'index falling')
-                r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"{chk['sector_index']} is falling: wait for it to stabilise"
-            elif chk['state'] == 'unknown': r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + 'sector index data unavailable: check the index yourself'
+            if xd and xd['days'] <= 7: ex['ex_dividend'] = xd
+        if s in checks: ex['index_check'] = checks[s]
         if r['stage'] >= 3 and sum(1 for i in items if i.get('results')) < 30:
             rs = results_info(s, now)
-            if rs:
-                ex['results'] = rs
-                if rs['days'] <= swing.CFG['results_hold_days']:
-                    r['notes'] = (r['notes'] + '; ' if r['notes'] else '') + f"results in {rs['days']} days: exit before them or skip"
-                    hold_back(r, 'results inside hold')
+            if rs: ex['results'] = rs
+        apply_swing_context(r, ex)
         ltp = float(hmap[s].Close.iloc[-1]) if s in hmap and len(hmap[s]) else None
         ran_away_check(r, ltp)
         items.append(swing_item(s, r, daily[s], hmap.get(s), mmap.get(s), ex, ltp))
@@ -637,11 +646,69 @@ def run_swing(args, now):
                rows={x: [w[0], w[1], w[2], w[3] if len(w) > 3 else None, px.get(x), industries.get(x)] for x, w in why.items()}))
     return items
 
+# ------------------------------------------------------------------ swing fast lane
+FAST_MAX = 12                                                                   # most setups re-checked in one fast run (actionable ones first)
+SWING_FACTS = ('sector', 'sector_state', 'rs20', 'rs_rank', 'data_flags', 'regime_edge', 'ex_dividend', 'index_check', 'results')    # facts the full scan gathers; the fast lane keeps them
+
+def run_swing_fast(args, now):
+    """Swing fast lane: between the hourly swing scans, re-check ONLY the 1H-confirmed setups (stage 4 and up) for the 15m entry, right after each
+    15m candle closes. The 1H confirmation, the daily structure and the context facts only change when the full scan runs (right after each 1H
+    close), so a stage-3 setup cannot reach the entry in between: this lane never needs the other ~85 setups, and it does not touch them.
+
+    It runs the SAME engine on fresh candles for the few setups that matter (swing.analyse with 1D, 1H and 15m), applies the same context rules
+    from the facts stored on each setup (apply_swing_context), and merges the result into swing.json, swing_charts.json, explain.json and the trade
+    ledger. A setup whose data did not download, or whose structure changed, is left exactly as it was: the next full scan decides."""
+    prev = read_json(args.out, 'swing.json')
+    if not prev or not prev.get('setups'): print('swing-fast: no swing scan has run yet, nothing to refresh'); return []
+    held = lambda x: bool(x.get('holds')) or str(x.get('status', '')).startswith('WATCH')
+    cand = sorted([x for x in prev['setups'] if x.get('stage', 0) >= 4], key=lambda x: (held(x), -x.get('stage', 0), -x.get('score', 0)))[:FAST_MAX]
+    if not cand: print('swing-fast: no 1H-confirmed setup to watch for a 15m entry'); mark_fast(args, prev, now, 0, 0); return []
+    syms = [x['symbol'] for x in cand]; old = {x['symbol']: x for x in prev['setups']}
+    daily = {k: tidy_daily(v, now) for k, v in download_many(syms, '1y', '1d')[0].items()}
+    hourly = {k: tidy_intraday(v, now, 60) for k, v in download_many(syms, '3mo', '1h')[0].items()}
+    m15raw = {k: tidy_intraday(v, now, 15) for k, v in download_many(syms, '10d', '15m')[0].items()}
+    new = {}
+    for sym in syms:
+        if sym not in daily or sym not in hourly or not len(hourly[sym]): continue                       # no fresh data for it: left as it was
+        try: r = swing.analyse(daily[sym], hourly[sym], m15raw.get(sym))
+        except Exception as ex_: print(f'  fast lane error {sym}: {ex_}', file=sys.stderr); continue
+        if not r or 'stage' not in r or r['score'] < args.min_score: continue                           # structure changed or broke: the hourly scan decides
+        if str(r.get('bos_date'))[:10] != str(old[sym].get('bos_date'))[:10]: continue                   # a different daily structure than the full scan found: never swapped here (this lane only updates the 15m entry)
+        ex = {k: old[sym][k] for k in SWING_FACTS if k in old[sym]}
+        apply_swing_context(r, ex)
+        m = m15raw.get(sym); ltp = float(m.Close.iloc[-1]) if m is not None and len(m) else float(hourly[sym].Close.iloc[-1])
+        ran_away_check(r, ltp)
+        new[sym] = swing_item(sym, r, daily[sym], hourly[sym], m, ex, ltp)
+    if not new: print(f'swing-fast: {len(syms)} setups checked, no fresh data to update'); mark_fast(args, prev, now, len(syms), 0); return []
+    light, charts = split_charts(list(new.values())); lmap = {x['symbol']: x for x in light}
+    merged = [lmap.get(x['symbol'], x) for x in prev['setups']]
+    states = {(x['symbol'], 'long'): 'OK' for x in merged if str(x['status']).startswith('WATCH')}
+    follow(args, 'swing', [i for i in merged if i['stage'] >= 2], states, {}, now, True)                # new trades and their alerts come from the same ledger code
+    prev.update(setups=merged, stages={str(k): sum(1 for i in merged if i['stage'] == k) for k in range(1, 6)})
+    mark_fast(args, prev, now, len(syms), len(new))
+    cdoc = read_json(args.out, 'swing_charts.json') or dict(generated_at=prev.get('generated_at'), charts={})
+    cdoc.setdefault('charts', {}).update(charts); cdoc['charts_at'] = prev['charts_at']; write_json(args.out, 'swing_charts.json', cdoc)
+    edoc = read_json(args.out, 'explain.json')
+    if edoc and isinstance(edoc.get('rows'), dict):
+        for sym, it in new.items():
+            old_row = edoc['rows'].get(sym) or []
+            edoc['rows'][sym] = [it['stage'], 'listed', f"Listed: stage {it['stage']} ({it['stage_label']}), {it['status']}", it['score'], round(float(daily[sym].Close.iloc[-1]), 2), old_row[5] if len(old_row) > 5 else None]
+        write_json(args.out, 'explain.json', edoc)
+    trig = [x for x in new.values() if x['status'] == 'TRIGGERED']
+    print(f"swing-fast: {len(syms)} setups checked, {len(new)} refreshed, {len(trig)} TRIGGERED" + (': ' + ', '.join(x['symbol'] for x in trig) if trig else ''))
+    return list(new.values())
+
+def mark_fast(args, doc, now, checked, refreshed):
+    """swing.json keeps the full scan's own time in generated_at; the fast lane adds its own, so the page can show both."""
+    doc['fast_at'] = now.isoformat(timespec='seconds'); doc['fast_checked'] = checked; doc['fast_refreshed'] = refreshed
+    if refreshed: doc['charts_at'] = doc['fast_at']                                  # the trade page reloads the charts when this changes (it caches them per scan otherwise)
+    write_json(args.out, 'swing.json', doc)
+
 WHY_STATE = {None: 'No live daily structure: no recent CHoCH, and no BOS with a usable pullback zone',
              'STALE': 'The last daily BOS is more than 60 sessions old: the structure is too old to trade',
              'WIDE': 'The daily zone is too wide (over 3.5 ATR or 10% of price): the stop would be too wide',
              'BROKEN': 'Price closed below the daily zone: the structure failed',
-             'FAR': 'Price is far above the last daily zone (over 4 ATR, or the BOS is over 20 sessions old): wait for a new structure, no chasing',
+             'FAR': 'Price is far above the last daily zone (over 2 ATR, or the BOS is over 20 sessions old): wait for a new structure, no chasing',
              'APPROACH': 'Price is approaching the daily zone', 'IN_ZONE': 'Price is in the daily zone'}
 
 def split_charts(items):
@@ -838,15 +905,15 @@ swing.bind(sys.modules[__name__])
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--mode', choices=['swing', 'options', 'intraday', 'market', 'news', 'live', 'all'], default='swing')
+    p.add_argument('--mode', choices=['swing', 'swing-fast', 'options', 'intraday', 'market', 'news', 'live', 'all'], default='swing')
     p.add_argument('--out', default='_site/data'); p.add_argument('--watchlist', default='watchlist.txt'); p.add_argument('--universe-csv', default=None); p.add_argument('--events', default='events.json'); p.add_argument('--state-dir', default='.state')
     p.add_argument('--min-score', type=int, default=4); p.add_argument('--top', type=int, default=60); p.add_argument('--intraday-top', type=int, default=100)
     args = p.parse_args(); now = pd.Timestamp.now(tz=IST); datasource.configure(args.state_dir)
-    datasource.set_budget(float(os.environ.get('ANGEL_LIVE_BUDGET_S', 90)) if args.mode == 'live' else float(os.environ.get('ANGEL_SWING_BUDGET_S', 150)))   # Angel One time limit per run: a 5-minute tick must finish well inside 5 minutes
+    datasource.set_budget(float(os.environ.get('ANGEL_LIVE_BUDGET_S', 90)) if args.mode == 'live' else float(os.environ.get('ANGEL_FAST_BUDGET_S', 60)) if args.mode == 'swing-fast' else float(os.environ.get('ANGEL_SWING_BUDGET_S', 150)))   # Angel One time limit per run: a 5-minute tick must finish well inside 5 minutes
     news_due = minutes_since(os.path.join(args.out, 'news.json'), now) >= 25
-    modes = {'swing': ['swing'] + ([] if market_open(now) else ['market', 'news']), 'options': ['options'], 'intraday': ['intraday'], 'market': ['market'], 'news': ['news'], 'all': ['swing', 'options', 'intraday', 'market', 'news']}.get(args.mode)
+    modes = {'swing': ['swing'] + ([] if market_open(now) else ['market', 'news']), 'swing-fast': ['swing_fast'], 'options': ['options'], 'intraday': ['intraday'], 'market': ['market'], 'news': ['news'], 'all': ['swing', 'options', 'intraday', 'market', 'news']}.get(args.mode)
     if args.mode == 'live': modes = ['options', 'intraday', 'market'] + (['news'] if news_due else [])         # Nifty and intraday stocks every 5 minutes, news about every 30
-    runs = dict(swing=run_swing, options=run_options, intraday=run_intraday, market=run_market, news=run_news)
+    runs = dict(swing=run_swing, swing_fast=run_swing_fast, options=run_options, intraday=run_intraday, market=run_market, news=run_news)
     t0, sections = time.time(), {}
     for m in modes:
         t1 = time.time()
@@ -855,7 +922,7 @@ def main():
             sections[m] = dict(ok=False, seconds=round(time.time() - t1, 1), error='no data downloaded (Yahoo blocked or offline)'); write_health(args, now, sections, t0); raise
         except Exception as ex:
             print(f'{m} failed: {ex}', file=sys.stderr); sections[m] = dict(ok=False, seconds=round(time.time() - t1, 1), error=str(ex)[:300])    # one section failing must not stop the others
-    write_health(args, now, sections, t0)
+    if args.mode != 'swing-fast': write_health(args, now, sections, t0)          # the fast lane is a refresh of the swing scan, not a scan of its own: no health file, no failure alerts
 
 def write_health(args, now, sections, t0):
     """data/health/<mode>.json: when this run finished, how long each section took, and what failed. Read by the System health page."""
