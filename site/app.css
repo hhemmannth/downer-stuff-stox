@@ -648,6 +648,10 @@ body{background:radial-gradient(1200px 760px at 82% -14%,var(--lux-glow1),transp
    corners and beside titles so nothing moves: the template, colours and layout above are unchanged.
    ===================================================================================================================== */
 .m3d{display:block;pointer-events:none;flex:none}
+.m3d:not(.on){opacity:0}.m3d.on{transition:opacity .45s ease}
+.gs .m3d,.gside .m3d{opacity:1}
+/* off-screen setup cards are not laid out or painted until you scroll near them: opening a page with 75 setups stays quick */
+.sc{content-visibility:auto;contain-intrinsic-size:auto 300px}
 .ph-3d{position:relative;width:150px;height:116px;margin:-16px -6px -14px auto;flex:none}
 .ph-3d canvas{width:100%;height:100%}
 .ph-3d.inl{margin-left:0;width:120px}
@@ -761,4 +765,81 @@ body{background:radial-gradient(1200px 760px at 82% -14%,var(--lux-glow1),transp
 @media (prefers-reduced-motion: reduce){
   .gs-in,.gs-head,.gs-shadow,.gs-f,.gl::after,.gs-tick span,.gate-3d .gate-btn::after,.gate-3d .gate-mark .logo::after,.gs-say.pop{animation:none!important}
   .gs-head,.gs-orb,.gs-f{transition:none}
+}
+
+/* ---------- analytics kit: gauges, meters, playbook steps, chips, mini bars, gold clock ---------- */
+.ph .flow,.ph .chips{margin-top:12px}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 0}
+.flow .fs{display:inline-flex;align-items:center;white-space:nowrap}
+.flow b{font-weight:400;font-size:11.5px;letter-spacing:.04em;padding:5px 11px;border:1px solid var(--lux-line-2);border-radius:999px;background:var(--lux-glass);box-shadow:var(--lux-hi);color:var(--ink)}
+.flow .fs:last-child b{background:var(--ink);color:var(--on);border-color:var(--ink)}
+.flow i{width:18px;height:1px;background:linear-gradient(90deg,var(--lux-line-2),var(--ink));position:relative;flex:none}
+.flow i::after{content:"";position:absolute;right:-1px;top:-2.5px;border:3px solid transparent;border-left:4px solid var(--ink);border-right:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips span{font-size:11px;letter-spacing:.05em;padding:4px 10px;border-radius:999px;border:1px solid var(--lux-line-2);color:var(--ink-2);white-space:nowrap}
+.gold-head .chips span{border-color:var(--gold-line);color:var(--gold-ink)}
+.gauges{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.gauge{position:relative;display:grid;justify-items:center;padding:6px 0 2px;border:1px solid var(--lux-line);border-radius:14px;background:var(--lux-glass)}
+.gauge svg{width:112px;height:auto;display:block}
+.gauge .tr{stroke:var(--lux-line-2)} .gauge .fl{stroke:var(--ink);transition:stroke-dasharray .6s cubic-bezier(.2,.7,.2,1)}
+.gauge.good .fl{stroke:var(--good)} .gauge.warn .fl{stroke:var(--warn)} .gauge.bad .fl{stroke:var(--bad)} .gauge.gold .fl{stroke:var(--gold)}
+.gauge b{position:absolute;top:38px;font:300 21px/1 var(--disp);letter-spacing:-.02em}
+.gauge small{margin-top:-14px;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--lux-dim);padding-bottom:6px}
+.mtrs{display:flex;flex-direction:column;gap:10px}
+.mtr{display:grid;grid-template-columns:62px 1fr auto;align-items:center;gap:10px}
+.mtr span{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--lux-dim)}
+.mtr b{grid-column:3;grid-row:1;font:400 14px var(--disp);font-variant-numeric:tabular-nums;min-width:58px;text-align:right}
+.mtr i{grid-column:2;grid-row:1;height:4px;border-radius:4px;background:var(--lux-line);overflow:hidden}
+.mtr em{display:block;height:100%;min-width:2px;border-radius:4px;background:var(--ink)}
+.mtr em.warn{background:var(--warn)} .mtr em.bad{background:var(--bad)}
+.mtr-note{margin:12px 0 0;font-size:11.5px;color:var(--lux-dim);line-height:1.45}
+.mbars{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.mbars>div{display:grid;grid-template-columns:minmax(52px,auto) 1fr 26px;align-items:center;gap:10px;font-size:12px}
+.mbars span{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.mbars i{height:6px;border-radius:6px;background:var(--lux-line);overflow:hidden}
+.mbars em{display:block;height:100%;border-radius:6px;background:var(--ink)}
+.mbars.good em{background:var(--good)}
+.mbars b{font:400 13px var(--disp);text-align:right;font-variant-numeric:tabular-nums}
+@media (min-width:901px){.hp-panel{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:28px;align-items:center}.hp-ana{padding-left:26px;border-left:1px solid var(--lux-line)}}
+@media (min-width:901px) and (max-width:1180px){.hp-panel{grid-template-columns:1fr}.hp-ana{padding-left:0;border-left:0;padding-top:14px;border-top:1px solid var(--lux-line)}}
+.gclock{padding:4px 0 2px}
+.gc-band{position:relative;height:34px;border-radius:10px;overflow:hidden;background:var(--gold-soft);border:1px solid var(--gold-line)}
+.gc-band span{position:absolute;top:0;bottom:0;display:flex;align-items:center;justify-content:center;border-right:1px solid color-mix(in srgb,var(--gold-line) 70%,transparent);overflow:hidden}
+.gc-band em{font-style:normal;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-ink);white-space:nowrap}
+.gc-a{background:color-mix(in srgb,var(--gold) 14%,transparent)} .gc-b{background:color-mix(in srgb,var(--gold) 26%,transparent)}
+.gc-c{background:color-mix(in srgb,var(--gold) 46%,transparent)} .gc-d{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--gold) 18%,transparent) 0 4px,transparent 4px 8px)} .gc-e{background:transparent}
+.gc-now{position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;background:var(--ink);box-shadow:0 0 10px var(--ink)}
+.gc-ticks{position:relative;height:16px;margin-top:4px}
+.gc-ticks span{position:absolute;transform:translateX(-50%);font-size:10px;color:var(--lux-dim);font-variant-numeric:tabular-nums}
+.gc-ticks span:first-child{transform:none}.gc-ticks span:last-child{transform:translateX(-100%)}
+.gc-now-t{margin-top:8px;font-size:13px;color:var(--ink-2)} .gc-now-t b{color:var(--gold-ink);font-weight:600}
+.gc-leg{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;font-size:11.5px;color:var(--lux-dim)}
+.gc-leg i{display:inline-block;width:12px;height:8px;border-radius:2px;margin-right:6px;vertical-align:0;border:1px solid var(--gold-line)}
+@media (max-width:640px){.gc-band em{font-size:8.5px;letter-spacing:.06em}.flow b{font-size:10.5px;padding:4px 9px}.flow i{width:12px}}
+
+/* ---------- alignment pass (14 Nov 2026) ---------- */
+.kpis{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}                       /* 6 to a row on a desktop: 6 or 12 figures sit in even rows */
+.kpis[data-n="6"],.kpis[data-n="12"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (min-width:1360px){.kpis[data-n="6"],.kpis[data-n="12"]{grid-template-columns:repeat(6,minmax(0,1fr))}}
+.kpis.l2 .kpi .l{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.3;min-height:2.6em}
+.pipeline:not(.hp-nodes) .pipe{display:flex;flex-direction:column;justify-content:space-between;min-height:86px}
+.pipeline:not(.hp-nodes) .pipe .k{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:2px;letter-spacing:.07em}
+.grid>.stack>.card:only-child{flex:1}                                                     /* side-by-side cards end level */
+.ph .ph-3d,.ph .ph-orb{align-self:center}
+.gold-head h1{display:flex;align-items:center}
+.gold-head h1 .gold-coin{flex:none}
+.live-row{align-items:center}
+.live-row>span{line-height:1.45}
+.card>.hd h2{display:flex;align-items:center}
+@media (max-width:640px){
+  .ph{position:relative}
+  .ph>div:first-child{padding-right:74px}                                                  /* the title clears the emblem in the corner */
+  .ph .ph-3d,.ph .ph-3d.inl,.ph .ph-orb{position:absolute;top:-6px;right:-6px;width:80px;height:72px;margin:0}
+  .ph .ph-orb-cap{display:none}
+  .ph.gold-head .ph-3d{top:8px;right:6px;width:70px;height:64px}
+  .ph .sp{display:none}                                                                    /* buttons and the update pill line up on the left under the title */
+  .tbl-wrap>.tbl td:first-child{white-space:nowrap}                                        /* tables scroll sideways instead of squeezing names into tall rows */
+  .kpis,.kpis[data-n]{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kpi.has-3d .l{padding-right:28px;letter-spacing:.1em}
+  .kpi-3d{width:26px;height:26px}
 }
