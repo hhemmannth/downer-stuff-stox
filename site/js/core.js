@@ -107,6 +107,9 @@ App.lazy = async (name, maxAge = 60000) => {
     .then(d => { LAZY[name] = { at: Date.now(), data: d || (c && c.data) || null }; return LAZY[name].data; });
   LAZY[name] = Object.assign({}, c || { at: 0, data: null }, { p }); return p;
 };
+/* Data that arrives for a page asks for one re-render: many arrivals close together become a single render (before, each pending
+   file added its own re-render on every render, and the gold page could re-draw 40 times in a row when it opened). */
+App.soon = page => { if (App._soonT) return; App._soonT = setTimeout(() => { App._soonT = 0; if (!page || App.route().page === page) App.render(); }, 60); };
 App.lazyNow = name => (LAZY[name] || {}).data || null;
 App.lazyAge = name => LAZY[name] && LAZY[name].at ? Date.now() - LAZY[name].at : Infinity;
 App.marketOpen = () => { const t = istNow(), d = t.getUTCDay(), m = t.getUTCHours() * 60 + t.getUTCMinutes(); return d > 0 && d < 6 && m >= 555 && m <= 930; };
@@ -170,7 +173,7 @@ App.orbsInit = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2), box = cv.getBoundingClientRect(), W = Math.max(60, box.width), H = Math.max(60, box.height);
     cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const ink = (getComputedStyle(document.documentElement).getPropertyValue('--ink') || '#ffffff').trim().toLowerCase(), rgb = ink.startsWith('#f') ? '255,255,255' : '0,0,0';      // dark theme: ink is white
-    const E = Math.max(0, Math.min(1, +cv.dataset.energy || 0)), N = W < 160 ? 380 : 760, R = Math.min(W, H) * 0.30, cx = W / 2, cy = H / 2, ga = Math.PI * (3 - Math.sqrt(5));
+    const E = Math.max(0, Math.min(1, +cv.dataset.energy || 0)), N = W < 160 ? 320 : 600, R = Math.min(W, H) * 0.30, cx = W / 2, cy = H / 2, ga = Math.PI * (3 - Math.sqrt(5));
     const P = Array.from({ length: N }, (_, i) => { const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), t = ga * i; return [Math.cos(t) * r, y, Math.sin(t) * r]; });
     const ticks = Array.from({ length: 140 }, (_, i) => 0.35 + 0.65 * Math.abs(Math.sin(i * 0.37) * Math.cos(i * 0.11)));
     let a = 0.6, raf = 0, last = 0;
@@ -180,21 +183,24 @@ App.orbsInit = () => {
       const halo = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.9); halo.addColorStop(0, `rgba(${rgb},${0.10 + 0.08 * E})`); halo.addColorStop(1, `rgba(${rgb},0)`);
       ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
       const ca = Math.cos(a), sa = Math.sin(a), tilt = 0.42, ct = Math.cos(tilt), st = Math.sin(tilt);
+      const BK = Array.from({ length: 8 }, () => []);                        // points grouped by depth: one fill per group instead of one per point
       for (const [x0, y0, z0] of P) {
         const x = x0 * ca + z0 * sa, z1 = -x0 * sa + z0 * ca, y = y0 * ct - z1 * st, z = y0 * st + z1 * ct;
-        const k = 2.6 / (2.6 + z), d = (1 - z) / 2;
-        ctx.globalAlpha = 0.10 + 0.85 * d * d; ctx.fillStyle = `rgb(${rgb})`;
-        ctx.fillRect(cx + x * R * k, cy + y * R * k, 0.5 + 1.25 * d * k, 0.5 + 1.25 * d * k);
+        const k = 2.6 / (2.6 + z), d = (1 - z) / 2, sz = 0.5 + 1.25 * d * k;
+        BK[Math.min(7, Math.max(0, Math.floor(d * 8)))].push(cx + x * R * k, cy + y * R * k, sz);
       }
+      ctx.fillStyle = `rgb(${rgb})`;
+      BK.forEach((b, n) => { if (!b.length) return; const d = (n + .5) / 8; ctx.globalAlpha = 0.10 + 0.85 * d * d; ctx.beginPath(); for (let i = 0; i < b.length; i += 3) ctx.rect(b[i], b[i + 1], b[i + 2], b[i + 2]); ctx.fill(); });
       ctx.globalAlpha = 0.28; ctx.strokeStyle = `rgb(${rgb})`; ctx.lineWidth = 0.7;
       ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.32, R * 0.36, -0.32 + Math.sin(a * 0.7) * 0.05, 0, Math.PI * 2); ctx.stroke();
-      ctx.globalAlpha = 1;
+      const TB = Array.from({ length: 4 }, () => []);
       for (let i = 0; i < ticks.length; i++) {
         const th = (i / ticks.length) * Math.PI * 2, w = ticks[i] * (0.5 + 0.5 * Math.sin(a * 3 + i * 0.5)) * (4 + 10 * E), r0 = R * 1.12;
-        ctx.globalAlpha = 0.12 + 0.35 * ticks[i]; ctx.beginPath(); ctx.moveTo(cx + Math.cos(th) * r0, cy + Math.sin(th) * r0); ctx.lineTo(cx + Math.cos(th) * (r0 + w), cy + Math.sin(th) * (r0 + w)); ctx.stroke();
+        TB[Math.min(3, Math.floor(ticks[i] * 4))].push(cx + Math.cos(th) * r0, cy + Math.sin(th) * r0, cx + Math.cos(th) * (r0 + w), cy + Math.sin(th) * (r0 + w));
       }
+      TB.forEach((b, n) => { if (!b.length) return; ctx.globalAlpha = 0.12 + 0.35 * ((n + .5) / 4); ctx.beginPath(); for (let i = 0; i < b.length; i += 4) { ctx.moveTo(b[i], b[i + 1]); ctx.lineTo(b[i + 2], b[i + 3]); } ctx.stroke(); });
       ctx.globalAlpha = 1;
-      if (!still) raf = requestAnimationFrame(t => { if (document.hidden) { last = 0; raf = requestAnimationFrame(draw); } else draw(t); });
+      if (!still) raf = requestAnimationFrame(t => { if (document.hidden || t < (App._calmUntil || 0)) { last = 0; raf = requestAnimationFrame(draw); } else draw(t); });
     };
     draw(performance.now()); App._orbs.push(() => cancelAnimationFrame(raf));
   });
@@ -208,8 +214,12 @@ App.render = () => {
   const keep = App._lastPage === page ? window.scrollY : 0;
   try { el.innerHTML = App.staleBanner() + App.riskBanner() + fn(App.route().q); } catch (e) { console.error(e); el.innerHTML = `<div class="callout bad"><span class="ic">!</span><div><b>This page hit an error.</b> ${esc(e.message)}</div></div>`; }
   if (App.binds[page]) try { App.binds[page](App.route().q); } catch (e) { console.error(e); }
-  try { App.orbsInit(); } catch (e) { console.error(e); }                                   // start the orbs of the page just drawn (and stop the old ones)
-  try { if (App.deco3d) App.deco3d(el); } catch (e) { console.error(e); }                  // the 3D models for each section of the page
+  const now0 = performance.now(), moved = App._lastPage !== page, fresh = moved || now0 - (App._movedAt || 0) < 1500, tok = App._rtok = (App._rtok || 0) + 1;   // fresh: a page just opened, or its data arrived right after
+  if (moved) App._movedAt = now0;
+  App._orbs.forEach(f => f()); App._orbs = [];                                               // stop the old page's orbs now
+  if (moved) { App._calmUntil = performance.now() + 260; try { el.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' }); } catch (e) { } }
+  const art = () => { if (tok !== App._rtok) return; App._fadeNew = fresh; try { App.orbsInit(); } catch (e) { console.error(e); } try { if (App.deco3d) App.deco3d(el); } catch (e) { console.error(e); } };
+  if (fresh) requestAnimationFrame(() => setTimeout(art, 0)); else art();                    // on a new page the orbs and 3D models start after it has painted, so opening a page never waits for them
   if (App._lastPage !== page) window.scrollTo(0, 0); else window.scrollTo(0, keep);
   App._lastPage = page; paintChrome();
 };
@@ -221,6 +231,15 @@ App.ui.grade = g => `<span class="grade ${g === 'A+' ? 'ap' : (g || 'skip').toLo
 App.ui.ring = (score, max = 10) => { const r = 19, c = 2 * Math.PI * r, f = Math.max(0, Math.min(1, score / max)), col = score >= 8 ? 'var(--good)' : score >= 6 ? 'var(--brand)' : score >= 4 ? 'var(--sun)' : 'var(--ink-3)';
   return `<svg class="ring" viewBox="0 0 46 46" role="img" aria-label="Score ${score} of ${max}"><circle cx="23" cy="23" r="${r}" fill="none" stroke="var(--line-2)" stroke-width="5"/><circle cx="23" cy="23" r="${r}" fill="none" stroke="${col}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${c * f} ${c}" transform="rotate(-90 23 23)"/><text x="23" y="27.5" text-anchor="middle" class="ring-txt" fill="var(--ink)">${score}</text></svg>`; };
 App.ui.callout = (kind, html) => `<div class="callout ${kind}"><span class="ic">${kind === 'good' ? '✓' : kind === 'info' || !kind ? 'i' : '!'}</span><div>${html}</div></div>`;
+/* small analytics kit: figures as shapes instead of sentences */
+App.ui.gauge = (v, max, label, valTxt, tone = '') => {                   // a 240° arc gauge; tone: good / warn / bad / gold
+  const f = Math.max(0, Math.min(1, max ? v / max : 0)), r = 34, c = 2 * Math.PI * r, arc = c * 240 / 360;
+  return `<div class="gauge ${tone}" role="img" aria-label="${esc(label)} ${esc(String(valTxt))}"><svg viewBox="0 0 90 78"><circle cx="45" cy="44" r="${r}" fill="none" class="tr" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arc} ${c}" transform="rotate(150 45 44)"/><circle cx="45" cy="44" r="${r}" fill="none" class="fl" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arc * f} ${c}" transform="rotate(150 45 44)"/></svg><b>${valTxt}</b><small>${label}</small></div>`;
+};
+App.ui.meter = (label, valTxt, f, tone = '', vcls = '') => `<div class="mtr"><span>${label}</span><b class="${vcls}">${valTxt}</b><i><em class="${tone}" style="width:${(Math.max(0, Math.min(1, f)) * 100).toFixed(1)}%"></em></i></div>`;
+App.ui.flow = steps => `<div class="flow" aria-label="Playbook steps">${steps.map((t, n) => `<span class="fs">${n ? '<i aria-hidden="true"></i>' : ''}<b>${t}</b></span>`).join('')}</div>`;   // each arrow travels with the step after it, so a wrapped line never ends on an arrow
+App.ui.chips = items => `<div class="chips">${items.map(t => `<span>${t}</span>`).join('')}</div>`;
+App.ui.minibars = (rows, tone = '') => { const mx = Math.max(1, ...rows.map(r => r[1])); return `<div class="mbars ${tone}">${rows.map(([l, n]) => `<div><span>${esc(String(l))}</span><i><em style="width:${(n / mx * 100).toFixed(1)}%"></em></i><b>${n}</b></div>`).join('')}</div>`; };
 App.ui.seg = (key, opts, cur) => `<div class="seg" role="group">${opts.map(([v, t]) => `<button type="button" data-seg="${key}" data-v="${v}" aria-pressed="${String(cur) === String(v)}">${t}</button>`).join('')}</div>`;
 App.tv = sym => `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(sym === 'NIFTY 50' ? 'NSE:NIFTY' : 'NSE:' + sym.replace(/&/g, '_').replace(/-/g, '_'))}`;
 

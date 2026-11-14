@@ -49,7 +49,7 @@ const U = () => App.ui.an || (App.ui.an = { period: 'all', cat: 'all', dim: 'set
 App.pages.analytics = () => {
   const u = U(), J = App.journal.J(), S = J.set, all = App.journal.enrich(J), T = App.journal.period(all, u.period).filter(t => u.cat === 'all' || t.cat === u.cat), st = A.stats(T, S), C = st.C;
   const cats = ['all', ...new Set(all.map(t => t.cat).filter(Boolean))];
-  let h = `<div class="ph"><div><h1>Analytics</h1><p>How you are really trading: results, risk, edge by setup and time, discipline, and whether you are improving. ${esc(J.name)}.</p></div><span class="sp"></span>${App.ui.seg('aper', App.journal.PERIODS, u.period)}</div>
+  let h = `<div class="ph"><div><h1>Analytics</h1><p>Results, risk, edge and discipline · ${esc(J.name)}</p></div><span class="sp"></span>${App.ui.seg('aper', App.journal.PERIODS, u.period)}</div>
     <div class="chips" style="margin-bottom:14px">${cats.map(c => `<button class="chip" data-acat="${c}" aria-pressed="${u.cat === c}">${c === 'all' ? 'All segments' : esc(c)}</button>`).join('')}</div>`;
   if (!st.n) return h + `<div class="card"><div class="bd">${App.ui.empty('No closed trades in this view', 'Change the period or segment, or close a trade (add its exit price) in the journal.')}</div></div>`;
   h += `<div class="kpis" style="margin-bottom:14px">${[

@@ -107,8 +107,8 @@
 
   /* ---------- drawing ---------- */
   const L = { list: [], raf: 0, n: 0, io: null, ro: null };
-  function size(o) {
-    const box0 = o.cv.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2), W = Math.max(8, box0.width), H = Math.max(8, box0.height);
+  function size(o, box0) {
+    box0 = box0 || o.cv.getBoundingClientRect(); const dpr = Math.min(window.devicePixelRatio || 1, 2), W = Math.max(8, box0.width), H = Math.max(8, box0.height);
     if (o.W === W && o.H === H) return; o.W = W; o.H = H; o.cv.width = Math.round(W * dpr); o.cv.height = Math.round(H * dpr); o.ctx.setTransform(dpr, 0, 0, dpr, 0, 0); o.dirty = true;
   }
   function draw(o, t) {
@@ -130,13 +130,17 @@
     }
     const lw = W < 40 ? .7 : W < 90 ? .9 : 1.1, boost = W >= 60 ? 1.18 : 1;
     ctx.lineWidth = lw; const fadeE = new Map(); (geo.fade || []).forEach(([b, e, v]) => { for (let i = b; i < e; i++) fadeE.set(i, v); });
-    for (const [i, j] of geo.e) {
+    const BK = new Map(), bucket = (hot, al) => { const q = Math.max(1, Math.min(10, Math.round(al * 10))), key = (hot ? 'h' : 'i') + q; let b = BK.get(key); if (!b) { b = { col: `rgba(${hot ? tone : ink},${q / 10})`, ln: [], dt: [] }; BK.set(key, b); } return b; };
+    for (const [i, j] of geo.e) {                                             // lines and points are grouped by brightness: one stroke per group, not one per line
       const z = (P[i][2] + P[j][2]) / 2, d = dep(z), hot = geo.hot.has(i) && geo.hot.has(j), f = fadeE.has(i) ? fadeE.get(i) : 1;
-      ctx.strokeStyle = `rgba(${hot ? tone : ink},${Math.min(1, ((hot ? .45 : .12) + (hot ? .5 : .62) * d * d) * f * boost)})`;
-      ctx.beginPath(); ctx.moveTo(P[i][0], P[i][1]); ctx.lineTo(P[j][0], P[j][1]); ctx.stroke();
+      bucket(hot, Math.min(1, ((hot ? .45 : .12) + (hot ? .5 : .62) * d * d) * f * boost)).ln.push(P[i][0], P[i][1], P[j][0], P[j][1]);
     }
-    for (const i of geo.d) { const [x, y, z, k] = P[i], d = dep(z), hot = geo.hot.has(i), f = geo.fadeP && geo.fadeP[i] != null ? geo.fadeP[i] : 1, s = (W < 60 ? .8 : 1.1) + (hot ? 1.3 : 1.1) * d * k;
-      ctx.fillStyle = `rgba(${hot ? tone : ink},${(.25 + .75 * d) * f})`; ctx.fillRect(x - s / 2, y - s / 2, s, s); }
+    for (const i of geo.d) { const [x, y, z, k] = P[i], d = dep(z), hot = geo.hot.has(i), f = geo.fadeP && geo.fadeP[i] != null ? geo.fadeP[i] : 1, sz = (W < 60 ? .8 : 1.1) + (hot ? 1.3 : 1.1) * d * k;
+      bucket(hot, (.25 + .75 * d) * f).dt.push(x - sz / 2, y - sz / 2, sz); }
+    for (const b of BK.values()) {
+      if (b.ln.length) { ctx.strokeStyle = b.col; ctx.beginPath(); for (let n = 0; n < b.ln.length; n += 4) { ctx.moveTo(b.ln[n], b.ln[n + 1]); ctx.lineTo(b.ln[n + 2], b.ln[n + 3]); } ctx.stroke(); }
+      if (b.dt.length) { ctx.fillStyle = b.col; ctx.beginPath(); for (let n = 0; n < b.dt.length; n += 3) ctx.rect(b.dt[n], b.dt[n + 1], b.dt[n + 2], b.dt[n + 2]); ctx.fill(); }
+    }
     for (const fc of [geo.face, geo.back]) {                                  // the coin's face: its symbol, drawn on the face plane
       if (!fc || !o.txt) continue;
       const pr = v => { const [x0, y0, z0] = v, x = x0 * ca + z0 * sa, z1 = -x0 * sa + z0 * ca, y = y0 * ct - z1 * st, z = y0 * st + z1 * ct, k = 3 / (3 + z); return [cx + x * S * k, cy + y * S * k, z]; };
@@ -148,18 +152,22 @@
       ctx.restore();
     }
   }
+  let STILL = still(); try { matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => { STILL = still(); }); } catch (e) { }
   function frame(now) {
     L.raf = 0; L.n++;
-    const t = now / 1000, moving = !still();
+    const t = now / 1000, moving = !STILL, calm = now < (App._calmUntil || 0);   // calm: a page was just opened, let it paint first
     L.list = L.list.filter(o => o.cv.isConnected);
-    for (const o of L.list) {
-      if (!o.vis) continue;
-      if (o.W == null || L.n % 30 === 0) size(o);
-      if (!moving) { if (o.dirty) { draw(o, 1.2); o.dirty = false; } continue; }
-      if (o.W < 60 && L.n % 2) continue;                                     // tiny models: 30 frames a second is plenty
-      draw(o, t + o.phase);
+    if (!calm) {
+      const vis = L.list.filter(o => o.vis), fresh = vis.filter(o => o.W == null || L.n % 30 === 0);
+      const boxes = fresh.map(o => o.cv.getBoundingClientRect());              // read every size first, then write: no layout thrash
+      fresh.forEach((o, n) => size(o, boxes[n]));
+      vis.forEach((o, n) => {
+        if (!moving) { if (o.dirty) { draw(o, 1.2); o.dirty = false; o.cv.classList.add('on'); } return; }
+        if ((L.n + n) % (o.W < 60 ? 3 : 2)) return;                             // 30 frames a second (20 for tiny ones), spread over alternate frames
+        draw(o, t + o.phase); if (o.fade) { o.fade = false; o.cv.classList.add('on'); }
+      });
     }
-    if (L.list.length && moving && !document.hidden) L.raf = requestAnimationFrame(frame);
+    if (L.list.length && (moving || calm) && !document.hidden) L.raf = requestAnimationFrame(frame);
   }
   const kick = () => { if (!L.raf && L.list.length) L.raf = requestAnimationFrame(frame); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
@@ -175,6 +183,7 @@
         tilt: ds.tilt != null ? +ds.tilt : (kind === 'portal' ? .3 : kind === 'wave' || kind === 'bars' || kind === 'radar' ? .5 : kind === 'coin' ? .08 : .38),
         yaw0: Math.random() * TAU, phase: Math.random() * 20, spin: kind !== 'portal', zoom: +ds.zoom || (kind === 'portal' ? 1.1 : kind === 'ring' ? .44 : kind === 'candles' ? .47 : .4), halo: ds.halo != null ? +ds.halo : 0, vis: !L.io, dirty: true };
       if (kind === 'coin') o.yaw0 = 0;                                       // a coin rocks rather than spins, so its face stays readable
+      if (App._fadeNew) o.fade = true; else cv.classList.add('on');            // on a newly opened page they fade in; a refresh of the same page shows them at once
       cv._m3d = o; L.list.push(o); if (L.io) L.io.observe(cv);
     });
     kick();
@@ -216,6 +225,10 @@
       const tone = k === 'coin' || k === 'ring' ? (neg ? 'bad' : pos ? 'good' : '') : '';
       el.classList.add('has-3d'); el.insertAdjacentHTML('afterbegin', m(k, 'kpi-3d', `${GZ(el)} ${tone ? `data-tone="${tone}"` : ''} ${k === 'ring' && pc ? `data-fill="${Math.max(0, Math.min(1, +pc[1] / 100))}" data-tone="${tone || 'good'}"` : ''} ${k === 'coin' && /\br\b|expectancy/i.test(l.textContent) ? 'data-txt="R"' : ''}`));
     });
+    root.querySelectorAll('.kpis').forEach(g => { g.dataset.n = g.children.length; });     // rows of 6 or 12 figures get even columns
+    requestAnimationFrame(() => root.querySelectorAll('.kpis').forEach(g => {          // a KPI row where any label would be cut gives every label two lines, so the figures stay level
+      const ls = [...g.querySelectorAll('.kpi .l')]; g.classList.toggle('l2', ls.some(l => l.scrollWidth > l.clientWidth + 1));
+    }));
     root.querySelectorAll('.card>.hd h2').forEach(h => {                      // each card title gets one too
       if (h.querySelector('.m3d') || !h.textContent.trim()) return; const gold = !!h.closest('.gold-zone,.gold-card');
       const card = !!h.closest('.gold-card'), k = card ? 'coin' : pick(h.textContent);       // the gold card's flat coin becomes a 3D one
@@ -242,8 +255,8 @@
         ${m('portal', 'gs-portal', 'data-halo=".10"')}
         ${m('coin', 'gs-f f1', 'data-halo=".05"')}${m('cube', 'gs-f f2')}${m('gem', 'gs-f f3')}${m('helix', 'gs-f f4')}${m('candles', 'gs-f f5')}${m('ring', 'gs-f f6', 'data-fill=".72"')}${m('globe', 'gs-f f7')}${m('coin', 'gs-f f8', 'data-tone="gold" data-txt="Au"')}
         <div class="gs-av"><div class="gs-in">
-          <img class="gs-body" src="avatar.png?v=19" alt="" draggable="false">
-          <div class="gs-head"><img src="avatar.png?v=19" alt="" draggable="false"><i class="gl l"></i><i class="gl r"></i></div>
+          <img class="gs-body" src="avatar.png?v=21" alt="" draggable="false">
+          <div class="gs-head"><img src="avatar.png?v=21" alt="" draggable="false"><i class="gl l"></i><i class="gl r"></i></div>
         </div><div class="gs-shadow"></div></div>
         <div class="gs-say" id="gSay">${hello}</div>
         <div class="gs-cap"><small>Private trading desk</small><b>DownerStuff</b></div>

@@ -13,7 +13,7 @@ App.pages.health = () => {
   const hb = App.data['health/loop'], live = App.marketOpen() && App.tradingDay(), age = App.loopAge(), wf = App.actionsUrl() + '/workflows/market-loop.yml';
   const st = !hb ? ['bad', 'No heartbeat yet'] : hb.state === 'running' ? (age != null && age <= 11 ? ['ok', 'Running'] : ['bad', 'Silent']) : ['', 'Finished for the day'];
   const t = v => v ? `${hmIST(v)} <small class="muted">${esc(ago(v))}</small>` : '-';
-  let h = `<div class="ph"><div><h1>System health</h1><p>Is the scanner alive, how fresh is each section, and what failed. If something is red during market hours, start here.</p></div></div><div class="grid g-main"><div class="stack">`;
+  let h = `<div class="ph"><div><h1>System health</h1><p>Alive, fresh, failed. Red in market hours? Start here.</p></div></div><div class="grid g-main"><div class="stack">`;
   h += `<div class="card"><div class="hd"><h2>5-minute market loop</h2><span class="sp"></span><span class="pill ${st[0]}"><i></i>${st[1]}</span></div><div class="bd"><div class="kv">
     <span>Started</span><b>${t(hb && hb.started)}</b><span>Runs until</span><b>${hb && hb.until ? hmIST(hb.until) : '-'}</b>
     <span>Last tick</span><b>${t(hb && hb.last_tick)}</b><span>Next tick</span><b>${hb && hb.next_tick && hb.state === 'running' ? hmIST(hb.next_tick) : '-'}</b>
@@ -54,7 +54,7 @@ App.pages.health = () => {
 };
 App.binds.health = () => {
   const need = HEALTH_LAZY.filter(n => App.lazyAge('health/' + n) > 60000);
-  if (need.length) Promise.all(need.map(n => App.lazy('health/' + n))).then(() => { if (App.route().page === 'health') App.render(); });
+  if (need.length) Promise.all(need.map(n => App.lazy('health/' + n))).then(() => App.soon('health'));
 };
 
 /* ---------- dashboard ---------- */
@@ -85,7 +85,7 @@ App.pages.dashboard = () => {
   const m = App.data.market || {}, idx = m.indices || {}, sw = App.data.swing, nw = App.data.news || {}, rs = JR.riskStatus(), J = JR.J(), T = JR.enrich(J);
   const mo = todayIST().slice(0, 7), M = T.filter(t => t.mkey === mo), st = App.analytics.stats(M, J.set), all = App.analytics.stats(T, J.set);
   const hello = (() => { const h = istNow().getUTCHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; })();
-  let h = `<div class="ph"><div><h1>${hello}</h1><p>${App.marketOpen() ? 'Market is open.' : 'Market is closed.'} ${m.playbook ? esc(m.playbook.headline) + '.' : ''} Your plan for today, your risk and your progress in one place.</p></div><span class="sp"></span>
+  let h = `<div class="ph"><div><h1>${hello}</h1><p>${App.marketOpen() ? 'Market is open.' : 'Market is closed.'} ${m.playbook ? esc(m.playbook.headline) + '.' : ''}</p></div><span class="sp"></span>
     <div class="ph-orb"><canvas data-orb data-energy="${Math.min(1, Math.abs((idx.nifty && idx.nifty.change_pct) || 0) / 1.5).toFixed(2)}" aria-hidden="true"></canvas><div class="ph-orb-cap"><small>NIFTY 50</small><b>${fmt(idx.nifty && idx.nifty.price, 1)}</b><span class="${cls(idx.nifty && idx.nifty.change_pct)}">${idx.nifty ? sg(idx.nifty.change_pct) + '%' : ''}</span></div></div></div>`;
   h += `<div class="kpis" style="margin-bottom:14px">${App.ui.kpi('Nifty 50', fmt(idx.nifty && idx.nifty.price, 1), idx.nifty ? sg(idx.nifty.change_pct) + '%' : '', cls(idx.nifty && idx.nifty.change_pct))}${App.ui.kpi('Bank Nifty', fmt(idx.banknifty && idx.banknifty.price, 1), idx.banknifty ? sg(idx.banknifty.change_pct) + '%' : '', cls(idx.banknifty && idx.banknifty.change_pct))}
     ${App.ui.kpi('India VIX', fmt(idx.vix && idx.vix.price, 2), m.expected_move ? `±${fmt0(m.expected_move.daily_pts)} pts expected today` : '')}${App.ui.kpi('Regime', m.daily ? esc(m.daily.label) : '-', m.intraday ? 'today: ' + esc(m.intraday.label) : '')}
@@ -95,19 +95,21 @@ App.pages.dashboard = () => {
   h += liveNowCard();
   // swing shortlist
   if (sw) { const S = sw.setups, short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
-    h += `<div class="card"><div class="hd"><h2>Swing: today's shortlist</h2><span class="cap">max 5, pick 1 or 2 (your stock-selection rule)</span><span class="sp"></span><a class="btn sm" href="#/swing">All swing setups</a></div>
+    h += `<div class="card"><div class="hd"><h2>Swing: today's shortlist</h2><span class="cap">max 5 · pick 1 or 2</span><span class="sp"></span><a class="btn sm" href="#/swing">All swing setups</a></div>
       <div class="bd"><div class="pipeline" style="margin-bottom:12px">${[5, 4, 3, 2, 1].map(k => `<a class="pipe p${k}" href="#/swing" onclick="App.ui.sw=Object.assign(App.ui.sw||{view:'setups',grade:'all',q:''},{stage:'${k}',view:'setups'})" style="text-decoration:none;color:inherit"><div class="k">${SC.STG[k][0]}</div><div class="v">${S.filter(s => s.stage === k && !SC.held(s)).length}</div></a>`).join('')}</div>
-      ${short.length ? `<div class="cards">${short.map(s => SC.card('swing', s)).join('')}</div>` : App.ui.empty('No swing setup is in its zone right now', 'Waiting is part of the plan. Stage 2 setups are the ones to set alerts on.')}</div></div>`; }
+      ${short.length ? `<div class="cards">${short.map(s => SC.card('swing', s)).join('')}</div>` : App.ui.empty('No swing setup in its zone', 'Set alerts on stage 2.')}</div></div>`; }
   // open trades and signals
   const open = T.filter(t => t.open), act = ['swing', 'options', 'intraday'].flatMap(k => App.LED(k).signals.filter(s => s.status === 'ACTIVE').map(s => [k, s]));
-  h += `<div class="card"><div class="hd"><h2>Open now</h2><span class="cap">your journal positions and the signals being tracked</span></div><div class="bd">${!open.length && !act.length ? App.ui.empty('Nothing open', '') : `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>What</th><th>Source</th><th class="n">Entry</th><th class="n">Stop</th><th class="n">Status</th></tr></thead><tbody>
+  h += `<div class="card"><div class="hd"><h2>Open now</h2><span class="cap">journal and tracked signals</span></div><div class="bd">${!open.length && !act.length ? App.ui.empty('Nothing open', '') : `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>What</th><th>Source</th><th class="n">Entry</th><th class="n">Stop</th><th class="n">Status</th></tr></thead><tbody>
     ${open.map(t => `<tr class="click" data-jid="${t.id}"><td><b>${esc(t.inst)}</b> <small class="muted">${esc(t.cat || '')} · ${esc(t.d)}</small></td><td><span class="pill sun">your trade</span></td><td class="n">${fmt(t.entry)}</td><td class="n">${fmt(t.sl)}</td><td class="n">risk ${inr(t.risk)}</td></tr>`).join('')}
     ${act.map(([k, s]) => `<tr class="click" data-href="#/trade?s=${k}&sig=${encodeURIComponent(s.id)}"><td><b>${esc(s.instrument || s.symbol)}</b> <small class="muted">${k}</small></td><td><span class="pill info">signal</span></td><td class="n">${fmt(s.entry)}</td><td class="n">${fmt(s.stop)}</td><td class="n ${cls(s.r_now)}">${rr(s.r_now)} · ${esc(SC.sigStatus(s))}</td></tr>`).join('')}</tbody></table></div>`}</div></div>`;
   h += `</div><div class="stack">`;
-  h += `<div class="card"><div class="hd"><h2>Risk status</h2><span class="sp"></span><span class="pill ${lvl[0] === 'good' ? 'ok' : lvl[0]}">${lvl[1]}</span></div><div class="bd"><div class="kv">
-    <span>Today</span><b class="${cls(rs.day)}">${pct(rs.day, 2)}</b><span>This week</span><b class="${cls(rs.week)}">${pct(rs.week, 2)}</b><span>This month</span><b class="${cls(rs.month)}">${pct(rs.month, 2)}</b>
-    <span>Open risk</span><b>${pct(rs.openRisk, 2)} <small class="muted">of ${pct(rs.S.openMax, 1)}</small></b><span>Trades today</span><b class="${rs.over ? 'bad' : ''}">${rs.trades} / ${rs.S.maxIntra} <small class="muted">more only if A+</small></b><span>Risk per trade</span><b>${pct(rs.S.riskN, 2)} · A+ ${pct(rs.S.riskA, 2)}</b></div>
-    ${rs.msgs.length ? `<ul class="ins" style="margin-top:12px">${rs.msgs.map(([k, t]) => `<li class="${k}"><i></i><span>${esc(t)}</span></li>`).join('')}</ul>` : '<p class="help" style="margin-top:10px">All limits are clear. Success today = following your rules, not P&L.</p>'}</div></div>`;
+  h += `<div class="card"><div class="hd"><h2>Risk status</h2><span class="sp"></span><span class="pill ${lvl[0] === 'good' ? 'ok' : lvl[0]}">${lvl[1]}</span></div><div class="bd">${(() => {                // gauges and meters instead of a list of numbers
+      const S = rs.S, loss = (v, lim) => Math.max(0, -(v || 0)) / lim, tn = f => f >= 1 ? 'bad' : f >= .6 ? 'warn' : '', orf = S.openMax ? rs.openRisk / S.openMax : 0;
+      return `<div class="gauges">${App.ui.gauge(rs.openRisk, S.openMax, 'open risk', pct(rs.openRisk, 2), tn(orf) || 'good')}${App.ui.gauge(rs.trades, S.maxIntra, 'trades today', `${rs.trades}/${S.maxIntra}`, rs.over ? 'bad' : rs.trades >= S.maxIntra ? 'warn' : 'good')}</div>
+      <div class="mtrs">${App.ui.meter('Today', pct(rs.day, 2), loss(rs.day, S.dayLim), tn(loss(rs.day, S.dayLim)), cls(rs.day))}${App.ui.meter('Week', pct(rs.week, 2), loss(rs.week, S.weekReview), tn(loss(rs.week, S.weekReview)), cls(rs.week))}${App.ui.meter('Month', pct(rs.month, 2), loss(rs.month, S.monthStop), tn(loss(rs.month, S.monthStop)), cls(rs.month))}</div>
+      <p class="mtr-note">Bars fill toward your loss limits (${pct(S.dayLim, 1)} day · ${pct(S.weekReview, 1)} week · ${pct(S.monthStop, 1)} month) · risk ${pct(S.riskN, 2)}, A+ ${pct(S.riskA, 2)} · more than ${S.maxIntra} trades only if A+</p>`; })()}
+    ${rs.msgs.length ? `<ul class="ins" style="margin-top:12px">${rs.msgs.map(([k, t]) => `<li class="${k}"><i></i><span>${esc(t)}</span></li>`).join('')}</ul>` : ''}</div></div>`;
   h += `<div class="card"><div class="hd"><h2>Insights</h2><span class="sp"></span><a class="btn sm" href="#/analytics">Analytics</a></div><div class="bd"><ul class="ins">${App.analytics.insights(all, all.C, J.set).slice(0, 4).map(([k, t]) => `<li class="${k}"><i></i><span>${t}</span></li>`).join('')}</ul>
     ${all.n >= 2 ? `<div style="margin-top:10px" id="dEq"></div>` : ''}</div></div>`;
   if (App.goldCard) h += App.goldCard();
@@ -127,7 +129,7 @@ App.binds.dashboard = () => {
 App.pages.market = () => {
   const m = App.data.market; if (!m) return `<div class="ph"><h1>Market</h1></div>` + App.ui.empty('No market data yet', '');
   const d = m.daily || {}, i = m.intraday || {}, b = m.breadth || {}, e = m.expected_move || {}, pb = m.playbook || {};
-  let h = `<div class="ph"><div><h1>Market</h1><p>Nifty regime on the daily and today, how wide the day can be, breadth of the Nifty 500 and which sectors lead. Use it to size and to choose which playbook to lean on.</p></div><span class="sp"></span><span class="pill info">${esc(hmIST(m.generated_at))}</span></div>`;
+  let h = `<div class="ph"><div><h1>Market</h1><p>Regime, range, breadth and the sectors that lead.</p></div><span class="sp"></span><span class="pill info">${esc(hmIST(m.generated_at))}</span></div>`;
   h += `<div class="kpis" style="margin-bottom:14px">${App.ui.kpi('Daily regime', esc(d.label || '-'), `ADX ${fmt(d.adx, 0)} · efficiency ${fmt(d.er10)}`)}${App.ui.kpi('Today', esc(i.label || '-'), i.gap_pct != null ? `gap ${sg(i.gap_pct)}%` : '')}${App.ui.kpi('EMA stack', esc(d.stack || '-'), `9 ${fmt0(d.ema9)} · 21 ${fmt0(d.ema21)} · 50 ${fmt0(d.ema50)}`)}
     ${App.ui.kpi('Expected move', `±${fmt0(e.daily_pts)} pts`, `today (${fmt(e.daily_pct)}%), ±${fmt0(e.weekly_pts)} this week`)}${App.ui.kpi('ATR', fmt0(d.atr), `${fmt(d.atr_pct)}% · ${d.atr_rank}th percentile`)}${App.ui.kpi('India VIX', fmt(d.vix), `${d.vix_rank}th percentile of the year`)}</div>`;
   h += `<div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>Reading</h2></div><div class="bd"><p>${esc(d.reading || '')}</p><p class="help" style="margin-top:8px">${esc(i.reading || '')}</p>${pb.headline ? `<div style="height:10px"></div>${App.ui.callout('info', `<b>${esc(pb.headline)}</b><br>${(pb.risk || []).map(esc).join(' ')}`)}` : ''}</div></div>
@@ -144,7 +146,7 @@ const NU = () => App.ui.nw || (App.ui.nw = { topic: 'all' });
 App.pages.news = () => {
   const n = App.data.news; if (!n) return `<div class="ph"><h1>News & events</h1></div>` + App.ui.empty('No news yet', '');
   const u = NU(), topics = [...new Set((n.headlines || []).flatMap(x => x.topics || []))], H = (n.headlines || []).filter(x => u.topic === 'all' || (x.topics || []).includes(u.topic));
-  let h = `<div class="ph"><div><h1>News & events</h1><p>Market headlines tagged by topic and impact, the events calendar (expiries, RBI, Fed, holidays, results of your setups) and today's risk flags.</p></div><span class="sp"></span><span class="pill info">${esc(hmIST(n.generated_at))}</span></div>`;
+  let h = `<div class="ph"><div><h1>News & events</h1><p>Headlines, the events calendar and today's risk flags.</p></div><span class="sp"></span><span class="pill info">${esc(hmIST(n.generated_at))}</span></div>`;
   h += (n.risk_flags || []).map(f => App.ui.callout('warn', esc(f))).join('<div style="height:8px"></div>') + ((n.risk_flags || []).length ? '<div style="height:14px"></div>' : '');
   h += `<div class="grid g-main"><div class="card"><div class="hd"><h2>Headlines</h2><span class="sp"></span><div class="chips">${['all', ...topics].map(t => `<button class="chip" data-topic="${esc(t)}" aria-pressed="${u.topic === t}">${t === 'all' ? 'All' : esc(t)}</button>`).join('')}</div></div>
     <div class="bd">${H.length ? `<ul class="news">${H.map(x => `<li><span class="imp ${x.impact || ''}"></span><div><a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title)}</a><br><small>${esc(x.source || '')}${x.published ? ' · ' + esc(ago(x.published)) : ''}${(x.topics || []).length ? ' · ' + x.topics.map(esc).join(', ') : ''}</small></div></li>`).join('')}</ul>` : App.ui.empty('No headlines', '')}</div></div>
@@ -186,7 +188,7 @@ function pbBody(si) {
 App.pages.playbook = () => {
   const S = JR.J().set, rules = (window.RULES || []).map(([n, t]) => [n, t.replace('@RISKSIZING@', `Normal ${pct(S.riskN, 2)}, A+ ${pct(S.riskA, 2)}, hard ceiling ${pct(S.riskC, 1)} of capital (${inr(S.capital)}).`)]);
   const tbl = (head, rows) => `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head.map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td>${i === 0 ? '<b>' + c + '</b>' : c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-  return `<div class="ph"><div><h1>Playbook & rules</h1><p>The strategy the scanner follows, step by step, and your trading rules. The swing scanner ticks each of these steps on every setup's checklist.</p></div></div>
+  return `<div class="ph"><div><h1>Playbook & rules</h1><p>The steps the scanner checks, and your rules.</p></div></div>
     <div class="card" style="margin-bottom:14px"><div class="hd"><h2>Swing playbook: 1D, 1H and 15m</h2><span class="cap">illustrative chart, not a forecast</span></div><div class="bd" id="pb">${pbBody(App.ui.pbs || 0)}</div></div>
     <div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>Swing: timeframes</h2></div><div class="bd">${tbl(['Timeframe', 'Job', 'What you check'], [['Weekly', 'Location', 'Trend up, price near support'], ['1D', 'Structure and zone', 'Sweep, CHoCH, BOS, FVG + OB, fib, round number'], ['1H', 'Confirmation', 'Rejection, 9 EMA reclaim, volume at least 1.5x'], ['15m', 'Precision entry', 'CHoCH, BOS and FVG inside the zone, retest, trigger']])}
       <p class="help" style="margin-top:8px">Plan: stop below the daily OB with a buffer · T1 1R partial · T2 2R · T3 3R · trail by daily structure, never widen. Check results date and futures OI before holding.</p></div></div>

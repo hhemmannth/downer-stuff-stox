@@ -43,9 +43,9 @@ function ledgerView(sec, view) {
     return `<tr class="click" data-href="#/trade?s=${sec}&sig=${encodeURIComponent(s.id)}"><td><b>${esc(s.instrument || s.symbol)}</b> ${sec !== 'swing' ? `<span class="tag ${s.direction}">${esc(s.label)}</span>` : ''}<br><small class="muted">${closed ? 'closed ' + esc((s.closed || '').replace('T', ' ').slice(5, 16)) : 'since ' + esc((s.created || '').replace('T', ' ').slice(5, 16))} · ${esc(s.grade)} ${s.score}/10</small></td>
       <td><span class="st ${closed ? (r > 0 ? 's4' : 'closed') : 's3'}">${esc(sigStatus(s))}</span></td><td class="n">${fmt(s.entry, d)}</td><td class="n">${fmt(closed ? s.sl : s.stop, d)}</td><td class="n">${closed ? fmt(s.exit, d) : fmt(nt[1], d) + ' <small class="muted">' + nt[0] + '</small>'}</td><td class="n">${fmt(closed ? s.exit : s.last, d)}</td><td class="n ${cls(r)}"><b>${rr(r)}</b></td></tr>`; };
   const tbl = (rows, head) => `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head.map((h, i) => `<th class="${i >= 2 ? 'n' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
-  if (view === 'active') return `<div class="card"><div class="bd">${act.length ? tbl(act.map(row).join(''), ['Trade', 'Status', 'Entry', 'Stop now', 'Next target', 'Last', 'R now']) + `<p class="help" style="margin-top:10px">Every triggered setup is followed on closed candles until the final target, the stop or the trailing stop${sec === 'swing' ? ' (swing: no breakeven at T1, stop to entry at T2)' : ', or 15:15'}. Tap a row for its timeline.</p>` : App.ui.empty('No open trades', 'When a setup triggers it moves here and is followed every run until it closes.')}</div></div>`;
+  if (view === 'active') return `<div class="card"><div class="bd">${act.length ? tbl(act.map(row).join(''), ['Trade', 'Status', 'Entry', 'Stop now', 'Next target', 'Last', 'R now']) + `<p class="help" style="margin-top:10px">Every triggered setup is followed on closed candles until the final target, the stop or the trailing stop${sec === 'swing' ? ' (swing: no breakeven at T1, stop to entry at T2)' : ', or 15:15'}. Tap a row for its timeline.</p>` : App.ui.empty('No open trades', 'Triggered setups are followed here until they close.')}</div></div>`;
   return `<div class="card"><div class="hd"><h2>Closed trades</h2></div><div class="bd">${clo.length ? tbl(clo.map(row).join(''), ['Trade', 'Outcome', 'Entry', 'Stop', 'Exit', 'Exit', 'Result']) : App.ui.empty('Nothing closed yet', '')}</div></div>
-    <div class="card" style="margin-top:14px"><div class="hd"><h2>Invalidated before triggering</h2></div><div class="bd">${drop.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Setup</th><th>Reason</th><th class="n">Zone</th><th class="n">Plan entry</th><th class="n">When</th></tr></thead><tbody>${drop.map(w => `<tr class="click" data-href="#/trade?s=${sec}&id=${encodeURIComponent(w.symbol + '|' + w.direction)}"><td><b>${esc(w.symbol)}</b> <small class="muted">was ${esc(w.status || '')} · ${esc(w.grade || '')}</small></td><td style="white-space:normal;min-width:220px">${esc(w.reason || '')}</td><td class="n">${fmt(w.zone_bot)}–${fmt(w.zone_top)}</td><td class="n">${fmt(w.entry)}</td><td class="n">${esc((w.dropped || '').replace('T', ' ').slice(5, 16))}</td></tr>`).join('')}</tbody></table></div>` : App.ui.empty('None', 'Setups that disappear before triggering are listed here with the reason.')}</div></div>`;
+    <div class="card" style="margin-top:14px"><div class="hd"><h2>Invalidated before triggering</h2></div><div class="bd">${drop.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Setup</th><th>Reason</th><th class="n">Zone</th><th class="n">Plan entry</th><th class="n">When</th></tr></thead><tbody>${drop.map(w => `<tr class="click" data-href="#/trade?s=${sec}&id=${encodeURIComponent(w.symbol + '|' + w.direction)}"><td><b>${esc(w.symbol)}</b> <small class="muted">was ${esc(w.status || '')} · ${esc(w.grade || '')}</small></td><td style="white-space:normal;min-width:220px">${esc(w.reason || '')}</td><td class="n">${fmt(w.zone_bot)}–${fmt(w.zone_top)}</td><td class="n">${fmt(w.entry)}</td><td class="n">${esc((w.dropped || '').replace('T', ' ').slice(5, 16))}</td></tr>`).join('')}</tbody></table></div>` : App.ui.empty('None', 'Setups cancelled before triggering show here.')}</div></div>`;
 }
 const viewSeg = (sec, view) => { const L = App.LED(sec), a = L.signals.filter(s => s.status === 'ACTIVE').length, c = L.signals.filter(s => s.status === 'CLOSED').length + (L.dropped || []).length;
   return App.ui.seg('view_' + sec, [['setups', 'Setups'], ['active', `Open trades ${a}`], ['closed', `Closed / invalidated ${c}`]], view); };
@@ -55,10 +55,10 @@ const meta = d => d ? `<span class="pill info">${esc(dateIST(d.generated_at))} $
 const SU = () => App.ui.sw || (App.ui.sw = { view: 'setups', stage: 'all', grade: 'all', q: '' });
 App.pages.swing = () => {
   const u = SU(), d = App.data.swing;
-  let h = `<div class="ph"><div><h1>Swing scanner</h1><p>Your swing playbook on the Nifty 500, long only: Weekly location → 1D CHoCH, BOS, FVG + OB, fib → 1H rejection and 9 EMA close on volume → 15m precision entry. Each setup shows how far along the playbook it is.</p></div><span class="sp"></span>${meta(d)}</div>`;
+  let h = `<div class="ph"><div><h1>Swing scanner</h1><p>Nifty 500 · long only</p>${App.ui.flow(['Weekly location', '1D CHoCH · BOS', 'FVG + OB · fib', '1H 9 EMA close · 1.5× vol', '15m entry'])}</div><span class="sp"></span>${meta(d)}</div>`;
   h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">${viewSeg('swing', u.view)}</div>`;
   if (u.view !== 'setups') return h + ledgerView('swing', u.view);
-  if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'The swing scan runs before the open, right after each 1H candle closes and after the close.')}</div></div>`;
+  if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'Scans run before the open, after each 1H close and after the close.')}</div></div>`;
   const S = d.setups, cnt = k => S.filter(s => s.stage === k && !SC.held(s)).length, nHeld = S.filter(s => s.stage >= 3 && SC.held(s)).length;
   /* the playbook as a node graph (desktop): the scanned universe as an orb, a filament to each stage, the counts on the stage cards and a summary
      panel. The stage cards are the same buttons as before (they filter the list); on a phone it falls back to the strip of five. */
@@ -67,8 +67,12 @@ App.pages.swing = () => {
   h += `<div class="hero-pipe" style="margin-bottom:14px"><div class="hp-orb"><canvas data-orb data-energy="${Math.min(1, (ready * 3 + inplay / 6) / 12).toFixed(2)}" aria-hidden="true"></canvas><div class="hp-cap"><b>Nifty 500</b><small>${d.scanned || ''} scanned</small></div></div>
     <svg class="hp-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${links}</svg>
     <div class="pipeline hp-nodes">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${STG[k][1]}</div></button>`).join('')}</div>
-    <div class="hp-panel"><div class="cap">Swing scan</div><div class="big">${ready}</div><div class="sub">ready: 1H confirmed or entry</div>
-      <div class="hp-kv"><span>In play</span><b>${inplay}</b><span>Listed</span><b>${S.length}</b><span>Held back</span><b>${nHeld}</b><span>Full scan</span><b>${esc(hmIST(d.generated_at))}</b><span>15m entries</span><b>${d.fast_at ? esc(hmIST(d.fast_at)) : 'hourly'}</b></div></div></div>`;
+    <div class="hp-panel"><div class="hp-main"><div class="cap">Swing scan</div><div class="big">${ready}</div><div class="sub">ready: 1H confirmed or entry</div>
+      <div class="hp-kv"><span>In play</span><b>${inplay}</b><span>Listed</span><b>${S.length}</b><span>Held back</span><b>${nHeld}</b><span>Full scan</span><b>${esc(hmIST(d.generated_at))}</b><span>15m entries</span><b>${d.fast_at ? esc(hmIST(d.fast_at)) : 'hourly'}</b></div></div>
+      ${(() => { const P = S.filter(s => s.stage >= 2 && !SC.held(s)), sec = {}; P.forEach(s => { const k = s.sector || 'Other'; sec[k] = (sec[k] || 0) + 1; });         // what the in-play setups are made of
+        const top = Object.entries(sec).sort((a, b) => b[1] - a[1]).slice(0, 4);
+        return P.length ? `<div class="hp-ana"><div class="cap">Score mix · in play</div>${App.ui.minibars([['10', P.filter(s => s.score >= 10).length], ['9', P.filter(s => s.score === 9).length], ['8', P.filter(s => s.score === 8).length], ['7 or less', P.filter(s => s.score <= 7).length]], 'good')}
+          <div class="cap" style="margin-top:14px">Leading sectors</div>${App.ui.minibars(top)}</div>` : ''; })()}</div></div>`;
   const short = S.filter(s => s.stage >= 3 && !(s.holds || []).length && !s.status.startsWith('WATCH')).sort((a, b) => b.stage - a.stage || b.score - a.score).slice(0, 5);
   if (short.length) h += App.ui.callout('good', `<b>Today's shortlist (max 5, pick 1 or 2):</b> ${short.map(s => `<a href="#/trade?s=swing&id=${encodeURIComponent(s.symbol + '|long')}"><b>${esc(s.symbol)}</b></a> <small>${STG[s.stage][0]} · ${s.grade} ${s.score}/10</small>`).join(' &nbsp;·&nbsp; ')}`) + '<div style="height:12px"></div>';
   let L = S.filter(s => (u.stage === 'all' ? s.stage >= 2 : u.stage === 'held' ? s.stage >= 3 && SC.held(s) : s.stage === +u.stage && !SC.held(s)) && (u.grade === 'all' || (u.grade === 'A' ? ['A', 'A+'].includes(s.grade) : s.grade === 'A+')) && (!u.q || s.symbol.includes(u.q.toUpperCase()) || (s.sector || '').toLowerCase().includes(u.q.toLowerCase())));
@@ -95,7 +99,7 @@ function whyCard() {
 }
 App.binds.swing = () => {
   const u = SU(); bindView('swing', u);
-  if (u.why && App.lazyAge('explain') > 60000) App.lazy('explain').then(() => { if (App.route().page === 'swing') App.render(); });
+  if (u.why && App.lazyAge('explain') > 60000) App.lazy('explain').then(() => App.soon('swing'));
   const f = $('#whyF'); if (f) { const go = v => { u.why = v; App.render(); App.lazy('explain').then(() => App.render()); };
     f.onsubmit = e => { e.preventDefault(); go($('#whyQ').value); }; $$('[data-why]').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.why); }); }
   $$('[data-stage]').forEach(b => b.onclick = () => { u.stage = String(u.stage) === b.dataset.stage ? 'all' : b.dataset.stage; App.render(); });
@@ -109,7 +113,7 @@ function bindView(sec, u) { $$(`[data-seg="view_${sec}"]`).forEach(b => b.onclic
 const OU = () => App.ui.op || (App.ui.op = { view: 'setups' });
 App.pages.options = () => {
   const u = OU(), d = App.data.options;
-  let h = `<div class="ph"><div><h1>Nifty options</h1><p>Your options playbook: 1H alignment → 15m bias (CHoCH, previous-day sweep, 9 EMA) → 5m CHoCH + BOS, FVG + OB, fib, pullback, 9 EMA close. Strike by delta with India VIX. No volume or open-interest rules.</p></div><span class="sp"></span>${meta(d)}</div>
+  let h = `<div class="ph"><div><h1>Nifty options</h1><p>Nifty · strike by delta and India VIX</p>${App.ui.flow(['1H alignment', '15m bias', '5m CHoCH + BOS', 'FVG + OB pullback', '9 EMA close'])}</div><span class="sp"></span>${meta(d)}</div>
     <div style="margin-bottom:14px">${viewSeg('options', u.view)}</div>`;
   if (u.view !== 'setups') return h + ledgerView('options', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No options data yet', 'Runs every 5 minutes during market hours.')}</div></div>`;
@@ -120,7 +124,7 @@ App.pages.options = () => {
   if (p.expiry_afternoon) h += App.ui.callout('warn', '<b>Expiry afternoon:</b> your rule is to skip new option buys now.') + '<div style="height:10px"></div>';
   if (p.losses_today >= 2) h += App.ui.callout('bad', '<b>Two losing trades today:</b> your rule says stop for the day.') + '<div style="height:10px"></div>';
   h += d.setups.length ? `<div class="cards">${d.setups.map(s => card('options', s)).join('')}</div>` : `<div class="card"><div class="bd">${App.ui.empty('No setup on Nifty right now', Object.entries(p.why_none || {}).map(([k, v]) => `<div><b style="display:inline;font-size:14px">${k}:</b> ${esc(v)}</div>`).join(''))}</div></div>`;
-  h += `<p class="help" style="margin-top:12px">Lot size ${d.lot_size}. Weekly expiry Tuesday (previous trading day if it is a holiday). Convert the index stop to premium (points × delta) and size so the loss is your fixed risk. Not investment advice.</p>`;
+  h += `<div style="margin-top:12px">${App.ui.chips([`Lot ${d.lot_size}`, 'Weekly expiry Tuesday', 'Premium stop = index points × delta', 'Size to your fixed risk', 'Not investment advice'])}</div>`;
   return h;
 };
 App.binds.options = () => bindView('options', OU());
@@ -129,7 +133,7 @@ App.binds.options = () => bindView('options', OU());
 const IU = () => App.ui.in || (App.ui.in = { view: 'setups', side: 'all' });
 App.pages.intraday = () => {
   const u = IU(), d = App.data.intraday;
-  let h = `<div class="ph"><div><h1>Intraday</h1><p>The most liquid Nifty 500 stocks, long and short: 15m CHoCH → 5m CHoCH + BOS → FVG + OB pullback → 5m 9 EMA close on 1.5x volume. MIS, SL-M, square off by 15:10, two trades a day, more only if A+.</p></div><span class="sp"></span>${meta(d)}</div>
+  let h = `<div class="ph"><div><h1>Intraday</h1><p>Liquid Nifty 500 · long and short · MIS, out by 15:10</p>${App.ui.flow(['15m CHoCH', '5m CHoCH + BOS', 'FVG + OB pullback', '9 EMA close · 1.5× vol'])}</div><span class="sp"></span>${meta(d)}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${viewSeg('intraday', u.view)}${u.view === 'setups' ? App.ui.seg('inside', [['all', 'Both'], ['long', 'Long'], ['short', 'Short']], u.side) : ''}</div>`;
   if (u.view !== 'setups') return h + ledgerView('intraday', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No intraday data yet', '')}</div></div>`;
