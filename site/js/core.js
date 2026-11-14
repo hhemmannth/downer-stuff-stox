@@ -209,6 +209,7 @@ App.render = () => {
   try { el.innerHTML = App.staleBanner() + App.riskBanner() + fn(App.route().q); } catch (e) { console.error(e); el.innerHTML = `<div class="callout bad"><span class="ic">!</span><div><b>This page hit an error.</b> ${esc(e.message)}</div></div>`; }
   if (App.binds[page]) try { App.binds[page](App.route().q); } catch (e) { console.error(e); }
   try { App.orbsInit(); } catch (e) { console.error(e); }                                   // start the orbs of the page just drawn (and stop the old ones)
+  try { if (App.deco3d) App.deco3d(el); } catch (e) { console.error(e); }                  // the 3D models for each section of the page
   if (App._lastPage !== page) window.scrollTo(0, 0); else window.scrollTo(0, keep);
   App._lastPage = page; paintChrome();
 };
@@ -231,7 +232,7 @@ App.ALLOWED = [];  // optional extra lock: put your email(s) here, e.g. ['you@ex
 const allowedUser = u => !!u && (!App.ALLOWED.length || App.ALLOWED.map(e => e.toLowerCase()).includes(String(u.email || '').toLowerCase()));
 function gateView(msg, fatal) {
   let g = $('#gate'); if (!g) { g = document.createElement('div'); g.id = 'gate'; document.body.appendChild(g); }
-  g.innerHTML = `<form class="gate-card" id="gateF" novalidate>
+  const form = `<form class="gate-card" id="gateF" novalidate>
     <div class="gate-mark"><span class="logo">DS</span><div><b>DownerStuff</b><small>Private trading desk</small></div></div>
     <h1>Sign in</h1><p class="gate-sub">Use your Trade Insight account.</p>
     ${fatal ? `<div class="callout bad"><span class="ic">!</span><div>${esc(msg)}</div></div>` : `
@@ -240,6 +241,8 @@ function gateView(msg, fatal) {
     <p class="gate-msg" id="gMsg" role="alert">${msg ? esc(msg) : ''}</p>
     <button class="btn primary gate-btn" id="gBtn" type="submit">Sign in</button>`}
   </form>`;
+  if (App.gateMount) { try { return App.gateMount(g, form); } catch (e) { console.error(e); } }      // the 3D stage; if it ever fails, the plain form still works
+  g.innerHTML = form;
   return g;
 }
 /* Two-factor: when an account has an authenticator app set up, a password alone is not enough. Supabase reports the session as "aal1" (password only)
@@ -251,11 +254,12 @@ function stepUp() {
   return new Promise(async done => {
     let g = $('#gate'); if (!g) { g = document.createElement('div'); g.id = 'gate'; document.body.appendChild(g); }
     let factor = null; try { const { data } = await App.sb.auth.mfa.listFactors(); factor = ((data && data.totp) || [])[0] || null; } catch (e) { }
-    const paint = msg => { g.innerHTML = `<form class="gate-card" id="gateM" novalidate><div class="gate-mark"><span class="logo">DS</span><div><b>DownerStuff</b><small>Private trading desk</small></div></div>
+    const paint = msg => { const html = `<form class="gate-card" id="gateM" novalidate><div class="gate-mark"><span class="logo">DS</span><div><b>DownerStuff</b><small>Private trading desk</small></div></div>
       <h1>Two-factor code</h1><p class="gate-sub">Open your authenticator app and enter the 6-digit code for DownerStuff.</p>
       <div class="field"><label for="gCode">Code</label><input id="gCode" inputmode="numeric" autocomplete="one-time-code" maxlength="9" required></div>
       <p class="gate-msg" id="gMsg" role="alert">${msg ? esc(msg) : ''}</p><button class="btn primary gate-btn" id="gBtn" type="submit">Verify</button>
-      <p class="gate-sub" style="margin-top:12px"><a href="#" id="gOut">Use a different account</a></p></form>`; setTimeout(() => { const i = $('#gCode', g); if (i) i.focus(); }, 50); };
+      <p class="gate-sub" style="margin-top:12px"><a href="#" id="gOut">Use a different account</a></p></form>`;
+      let done0 = false; if (App.gateMount) { try { App.gateMount(g, html); done0 = true; } catch (e) { console.error(e); } } if (!done0) g.innerHTML = html; setTimeout(() => { const i = $('#gCode', g); if (i) i.focus(); }, 50); };
     if (!factor) { paint('This account needs a code, but no authenticator app was found on it. Ask for help before signing out.'); $('#gBtn', g).disabled = true; }
     else paint('');
     g.onclick = async e => { if (e.target.id === 'gOut') { e.preventDefault(); try { await App.sb.auth.signOut(); } catch (x) { } location.reload(); } };
