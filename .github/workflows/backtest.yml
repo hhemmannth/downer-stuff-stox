@@ -57,6 +57,7 @@ jobs:
       - name: Replay
         env:
           PYTHONWARNINGS: ignore
+          SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}
           TOP_IN: ${{ inputs.top }}
           VAR_IN: ${{ inputs.variants }}
           QUICK_IN: ${{ inputs.quick }}
