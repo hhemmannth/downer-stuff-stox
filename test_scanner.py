@@ -85,9 +85,7 @@ check('time-of-day volume: 175 vs a busy 11:15 slot (1.1x) is NOT a strong trigg
 
 print('--- 15m CHoCH only (options and intraday) ---')
 b = sc.choch_bias(frame(D[:32], 'D')); check('CHoCH without BOS is enough for the 15m bias', b is not None and abs(b['level'] - h[21]) < .01 and not sc.find_structures(frame(D[:32], 'D'), dict(sc.CFG_B, min_bars=20)), str(b and b['date']))
-_t = 31 - b['age']; _b0 = sc.choch_bias(frame(D[:32], 'D'), dict(sc.CFG_B, lux_ob=False))
-check('bias carries the 15m order block the LuxAlgo way: the lowest-low candle between the broken swing high and the CHoCH bar, whole candle', abs(b['ob_low'] - l[26]) < .01 and abs(b['ob_high'] - h[26]) < .01, f"{b['ob_low']}-{b['ob_high']} (the wide candle 25 counts with high and low swapped, as in the indicator's ATR filter)")
-check('the older rule (last down candle before the CHoCH) is still there as the lux_ob switch', abs(_b0['ob_low'] - l[25]) < .01 and abs(_b0['ob_high'] - o[25]) < .01, f"{_b0['ob_low']}-{_b0['ob_high']}")
+check('bias carries the 15m order block (last down candle before the CHoCH)', abs(b['ob_low'] - l[25]) < .01 and abs(b['ob_high'] - o[25]) < .01, f"{b['ob_low']}-{b['ob_high']}")
 check('no CHoCH at all -> no bias', sc.choch_bias(frame(D[:20], 'D')) is None)
 fl = [row[:] for row in D[:32]]; fl.append([1084, 1085, 1020, 1030, 100]); check('a CHoCH that failed (new low) gives no bias', sc.choch_bias(frame(fl, 'D')) is None)
 idx5 = pd.date_range('2026-10-12 09:15', periods=len(D) + len(H), freq='5min', tz='Asia/Kolkata')
@@ -95,8 +93,6 @@ f5 = pd.DataFrame(D + H, columns=sc.COLS, index=idx5)
 f15 = pd.DataFrame(D[:32], columns=sc.COLS, index=pd.date_range('2026-10-12 09:15', periods=32, freq='15min', tz='Asia/Kolkata'))
 ri = sc.scan_intraday(f5, f15, 'long', CFG5, [], section='intraday')
 check('intraday long found with a 15m CHoCH only', ri is not None and 'zone_bot' in ri, str(ri and ri.get('state')))
-_cz = sc.find_structures(f5, dict(CFG5, lookback=len(f5))); _fz = [z for z in _cz if z['ob_low'] != z['ob_low'] and z['fvg_low'] == z['fvg_low']]; _oz = [z for z in _cz if z['fvg_low'] != z['fvg_low'] and z['ob_low'] == z['ob_low']]
-check('LuxAlgo zones that do not touch are two zones, not one tall box: the gap alone (1,086-1,110) and the order block alone (1,038-1,049) of the same BOS', bool(_fz) and bool(_oz) and (_fz[0]['zone_bot'], _fz[0]['zone_top']) == (1086, 1110) and (_oz[0]['zone_bot'], _oz[0]['zone_top']) == (1038, 1049) and _fz[0]['bos_i'] == _oz[0]['bos_i'] and _fz[0]['leg_low'] == _oz[0]['leg_low'], str([(z['zone_bot'], z['zone_top']) for z in _cz[:4]]))
 if ri and 'zone_bot' in ri:
     check('structure 2/2, TRIGGERED with volume, grade A or better', ri['structure'] == 2 and ri['status'] == 'TRIGGERED' and ri['grade'] in ('A', 'A+') and ri['confirm'] == 3, f"{ri['status']} {ri['score']} confirm {ri['confirm']}")
     check('15m details are carried for the explanation', ri['b15_date'] and abs(ri['b15_level'] - h[21]) < .01)

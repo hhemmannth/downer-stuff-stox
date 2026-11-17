@@ -28,8 +28,7 @@ CFG = dict(                       # swing: structure on 1D, trigger on 1H
     min_price=50.0, min_turnover_cr=20.0, min_bars=60,
     max_bos_age=60, max_zone_atr=3.5, max_zone_pct=10.0, trigger_max_atr=1.0,
     slot_rvol=True)               # India: compare 1H volume with the same time-of-day candle, not with the whole day
-LUX_OB = os.environ.get('SWING_LUX_OB', '').strip().lower() not in ('0', 'off', 'false', 'no')      # order block rule of her LuxAlgo charts (see lux_bull_breaks)
-CFG_I = dict(CFG, lux_ob=LUX_OB, lookback=240, h_lookback=48, trigger_age=6, min_bars=120, min_price=0.0, min_turnover_cr=0.0,
+CFG_I = dict(CFG, lookback=240, h_lookback=48, trigger_age=6, min_bars=120, min_price=0.0, min_turnover_cr=0.0,
              max_bos_age=150, max_zone_atr=3.0, max_zone_pct=3.0, slot_rvol=False)      # options + intraday: 5m structure and trigger
 CFG_B = dict(CFG_I, lookback=160, max_bos_age=120, min_bars=60)                         # 15m: CHoCH only
 PAIRS = [('zone_bot', 'zone_top'), ('ob_low', 'ob_high'), ('fvg_low', 'fvg_high'), ('fib_lo', 'fib_hi'), ('leg_low', 'leg_high'), ('b15_ob_low', 'b15_ob_high')]
@@ -81,38 +80,12 @@ def r05(x):
     return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(round(float(x) / TICK) * TICK, 2)
 
 # ------------------------------------------------------------------ structure
-def lux_parsed(h, l, c, n_atr=200):
-    """LuxAlgo's 'parsed' highs and lows: a candle whose range is 2 x ATR or more counts with its high and low swapped."""
-    N = len(c); tr = np.maximum(h - l, np.maximum(np.abs(h - np.r_[c[0], c[:-1]]), np.abs(l - np.r_[c[0], c[:-1]]))); tr[0] = h[0] - l[0]
-    a = np.zeros(N); a[0] = tr[0]
-    for i in range(1, N): m = min(n_atr, i + 1); a[i] = (a[i - 1] * (m - 1) + tr[i]) / m
-    hv = (h - l) >= 2 * a; return np.where(hv, l, h), np.where(hv, h, l)
-
-def lux_bull_breaks(o, h, l, c, size=5, n_atr=200):
-    """Bullish order blocks the way the LuxAlgo Smart Money Concepts indicator draws them (internal structure, length 5, ATR filter), so the
-    scanner reads the same box you see on TradingView. A pivot high is confirmed `size` bars later; when a close first crosses above it, the order
-    block is the candle with the LOWEST LOW between that pivot and the bar before the break (the base of the move, whole candle, high-low).
-    A candle whose range is 2 x ATR or more counts with high and low swapped, as in the indicator. Returns {break bar: (low, high, candle bar, broken level)}.
-    Checked against your CUPID and SANSERA daily charts (CUPID 329.6-344.0 from 4 Nov, broken by the 11 Nov close; SANSERA 3869.2-4050.0)."""
-    N = len(c); ph, pl = lux_parsed(h, l, c, n_atr)
-    leg = 0; lvl = idx = None; crossed = True; out = {}
-    for i in range(size, N):
-        if h[i - size] > h[i - size + 1:i + 1].max(): new = 0
-        elif l[i - size] < l[i - size + 1:i + 1].min(): new = 1
-        else: new = leg
-        if new != leg and new == 0: lvl, idx, crossed = h[i - size], i - size, False       # a bearish leg starts at a new pivot high
-        leg = new
-        if lvl is not None and not crossed and c[i] > lvl and c[i - 1] <= lvl:
-            crossed = True; j = idx + int(np.argmin(pl[idx:i])); out[i] = (float(pl[j]), float(ph[j]), j, float(lvl))
-    return out
-
 def find_structures(df, cfg):
     """Candidate structures, newest first. Each is a CHoCH (first close above a lower high after lower highs and lower lows),
     then a BOS with a displacement candle. Later BOS legs of the same move (continuations after a pullback) are candidates too,
     each with its own order block and fair value gap, so a trend keeps producing fresh zones instead of going stale."""
     N = len(df); o, h, l, c = (df[k].values for k in ('Open', 'High', 'Low', 'Close'))
     a = atr(df, cfg['atr_n']).values; n = cfg['pivot']; ph, pl, known = pivots(df, cfg); out = []; seen = set()
-    lux = lux_bull_breaks(o, h, l, c) if cfg.get('lux_ob') else None          # None = the older rule (last down candle before the displacement)
     atr_at = lambda j: a[j - 1] if j >= 1 and not math.isnan(a[j - 1]) else (h[j] - l[j])
     def next_bos(start, run):
         pulled = False
@@ -123,12 +96,8 @@ def find_structures(df, cfg):
         return None, run
     def zone_for(b, floor_i):
         a_b = atr_at(b); ob = None
-        if lux is not None:                                  # the order block your indicator draws: base of the move that was broken at, or just before, the displacement
-            hit = [i for i in lux if b - 3 <= i <= b]
-            if hit: v = lux[max(hit)]; ob = (v[0], v[1], v[2])
-        else:
-            for k in range(b - 1, max(floor_i, b - 6) - 1, -1):
-                if c[k] < o[k]: ob = (l[k], o[k], k); break      # order block: last down candle before the displacement
+        for k in range(b - 1, max(floor_i, b - 6) - 1, -1):
+            if c[k] < o[k]: ob = (l[k], o[k], k); break      # order block: last down candle before the displacement
         fvg = None
         for m in range(b - 1, min(b + 2, N - 1)):
             if m >= 1 and m + 1 < N and l[m + 1] > h[m - 1] and (l[m + 1] - h[m - 1]) >= cfg['fvg_min_atr'] * a_b:
@@ -139,12 +108,8 @@ def find_structures(df, cfg):
         leg_low = ob[0] if ob else l[b - 1]; leg_high = h[b:].max()
         if leg_high - leg_low < 2 * a_b: return None
         rng = leg_high - leg_low
-        z = dict(ob_low=ob[0] if ob else np.nan, ob_high=ob[1] if ob else np.nan, fvg_low=fvg[0] if fvg else np.nan, fvg_high=fvg[1] if fvg else np.nan,
-                 zone_bot=zone_bot, zone_top=zone_top, zone_q=2 if stacked else 1, leg_low=leg_low, leg_high=leg_high, fib_hi=leg_high - 0.618 * rng, fib_lo=leg_high - 0.705 * rng)
-        if lux is not None and ob and fvg and not stacked:       # LuxAlgo draws two separate boxes (the base of the move, the gap near the break): one zone each, not one tall box with the empty space between them
-            fz = dict(z, ob_low=np.nan, ob_high=np.nan, zone_bot=fvg[0], zone_top=fvg[1], zone_q=1); oz = dict(z, fvg_low=np.nan, fvg_high=np.nan, zone_bot=ob[0], zone_top=ob[1], zone_q=1)
-            return [fz, oz] if fvg[0] >= ob[1] else [oz, fz]                  # the box nearer to price after a pullback first
-        return [z]
+        return dict(ob_low=ob[0] if ob else np.nan, ob_high=ob[1] if ob else np.nan, fvg_low=fvg[0] if fvg else np.nan, fvg_high=fvg[1] if fvg else np.nan,
+                    zone_bot=zone_bot, zone_top=zone_top, zone_q=2 if stacked else 1, leg_low=leg_low, leg_high=leg_high, fib_hi=leg_high - 0.618 * rng, fib_lo=leg_high - 0.705 * rng)
     for ci in range(N - 1, max(n * 3, N - cfg['lookback']) - 1, -1):
         phs = [i for i in ph if known[i] <= ci - 1]; pls = [i for i in pl if known[i] <= ci - 1]
         if len(phs) < 2 or len(pls) < 2: continue
@@ -161,10 +126,9 @@ def find_structures(df, cfg):
         for k in range(len(legs) - 1, -1, -1):              # newest leg first
             bi, lvl_b = legs[k]
             if bi in seen: continue
-            zs = zone_for(bi, legs[k - 1][0] if k else ci)
-            if not zs: continue
-            seen.add(bi)
-            for z in zs: z.update(choch_i=ci, bos_i=bi, choch_level=lvl, bos_level=lvl_b, atr=a[-1], leg=k + 1); out.append(z)
+            z = zone_for(bi, legs[k - 1][0] if k else ci)
+            if z is None: continue
+            seen.add(bi); z.update(choch_i=ci, bos_i=bi, choch_level=lvl, bos_level=lvl_b, atr=a[-1], leg=k + 1); out.append(z)
         if len(out) >= 8: break
     out.sort(key=lambda z: -z['bos_i'])
     return out
@@ -186,9 +150,7 @@ def choch_bias(df15, cfg=None):
     _, t, hi_i, lo_i, before = last
     base = float(l[lo_i]) if lo_i is not None else float(l[:t + 1].min())
     if np.any(l[t:] < base): return None
-    if cfg.get('lux_ob') and hi_i < t:                      # the order block your indicator draws: lowest low between the broken swing high and the break, whole candle
-        pH, pL = lux_parsed(h, l, c); j = hi_i + int(np.argmin(pL[hi_i:t])); ob = (pL[j], pH[j])
-    else: ob = next(((l[k], o[k]) for k in range(t - 1, max(-1, t - 7), -1) if c[k] < o[k]), None)
+    ob = next(((l[k], o[k]) for k in range(t - 1, max(-1, t - 7), -1) if c[k] < o[k]), None)
     return dict(level=float(h[hi_i]), base_low=base, age=int(N - 1 - t), date=str(df15.index[t])[:16], kind='BOS' if before == 'up' else 'CHoCH',
                 ob_low=float(ob[0]) if ob else float('nan'), ob_high=float(ob[1]) if ob else float('nan'))
 

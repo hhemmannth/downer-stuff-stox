@@ -44,30 +44,6 @@ def swing_fast_due(t):
 def swing_due(t, last, minute=15):
     slot = swing_slot(t, minute); return slot is not None and slot != last
 
-def swing_age_min(data_dir, now):
-    """Minutes since the published swing scan (data/swing.json); None when there is none yet."""
-    try:
-        g = dt.datetime.fromisoformat(str(json.load(open(os.path.join(data_dir, 'swing.json')))['generated_at']))
-        return (now - (g if g.tzinfo else g.replace(tzinfo=IST))).total_seconds() / 60
-    except Exception: return None
-
-def swing_catchup_due(t, age, last_try=None, max_age=75, retry=40):
-    """A swing scan is run NOW (between the hourly ones) when the published one is older than `max_age` minutes during market hours: the 08:37
-    scan was skipped (GitHub drops schedules), the loop was restarted, or an earlier scan failed. Before this the app showed 'Delayed' until the first
-    hourly scan at 10:15. After a try it waits `retry` minutes, so a scan that keeps failing is not started every five minutes."""
-    m = t.hour * 60 + t.minute
-    if not (9 * 60 <= m <= 15 * 60 + 30): return False
-    if age is not None and age <= max_age: return False
-    return last_try is None or (t - last_try).total_seconds() / 60 >= retry
-
-def relay(log, workflow='market-loop.yml'):
-    """Before this job ends with the session still open, queue the next loop so there is no gap (the watchdog is the backup). Needs actions: write."""
-    repo, token = os.environ.get('GITHUB_REPOSITORY'), os.environ.get('GITHUB_TOKEN')
-    if not repo or not token: return False
-    try:
-        import watchdog; watchdog.gh('POST', f'/repos/{repo}/actions/workflows/{workflow}/dispatches', token, {'ref': os.environ.get('GITHUB_REF_NAME') or 'main'}); log('next market loop queued'); return True
-    except Exception as ex: log(f'could not queue the next market loop ({ex}); the watchdog will start it'); return False
-
 def heartbeat(pub, **kw):
     """data/health/loop.json: proof the 5-minute loop is alive. The app shows a red banner when it goes quiet during market hours,
     and the watchdog restarts the loop when it stops or freezes."""
@@ -102,7 +78,7 @@ def main(argv=None):
     if start >= end and not a.once: log('Market session is over: nothing to do.'); return 0
     pub = a.pub if a.no_publish else publish.prepare(a.pub); os.makedirs(os.path.join(pub, 'data'), exist_ok=True); os.makedirs(os.path.join(pub, 'state'), exist_ok=True)
     py = sys.executable; data = os.path.join(pub, 'data'); state = os.path.join(pub, 'state', 'notified.json')
-    last_pub = time.time() - 1; swing = None; swing_hour = None; catchup_at = None; log(f'Loop until {end:%H:%M} IST')
+    last_pub = time.time() - 1; swing = None; swing_hour = None; log(f'Loop until {end:%H:%M} IST')
     hb = dict(state='running', started=start.isoformat(timespec='seconds'), until=end.isoformat(timespec='seconds'), ticks=0, last_tick=None, last_scan_s=None, last_rc=None, publish='-')
     if not a.no_publish and not a.once:
         heartbeat(pub, **hb, next_tick=next_tick(now_ist(), a.every, a.offset).isoformat(timespec='seconds'))
@@ -118,9 +94,6 @@ def main(argv=None):
         tick = now_ist(); log(f'tick {tick:%H:%M:%S}')
         if swing is None and swing_due(tick, swing_hour, a.swing_minute):
             swing = subprocess.Popen([py, 'strategy_scanner.py', '--mode', 'swing', '--out', data, '--state-dir', '.cache']); swing_hour = swing_slot(tick, a.swing_minute); log('swing scan started in the background')
-        elif swing is None and not a.once and swing_catchup_due(tick, swing_age_min(data, tick), catchup_at):
-            age = swing_age_min(data, tick); catchup_at = tick
-            swing = subprocess.Popen([py, 'strategy_scanner.py', '--mode', 'swing', '--out', data, '--state-dir', '.cache']); log(f"swing catch-up scan started in the background (the published one is {'missing' if age is None else str(int(age)) + ' min old'})")
         t0 = time.time(); rc = run([py, 'strategy_scanner.py', '--mode', 'live', '--out', data, '--state-dir', '.cache'], log)
         if swing is not None and swing.poll() is not None: log(f'swing scan finished ({swing.returncode})'); swing = None
         if swing is None and swing_fast_due(tick):                                                      # the 15m entry check, before the alerts go out in this same tick
@@ -143,7 +116,6 @@ def main(argv=None):
         run([py, 'notify.py', '--dir', data, '--state', state], log)
         run([py, 'bot.py', '--dir', data, '--state', os.path.join(pub, 'state', 'bot.json')], log)       # answer Telegram commands (item 18)
     hb.update(state='finished', swing_running=False); heartbeat(pub, **hb, next_tick=None)
-    if not a.once and not a.no_publish and trading_day(now_ist().date()) and now_ist() < dt.datetime.combine(now_ist().date(), CLOSE, tzinfo=IST) - dt.timedelta(minutes=10): relay(log)
     if not a.no_publish:
         try: publish.publish(pub, last_pub, message='final'); log('published final')
         except Exception as ex: log(f'publish failed: {ex}')

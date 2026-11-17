@@ -80,8 +80,7 @@ check('your daily rule: past 2 trades today an A+ trigger IS taken', gl.apply_ru
 check('outside the entry window (01:30 IST) the same trigger is shown but not taken', any(x['status'].startswith('TRIGGERED (outside') for x in gl.scan_intraday(f5, f15, pd.Timestamp('2026-11-12 01:30', tz=IST), 8)[0]))
 
 # ---- 5. swing and positional, both ways
-import playbook_fixture as pf, swing as _swing
-_swing.CFG['lux_ob'] = False             # the gold tests replay your written playbook example (last down candle = order block)
+import playbook_fixture as pf
 d, h, _ = pf.frames(vol=5_000_000)
 it_l, _s = gl.scan_swing(d, h, 8)
 check('live swing long: the playbook example is found as an A+ gold long setup', any(x['direction'] == 'long' and x['grade'] == 'A+' and x['sl'] < x['entry'] for x in it_l), str([(x['direction'], x['status'], x['score']) for x in it_l]))
@@ -110,17 +109,4 @@ full = (dt.time(0, 0), dt.time(23, 59, 59)); nowi = dt.datetime(2026, 11, 11, 23
 check('gold watchdog: market open and no gold loop running -> start one (any hour, not only NSE hours)', watchdog.decide(nowi, [], None, True, full, 'gold-loop')[0] == 'start')
 check('gold watchdog: weekend -> nothing to do', watchdog.decide(nowi, [], None, False, full, 'gold-loop')[0] == 'skip' and not watchdog.gold_market_open(dt.datetime(2026, 11, 14, 12, 0, tzinfo=dt.timezone.utc)))
 check('market-loop watchdog is unchanged: 23:00 IST is outside its hours', watchdog.decide(nowi, [], None, True)[0] == 'skip')
-# ---- 7. a quiet page says why it is quiet, and how fresh the candles are
-w = doc['styles']['intraday'].get('why') or {}
-check('every run writes one plain sentence per side for each style it scanned (long and short)', set(w) == {'long', 'short'} and all(isinstance(v, str) and len(v) > 8 for v in w.values()), str(w))
-check('why_of: no structure / far from the zone / low volume / score too low / waiting in the zone are all told apart',
-      'No 5m structure' in gl.why_of(None, 8) and 'not at the zone' in gl.why_of(dict(state='FAR'), 8) and 'no CHoCH' in gl.why_of(dict(state='NO_BIAS'), 8)
-      and '1.2x' in gl.why_of(dict(zone_bot=1, status='WATCH (trigger, low volume)', rvol=1.2, score=9), 8) and 'score 7/10' in gl.why_of(dict(zone_bot=1, status='WATCH (in zone)', score=7), 8)
-      and 'waiting for a close back over' in gl.why_of(dict(zone_bot=1, status='WATCH (in zone)', score=8), 8))
-fd = doc.get('feed') or {}
-check('feed freshness: the last 5-minute candle close and its lag are published (about 0.7 min after the close here)', fd.get('last_5m') and 0 <= fd['lag_min'] < 2 and fd['bars_5m'] > 50, str(fd))
-d4 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now + pd.Timedelta(minutes=30), stand_in(f5, f15))
-check('a feed that stops updating shows as lag (30+ minutes behind) instead of looking fine', d4['feed']['lag_min'] > 25, str(d4['feed']))
-d5 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now, lambda syms, period, interval: ({}, []))
-check('no candles from the feed at all: the page is told so (not a blank "no setup")', 'no 5-minute gold candles' in (d5['styles']['intraday']['why'] or {}).get('long', ''), str(d5['styles']['intraday']))
 os.environ.pop('NTFY_TOPIC'); print('ALL PASSED' if not fails else f'{len(fails)} FAILED'); raise SystemExit(1 if fails else 0)

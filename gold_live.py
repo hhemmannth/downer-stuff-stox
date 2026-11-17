@@ -43,19 +43,6 @@ def entry_window(now, session=None):
 def _lv(x):
     return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), 2)
 
-WHY_STATE = {'FAR': 'Structure found, but price is not at the zone yet', 'STALE': 'The structure is too old', 'WIDE': 'The zone is too wide for a sensible stop', 'BROKEN': 'Price closed through the zone: setup cancelled',
-             'NO_BIAS': 'The 15m has no CHoCH in this direction yet', 'EXTENDED': 'Price already ran more than 1 ATR from the zone: no chasing', 'GONE': 'No data for this run'}
-
-def why_of(r, min_score, tf_name='5m'):
-    """One plain sentence on where a side stands this run, so a quiet page says WHY it is quiet (the score is out of 10, A+ needs min_score)."""
-    if r is None: return f'No {tf_name} structure yet (needs a sweep, CHoCH and BOS)'
-    if 'zone_bot' not in r: return WHY_STATE.get(r.get('state'), 'No structure at the moment')
-    st, sc_ = str(r.get('status') or ''), int(r.get('score') or 0)
-    if 'low volume' in st: rv = r.get('rvol'); return 'Trigger seen, but volume is ' + (f'{rv:.1f}x' if isinstance(rv, (int, float)) and not math.isnan(rv) else 'too low') + ' and your rule needs 1.5x' + (f' (score {sc_}/10)' if sc_ < min_score else '')
-    if sc_ < min_score: return f'In play, but score {sc_}/10 and A+ needs {min_score}+'
-    if st.startswith('TRIGGER'): return 'Triggered'
-    return 'In the zone: waiting for a close back over the 9 EMA on 1.5x volume' if 'in zone' in st else 'Approaching the zone: set an alert'
-
 def item(style, side, r, entry, sl, t1, t2, t3, status, extra=None):
     """One setup in the shape the page, the tracker and the alerts read."""
     risk = abs(entry - sl)
@@ -67,17 +54,15 @@ def item(style, side, r, entry, sl, t1, t2, t3, status, extra=None):
     return it
 
 # ------------------------------------------------------------------ the three styles
-def scan_intraday(f5, f15, now, min_score, why=None):
-    """f5, f15: 5m and 15m gold candles (closed bars only). Returns (items, states). `why` (a dict, optional) gets one sentence per side."""
-    S = tf.gold_session(); a5, a15 = tf._aware(f5, S['tz']), tf._aware(f15, S['tz']); items, states = [], {}; why = {} if why is None else why
-    if len(a5) < sc.CFG_I['min_bars'] or len(a15) < 3:
-        for sd in ('long', 'short'): why[sd] = f'Not enough candles from the feed yet ({len(a5)} of {sc.CFG_I["min_bars"]} 5-minute, {len(a15)} 15-minute)'
-        return items, states
+def scan_intraday(f5, f15, now, min_score):
+    """f5, f15: 5m and 15m gold candles (closed bars only). Returns (items, states)."""
+    S = tf.gold_session(); a5, a15 = tf._aware(f5, S['tz']), tf._aware(f15, S['tz']); items, states = [], {}
+    if len(a5) < sc.CFG_I['min_bars'] or len(a15) < 3: return items, states
     w5, w15 = a5.tail(375), a15.tail(250); lv = sc.prev_day_levels(w5)
     for side in ('long', 'short'):
         try: r = sc.scan_intraday(w5, w15, side, sc.CFG_I, lv, section='intraday')
-        except Exception as ex: print(f'  intraday {side}: {ex}', file=sys.stderr); why[side] = 'Scan error: ' + str(ex)[:80]; continue
-        states[(LABEL, side)] = sc.state_of(r, min_score); why[side] = why_of(r, min_score, '5m')
+        except Exception as ex: print(f'  intraday {side}: {ex}', file=sys.stderr); continue
+        states[(LABEL, side)] = sc.state_of(r, min_score)
         if not r or 'zone_bot' not in r or 'entry' not in r or r['score'] < min_score: continue
         long = side == 'long'; entry, sl = sc.r05(r['entry']), sc.r05(r['sl']); risk = (entry - sl) if long else (sl - entry)
         if risk <= 0: continue
@@ -87,18 +72,10 @@ def scan_intraday(f5, f15, now, min_score, why=None):
         items.append(item('intraday', side, r, entry, sl, t1, t2, t3, status, dict(tf_structure='5m', ticks=[t for t in r['ticks'].split(', ') if t and t != '-'])))
     return items, states
 
-def swing_why(rr, min_score):
-    """Where the daily-structure + 1H playbook stands on gold for one side."""
-    if not rr or not rr.get('stage'): return 'No daily structure (sweep, CHoCH, BOS, zone) at the moment'
-    stg = int(rr['stage']); name = {1: 'CHoCH seen, waiting for the BOS', 2: 'BOS done, waiting for the pullback into the zone', 3: 'In the zone, waiting for the 1H confirmation', 4: '1H confirmed', 5: 'Entry'}.get(stg, '')
-    sc_ = int(rr.get('score') or 0)
-    return f'{name} (score {sc_}/10, A+ needs {min_score}+)' if sc_ < min_score or stg < 4 else name
-
-def _swing_one(daily, h1, side, K, min_score, why=None):
+def _swing_one(daily, h1, side, K, min_score):
     import swing
     d, h = (daily, h1) if side == 'long' else (sc.invert(daily, K), sc.invert(h1, K))
     rr = swing.analyse(d.tail(250), h)
-    if why is not None: why[side] = swing_why(rr, min_score)
     if not rr or rr.get('stage', 0) < 2 or rr['score'] < min_score or rr.get('sl') is None: return None, (None if not rr else rr.get('stage'))
     entry = float(h.Close.iloc[-1]); sl = float(rr['sl']); risk = entry - sl
     if risk <= 0: return None, rr.get('stage')
@@ -113,32 +90,28 @@ def _swing_one(daily, h1, side, K, min_score, why=None):
     return item('swing', side, r, m(entry), m(sl), m(entry + risk), m(entry + 2 * risk), m(entry + 3 * risk), status,
                 dict(tf_structure='1D', held=held, weekly=('down' if side == 'short' else 'up') if rr['weekly'].get('up') else 'against', room_r=_lv(rr.get('room_r')))), rr.get('stage')
 
-def scan_swing(daily, h1, min_score, why=None):
+def scan_swing(daily, h1, min_score):
     """daily: gold daily candles (finished sessions), h1: 1H candles (closed). Long and short."""
-    items, states = [], {}; why = {} if why is None else why
-    if daily is None or h1 is None or len(daily) < sc.CFG['min_bars'] + 5 or len(h1) < 20:
-        for sd in ('long', 'short'): why[sd] = 'Not enough daily or hourly candles from the feed yet'
-        return items, states
+    items, states = [], {}
+    if daily is None or h1 is None or len(daily) < sc.CFG['min_bars'] + 5 or len(h1) < 20: return items, states
     h1 = h1[h1.index >= h1.index[-1] - pd.Timedelta(days=92)]; K = tf.mirror_k(daily, h1)
     for side in ('long', 'short'):
-        try: it, stage = _swing_one(daily, h1, side, K, min_score, why)
-        except Exception as ex: print(f'  swing {side}: {ex}', file=sys.stderr); why[side] = 'Scan error: ' + str(ex)[:80]; continue
+        try: it, stage = _swing_one(daily, h1, side, K, min_score)
+        except Exception as ex: print(f'  swing {side}: {ex}', file=sys.stderr); continue
         states[(LABEL, side)] = None if it is None else 'IN_ZONE'
         if it: items.append(it)
     return items, states
 
-def scan_positional(daily, min_score, why=None):
+def scan_positional(daily, min_score):
     """Weekly structure, daily trigger (the positional backtest's engine), long and short."""
-    items, states = [], {}; cfg = tf.CFG_GP; why = {} if why is None else why
-    if daily is None or len(daily) < cfg['min_bars'] * 5 + 30:
-        for sd in ('long', 'short'): why[sd] = 'Not enough daily candles from the feed yet'
-        return items, states
+    items, states = [], {}; cfg = tf.CFG_GP
+    if daily is None or len(daily) < cfg['min_bars'] * 5 + 30: return items, states
     d = daily.dropna(subset=['Open', 'High', 'Low', 'Close']); K = tf.mirror_k(d)
     for side in ('long', 'short'):
         dd = d if side == 'long' else sc.invert(d, K); W = tf._weekly(dd)
         try: r = sc.detect(W.iloc[-cfg['lookback']:], dd.tail(240), cfg, None if side == 'long' else K, 'swing')
-        except Exception as ex: print(f'  positional {side}: {ex}', file=sys.stderr); why[side] = 'Scan error: ' + str(ex)[:80]; continue
-        states[(LABEL, side)] = sc.state_of(r, min_score); why[side] = why_of(r, min_score, 'weekly')
+        except Exception as ex: print(f'  positional {side}: {ex}', file=sys.stderr); continue
+        states[(LABEL, side)] = sc.state_of(r, min_score)
         if not r or 'zone_bot' not in r or 'entry' not in r or r['score'] < min_score: continue
         entry, sl = float(r['entry']), float(r['sl']); risk = entry - sl
         if risk <= 0: continue
@@ -216,14 +189,6 @@ def fetch_frames(styles, now, sym, fetch=None):
     if 'swing' in styles or 'positional' in styles: fr['daily'] = tf.gold_daily(sym, '5y', now, fetch)
     return fr
 
-def feed_info(fr, now):
-    """How fresh the candles are: when the last 5-minute candle CLOSED and how many minutes ago that was. A feed that runs 10+ minutes late shows every
-    trigger late (and a late trigger is often 'price ran away'), so the page shows it."""
-    f = fr.get('f5')
-    if f is None or not len(f): return dict(last_5m=None, lag_min=None, bars_5m=0)
-    close = pd.Timestamp(f.index[-1]) + pd.Timedelta(minutes=5)
-    return dict(last_5m=close.tz_convert(IST).isoformat(timespec='minutes'), lag_min=round((pd.Timestamp(now) - close).total_seconds() / 60, 1), bars_5m=int(len(f)))
-
 def run(out, state_dir, styles=STYLES, now=None, fetch=None):
     now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz=IST); now = now.tz_localize(IST) if now.tzinfo is None else now.tz_convert(IST)
     os.makedirs(out, exist_ok=True); rules = bt.rules_from_env(); ms = rules['min_score']; sym = tf.gold_symbol()
@@ -231,13 +196,10 @@ def run(out, state_dir, styles=STYLES, now=None, fetch=None):
     fr = fetch_frames(styles, now, sym, fetch); prev = sc.read_json(out, 'gold.json', {}) or {}; doc = dict(prev); doc['styles'] = dict(prev.get('styles') or {})
     is_open = market_open(now); tracked = 0
     for style in styles:
-        why = {}
         try:
-            if style == 'intraday':
-                if fr.get('f5') is not None and fr.get('f15') is not None: items, states = scan_intraday(fr.get('f5'), fr.get('f15'), now, ms, why)
-                else: items, states = [], {}; why.update(long='The feed returned no 5-minute gold candles this run', short='The feed returned no 5-minute gold candles this run')
-            elif style == 'swing': items, states = scan_swing(fr.get('daily'), fr.get('h1'), ms, why)
-            else: items, states = scan_positional(fr.get('daily'), ms, why)
+            if style == 'intraday': items, states = scan_intraday(fr.get('f5'), fr.get('f15'), now, ms) if fr.get('f5') is not None and fr.get('f15') is not None else ([], {})
+            elif style == 'swing': items, states = scan_swing(fr.get('daily'), fr.get('h1'), ms)
+            else: items, states = scan_positional(fr.get('daily'), ms)
         except Exception as ex: print(f'gold {style} failed: {ex}', file=sys.stderr); doc['styles'][style] = dict(error=str(ex)[:200], scanned_at=now.isoformat(timespec='seconds')); continue
         items = apply_rules(items, out, now, max_open, max_day)
         bars = {LABEL: fr.get('f5') if style == 'intraday' else fr.get('h1') if style == 'swing' and fr.get('h1') is not None else fr.get('daily')}
@@ -245,12 +207,12 @@ def run(out, state_dir, styles=STYLES, now=None, fetch=None):
             b = bars[LABEL].copy(); b.index = pd.DatetimeIndex(b.index).tz_localize(IST) + pd.Timedelta(hours=15, minutes=30); bars[LABEL] = b      # daily candles, followed at their close
         led = signals.load(ledger_path(out, style)); signals.update(led, SECTION[style], items, states, bars, now, is_open); signals.save(ledger_path(out, style), led, now)
         tracked += sum(1 for s in led['signals'] if s['status'] == 'ACTIVE')
-        doc['styles'][style] = dict(setups=items, scanned_at=now.isoformat(timespec='seconds'), why=why)
+        doc['styles'][style] = dict(setups=items, scanned_at=now.isoformat(timespec='seconds'))
     last = None
     for k in ('f5', 'h1', 'daily'):
         f = fr.get(k)
         if f is not None and len(f): last = float(f.Close.iloc[-1]); break
-    n_day, n_open = today_count(out, now); doc['feed'] = feed_info(fr, now)
+    n_day, n_open = today_count(out, now)
     doc.update(generated_at=now.isoformat(timespec='seconds'), source=sym, price=last if last is not None else prev.get('price'), market_open=is_open, session=session_name(now) if is_open else 'closed',
                entry_window=entry_window(now), trades_today=n_day, open_now=n_open, max_open=max_open, max_day=max_day, min_score=ms, sessions=os.environ.get('GOLD_SESSIONS', 'all') or 'all')
     sc.write_json(out, 'gold.json', doc)
