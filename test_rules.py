@@ -33,8 +33,7 @@ acct = bt.account_from_env(dict(APLUS_OVERFLOW='off'))
 check('repo variable APLUS_OVERFLOW=off makes it a strict 2 a day', acct['aplus_overflow'] is False and bt.account_from_env({})['aplus_overflow'] is True)
 
 # ---- 2. the swing replay skips below-A+ and pre-window setups by itself (not only in the report)
-import playbook_fixture as pf, swing as _swing
-_swing.CFG['lux_ob'] = False             # the replay tests use your written playbook example (last down candle = order block)
+import playbook_fixture as pf
 d, h, _ = pf.frames(vol=5_000_000)
 rows, t_, last = [], h.index[-1], float(h.Close.iloc[-1])
 for c in [1078 + 9 * i for i in range(1, 14)]:

@@ -843,9 +843,3 @@ body{background:radial-gradient(1200px 760px at 82% -14%,var(--lux-glow1),transp
   .kpi.has-3d .l{padding-right:28px;letter-spacing:.1em}
   .kpi-3d{width:26px;height:26px}
 }
-
-/* gold "why no trade now": long sentences in the value column */
-.gwhy{grid-template-columns:minmax(130px,auto) 1fr;align-items:baseline}
-.gwhy b{font-weight:500;text-align:left;font-size:13.5px;line-height:1.35}
-.gwhy span{white-space:nowrap}
-@media(max-width:600px){.gwhy{grid-template-columns:1fr;gap:2px 0}.gwhy span{margin-top:8px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;opacity:.7}}
