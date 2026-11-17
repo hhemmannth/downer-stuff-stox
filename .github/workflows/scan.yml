@@ -23,7 +23,6 @@ permissions:
 
 env:
   PYTHONWARNINGS: ignore              # keeps the log readable (yfinance + pandas 3 deprecation spam)
-  SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}       # order block rule: empty or on = the LuxAlgo rule your charts draw; set the variable to off for the older last-down-candle rule
 
 concurrency:
   group: scan
