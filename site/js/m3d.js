@@ -255,8 +255,8 @@
         ${m('portal', 'gs-portal', 'data-halo=".10"')}
         ${m('coin', 'gs-f f1', 'data-halo=".05"')}${m('cube', 'gs-f f2')}${m('gem', 'gs-f f3')}${m('helix', 'gs-f f4')}${m('candles', 'gs-f f5')}${m('ring', 'gs-f f6', 'data-fill=".72"')}${m('globe', 'gs-f f7')}${m('coin', 'gs-f f8', 'data-tone="gold" data-txt="Au"')}
         <div class="gs-av"><div class="gs-in">
-          <img class="gs-body" src="avatar.png?v=22" alt="" draggable="false">
-          <div class="gs-head"><img src="avatar.png?v=22" alt="" draggable="false"><i class="gl l"></i><i class="gl r"></i></div>
+          <img class="gs-body" src="avatar.png?v=21" alt="" draggable="false">
+          <div class="gs-head"><img src="avatar.png?v=21" alt="" draggable="false"><i class="gl l"></i><i class="gl r"></i></div>
         </div><div class="gs-shadow"></div></div>
         <div class="gs-say" id="gSay">${hello}</div>
         <div class="gs-cap"><small>Private trading desk</small><b>DownerStuff</b></div>
