@@ -6,6 +6,7 @@ src = open('test_scanner.py').read().split("sc.CFG_B.update(min_bars=20)")[0]; n
 sc, D, H, flip = ns['sc'], ns['D'], ns['H'], ns['flip']
 import market, newsfeed
 from playbook_fixture import frames as pb_frames
+import swing as _swing; _swing.CFG['lux_ob'] = False      # the pipeline tests run on your written playbook example (last down candle = order block)
 PBD, PBH, PBM = pb_frames(m15_after=20)                     # the playbook 15m sequence after the 1H confirmation (your rule)
 sc.CFG.update(min_turnover_cr=0, min_price=0, min_bars=30, rvol_n=10); sc.CFG_I.update(min_bars=30, rvol_n=10, max_zone_pct=6, max_zone_atr=5); sc.CFG_B.update(min_bars=20); market.MIN_BARS = 30
 tz = 'Asia/Kolkata'; n5 = len(D) + len(H); D15 = D[:32]

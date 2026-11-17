@@ -2,7 +2,8 @@
 split, the rule variants and the Monte Carlo are checked on known inputs. No network. Run: python test_backtest.py"""
 import datetime as dt, json, numpy as np, pandas as pd
 import backtest as bt, playbook_fixture as pf, strategy_scanner as sc
-import os
+import os, swing as _sw
+_sw.CFG['lux_ob'] = False         # these tests replay your written playbook example (last down candle = order block)
 os.environ['BACKTEST_FROM'] = 'all'; os.environ['MIN_SCORE'] = '4'      # these tests check the machinery on every grade and old dates;
                                                                           # the A+ gate and the financial-year window have their own tests (test_rules.py)
 fails = []

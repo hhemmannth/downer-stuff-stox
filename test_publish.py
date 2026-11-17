@@ -25,5 +25,16 @@ IST = loop.IST; T = lambda h, m, s=0: dt.datetime(2026, 10, 22, h, m, s, tzinfo=
 check('next tick: 10:03:10 -> 10:05:40, 10:05:20 -> 10:05:40, 10:05:50 -> 10:10:40', loop.next_tick(T(10, 3, 10)) == T(10, 5, 40) and loop.next_tick(T(10, 5, 20)) == T(10, 5, 40) and loop.next_tick(T(10, 5, 50)) == T(10, 10, 40))
 check('a loop started at 09:05 stops by 14:50 (job limit), one started at 14:55 stops at 15:40', loop.end_time(T(9, 5)) == T(14, 50) and loop.end_time(T(14, 55)) == T(15, 40))
 check('swing scan: due on the first tick after each 1H candle closes (:15 from 10:15 to 15:15) and again at 15:30 for the day\'s last candle', loop.swing_due(T(10, 15), None) and loop.swing_due(T(10, 20), None) and not loop.swing_due(T(9, 40), None) and not loop.swing_due(T(10, 10), None) and not loop.swing_due(T(10, 20), loop.swing_slot(T(10, 15))) and loop.swing_due(T(11, 15), loop.swing_slot(T(10, 20))) and loop.swing_due(T(15, 30), loop.swing_slot(T(15, 20))) and not loop.swing_due(T(15, 35), loop.swing_slot(T(15, 30))) and loop.swing_due(T(15, 20), loop.swing_slot(T(14, 50))))
+A = lambda h, m: T(h, m)
+check('swing catch-up: a scan older than 75 min in market hours is due at once (the 08:37 run was skipped); a fresh one is not',
+      loop.swing_catchup_due(T(9, 10), 17 * 60) and loop.swing_catchup_due(T(9, 10), None) and not loop.swing_catchup_due(T(10, 40), 40) and loop.swing_catchup_due(T(11, 50), 90))
+check('swing catch-up: never before 09:00 or after 15:30, and a failed try waits 40 minutes before the next',
+      not loop.swing_catchup_due(T(8, 45), 17 * 60) and not loop.swing_catchup_due(T(15, 35), 300) and not loop.swing_catchup_due(T(10, 0), 300, T(9, 45)) and loop.swing_catchup_due(T(10, 30), 300, T(9, 45)))
+d = tempfile.mkdtemp(); open(os.path.join(d, 'swing.json'), 'w').write('{"generated_at": "2026-10-22T02:12:04+05:30"}')
+check('swing_age_min reads the published scan time (7h 58 min before 10:10) and is None when there is no file', abs(loop.swing_age_min(d, T(10, 10)) - 478) < 1 and loop.swing_age_min(tempfile.mkdtemp(), T(10, 10)) is None)
+calls = []; import watchdog; real_gh = watchdog.gh; watchdog.gh = lambda m, p, tok, body=None: calls.append((m, p, body)) or {}
+os.environ.update(GITHUB_REPOSITORY='a/b', GITHUB_TOKEN='x'); ok = loop.relay(lambda s: None); watchdog.gh = real_gh
+check('relay: queues the next market-loop run through the Actions API', ok and calls and calls[0][0] == 'POST' and calls[0][1].endswith('/workflows/market-loop.yml/dispatches'), str(calls))
+os.environ.pop('GITHUB_REPOSITORY'); check('relay: without a repo/token it does nothing and does not crash', loop.relay(lambda s: None) is False)
 check('weekends and holidays are not trading days', not loop.trading_day(dt.date(2026, 10, 24)) and not loop.trading_day(dt.date(2026, 11, 10)) and loop.trading_day(dt.date(2026, 10, 22)))
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: {fails}'); sys.exit(1 if fails else 0)

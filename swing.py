@@ -15,17 +15,17 @@ Every setup gets a stage, so you see where it is in the playbook:
 Plan: stop below the daily OB with a buffer, T1 = 1R (partial), T2 = 2R, T3 = 3R, trail by daily structure.
 Scorecard: Structure 0-2, Zone 0-2, Confirmation 0-3 (1H), Context 0-3 (key level, fib 0.618, MTF EMA; futures OI you check).
 """
-import math
+import math, os
 import numpy as np, pandas as pd
 
 H = None                          # helper module (strategy_scanner), bound at import time with bind()
 def bind(mod):
     global H; H = mod
 
-CFG = dict(pivot=3, zz=0.8, atr_n=14, lookback=150, disp_body_atr=1.0, fvg_min_atr=0.2, stack_gap_atr=0.5, sl_buffer_atr=0.25,
+CFG = dict(lux_ob=os.environ.get('SWING_LUX_OB', '').strip().lower() not in ('0', 'off', 'false', 'no'), pivot=3, zz=0.8, atr_n=14, lookback=150, disp_body_atr=1.0, fvg_min_atr=0.2, stack_gap_atr=0.5, sl_buffer_atr=0.25,
            max_bos_age=60, max_zone_atr=3.5, max_zone_pct=10.0, alert_atr=2.0, choch_age=15,
            rvol_min=1.5, bos_rvol_good=1.5, confirm_max_age=21, entry_fresh=8, entry_chase_atr=0.5, ran_away_atr=1.5, require_volume=True,
-           min_room_r=2.0, wide_stop_pct=8.0, wide_stop_atr=2.5, results_hold_days=14)
+           min_room_r=2.0, wide_stop_pct=8.0, wide_stop_atr=2.5, results_hold_days=14, pullback_gap=6, reclaim_bars=21, touch_max_age=21)
 STAGES = {1: 'DEVELOPING (CHoCH, wait for BOS)', 2: 'SET ALERT (wait for pullback)', 3: 'IN ZONE (wait for 1H)', 4: '1H CONFIRMED (wait for 15m entry)', 5: 'TRIGGERED'}
 STAGE_SHORT = {1: 'CHoCH', 2: 'BOS', 3: 'In zone', 4: '1H confirmed', 5: 'Entry'}
 
@@ -74,29 +74,39 @@ def resistance_above(df, level, lookback=250, n=3):
 
 # ------------------------------------------------------------------ 1H confirmation
 def confirm_1h(h1, s, buf, since):
-    """Pullback into the daily zone on the 1H, a rejection candle, then a 1H close back above the 9 EMA on >= 1.5x
-    volume (compared with the same hour on earlier days). Returns the parts and the bar where it confirmed."""
-    res = dict(touched=False, rejection=0, reclaim=0, rvol_ok=0, rvol=float('nan'), pullback_low=float('nan'), t_touch=None, t_confirm=None, broken=False, confirm_age=None)
+    """Your 1H step, in your order, on the LATEST pullback into the daily zone: price trades into the zone, a rejection candle, then a 1H close back above the 9 EMA
+    on >= 1.5x volume (compared with the same hour on earlier days). Returns the parts and the bar where it confirmed.
+    The pullback is the latest run of 1H candles in the zone (gaps up to CFG['pullback_gap'] candles are one pullback). Before, the FIRST touch since the BOS was used
+    and ANY later cross of the 1H 9 EMA counted as the reclaim: a stock that bounced off its zone two weeks ago and then crossed its 9 EMA again on 0.3x volume was
+    shown as 'A+ 1H RECLAIM' (14 of 43 live A+/A setups at stage 3 or 4). Now the reclaim must follow the pullback low, within CFG['reclaim_bars'] candles."""
+    res = dict(touched=False, rejection=0, reclaim=0, rvol_ok=0, rvol=float('nan'), pullback_low=float('nan'), t_touch=None, t_confirm=None, broken=False, confirm_age=None, touch_age=None)
     if h1 is None or len(h1) < 10: return res
     h1 = h1[h1.index > since] if since is not None else h1
     if len(h1) < 2: return res
-    full = h1; e = H.ema(full.Close, 9).values; o, hi, lo, c, v = (full[k].values for k in ('Open', 'High', 'Low', 'Close', 'Volume'))
-    zb, zt = s['zone_bot'], s['zone_top']; touch = [i for i in range(len(full)) if lo[i] <= zt and lo[i] >= zb - 2 * buf]
+    full = h1; e = H.ema(full.Close, 9).values; o, hi, lo, c, v = (full[k].values for k in ('Open', 'High', 'Low', 'Close', 'Volume')); n = len(full)
+    zb, zt = s['zone_bot'], s['zone_top']; touch = [i for i in range(n) if lo[i] <= zt and lo[i] >= zb - 2 * buf]
     if not touch: return res
-    t0 = touch[0]; res.update(touched=True, t_touch=str(full.index[t0])[:16], pullback_low=float(lo[t0:].min()))
-    if np.any(c[t0:] < zb - buf): res['broken'] = True; return res
-    for i in touch:
+    if np.any(c[touch[0]:] < zb - buf): res.update(touched=True, t_touch=str(full.index[touch[0]])[:16], broken=True); return res           # the zone failed on the 1H at any time since the first touch
+    ep = [touch[-1]]
+    for i in reversed(touch[:-1]):
+        if ep[0] - i <= CFG['pullback_gap']: ep.insert(0, i)
+        else: break
+    t0, tl = ep[0], ep[-1]; ip = t0 + int(np.argmin(lo[t0:tl + 1]))
+    res.update(touched=True, t_touch=str(full.index[t0])[:16], pullback_low=float(lo[ip]), touch_age=n - 1 - tl)
+    for i in ep:
         rg = hi[i] - lo[i]; body = abs(c[i] - o[i]) + 1e-9; lw = min(o[i], c[i]) - lo[i]
         if rg > 0 and c[i] >= lo[i] + 0.6 * rg and lw >= 0.5 * body: res['rejection'] = 1
-    for t in range(len(full) - 1, max(t0, 1) - 1, -1):
-        if c[t] > e[t] and c[t - 1] <= e[t - 1]:
-            rv = _rvol(full.index, v, t, slot=True); res.update(reclaim=1, rvol=rv, rvol_ok=int(not math.isnan(rv) and rv >= CFG['rvol_min']), t_confirm=str(full.index[t])[:16], confirm_age=len(full) - 1 - t, i_confirm=t)
-            if not res['rvol_ok'] and CFG.get('require_volume', True):
-                for u in range(t + 1, len(full)):                  # your "controlled continuation above the 9 EMA": a later 1H close still above
-                    if c[u] <= e[u]: break                         # the EMA, on 1.5x volume, is the confirmation (ends if the EMA is lost)
-                    ru = _rvol(full.index, v, u, slot=True)
-                    if not math.isnan(ru) and ru >= CFG['rvol_min']:
-                        res.update(rvol=ru, rvol_ok=1, t_confirm=str(full.index[u])[:16], confirm_age=len(full) - 1 - u, i_confirm=u, continuation=True); break
+    crosses = [t for t in range(max(ip, 1), min(n, ip + CFG['reclaim_bars'] + 1)) if c[t] > e[t] and c[t - 1] <= e[t - 1]]
+    for t in crosses:                                          # in time order: the first cross that has the volume is the confirmation
+        rv = _rvol(full.index, v, t, slot=True); ok = not math.isnan(rv) and rv >= CFG['rvol_min']; cont = False; ic = t
+        if not ok and CFG.get('require_volume', True):
+            for u in range(t + 1, n):                          # your "controlled continuation above the 9 EMA": a later 1H close still above
+                if c[u] <= e[u]: break                         # the EMA, on 1.5x volume, is the confirmation (ends if the EMA is lost)
+                ru = _rvol(full.index, v, u, slot=True)
+                if not math.isnan(ru) and ru >= CFG['rvol_min']: rv, ok, cont, ic = ru, True, True, u; break
+        if ok or t == crosses[-1]:                             # confirmed, or the last cross there is (shown as a weak reclaim)
+            res.update(reclaim=1, rvol=rv, rvol_ok=int(ok), t_confirm=str(full.index[ic])[:16], confirm_age=n - 1 - ic, i_confirm=ic)
+            if cont: res['continuation'] = True
             break
     return res
 
@@ -110,7 +120,7 @@ def entry_15m(m15, s, since, daily_atr, not_before=None):
     start = max(0, len(m15) - len(w) - 12)                 # a little context before the pullback for the swing points
     f = m15.iloc[start:]
     if len(f) < 15: out['note'] = 'Not enough 15m candles since the pullback yet.'; return out
-    cfg = dict(H.CFG_I, pivot=2, zz=0.8, lookback=len(f), min_bars=15, disp_body_atr=0.8)
+    cfg = dict(H.CFG_I, pivot=2, zz=0.8, lookback=len(f), min_bars=15, disp_body_atr=0.8, lux_ob=CFG.get('lux_ob'))
     cands = [z for z in H.find_structures(f, cfg) if z['zone_top'] >= s['zone_bot'] - 0.5 * daily_atr and z['zone_bot'] <= s['zone_top'] + 0.5 * daily_atr]
     if not cands: out['note'] = 'No 15m CHoCH + BOS inside the daily zone yet.'; return out
     z = cands[0]; o, hi, lo, c, v = (f[k].values for k in ('Open', 'High', 'Low', 'Close', 'Volume')); e = H.ema(f.Close, 9).values; b = z['bos_i']
@@ -144,7 +154,7 @@ def analyse(daily, h1=None, m15=None, weekly=None, levels=(), cfg=None):
     if len(d) < base['min_bars']: return None
     N = len(d); a = float(H.atr(d, base['atr_n']).iloc[-1]); px = float(d.Close.iloc[-1]); buf = cfg['sl_buffer_atr'] * a
     weekly = weekly or weekly_location(d)
-    scfg = dict(base, lookback=cfg['lookback'], zz=cfg['zz']); cands = H.find_structures(d, scfg)
+    scfg = dict(base, lookback=cfg['lookback'], zz=cfg['zz'], lux_ob=cfg.get('lux_ob')); cands = H.find_structures(d, scfg)
     chosen = None
     for s in cands:
         st = H.zone_state(d, s, dict(base, max_bos_age=cfg['max_bos_age'], max_zone_atr=cfg['max_zone_atr'], max_zone_pct=cfg['max_zone_pct']), px)
@@ -166,7 +176,7 @@ def analyse(daily, h1=None, m15=None, weekly=None, levels=(), cfg=None):
         cf = confirm_1h(h1, s, buf, since.tz_localize(h1.index.tz) if h1 is not None and h1.index.tz is not None and since.tzinfo is None else since) if h1 is not None else None
         ctx['cf'] = cf
         if cf and cf['broken']: return dict(state='BROKEN', score=0, grade='skip')
-        if st == 'IN_ZONE' or (cf and cf['touched']): ctx['stage'] = 3
+        if st == 'IN_ZONE' or (cf and cf['touched'] and (cf.get('touch_age') or 0) <= cfg['touch_max_age']): ctx['stage'] = 3          # a pullback from weeks ago is not 'in zone'
         vol_ok = cf and (cf['rvol_ok'] if cfg.get('require_volume', True) else (cf['rejection'] or cf['rvol_ok']))      # your rule: strong relative volume (1.5x) is REQUIRED
         if cf and cf['reclaim'] and vol_ok and (cf['confirm_age'] or 0) <= cfg['confirm_max_age']: ctx['stage'] = 4
         if ctx['stage'] >= 4 and m15 is not None:
@@ -204,7 +214,8 @@ def _result(d, ctx):
         pull = cf.get('pullback_low', float('nan'))
         sl = min(ob, zb, pull if not _nan(pull) else ob) - cfg['sl_buffer_atr'] * a
         if stage == 5: entry = m['entry']
-        elif stage == 4 and m.get('fvg') and m['fvg'].get('high'): entry = m['fvg']['high']
+        elif stage == 4 and m.get('found') and m.get('fvg') and m['fvg'].get('high'): entry = m['fvg']['high']          # a FAILED 15m zone (found False) keeps its old FVG in the result: planning from it put the entry above price and
+                                                                                                              # made room-to-resistance look tiny (EICHERMOT 0.7R instead of 2.8R), so the setup was held back for nothing
         else: entry = zt - .25 * (zt - zb)
         risk = entry - sl
         if risk > 0:
