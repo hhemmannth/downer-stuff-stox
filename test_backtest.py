@@ -3,6 +3,7 @@ split, the rule variants and the Monte Carlo are checked on known inputs. No net
 import datetime as dt, json, numpy as np, pandas as pd
 import backtest as bt, playbook_fixture as pf, strategy_scanner as sc
 import os, swing as _sw
+_sw.CFG.update(min_stop_pct=0, min_zone_q=0, min_hold_rvol=0, hold_regimes=())      # the 18 Nov 2026 hold-backs have their own tests (test_holdbacks.py); this file tests the engine's mechanics
 _sw.CFG['lux_ob'] = False         # these tests replay your written playbook example (last down candle = order block)
 os.environ['BACKTEST_FROM'] = 'all'; os.environ['MIN_SCORE'] = '4'      # these tests check the machinery on every grade and old dates;
                                                                           # the A+ gate and the financial-year window have their own tests (test_rules.py)
@@ -99,13 +100,18 @@ day = [Tr('2026-01-05 10:15', '2026-01-20 11:15', 10, 1.0, 'A'), Tr('2026-01-05 
 d = bt.simulate_account(day, 8, True, dict(A0, aplus_overflow=False))
 check('account: a strict 2 a day: the first two to trigger are taken, the third is skipped (no peeking at later signals)', d['n'] == 2 and d['skipped']['day_cap'] == 1)
 big = dict(A0, open_cap=5.0)                                                 # room for three open trades, so only the daily rule decides
-d3 = bt.simulate_account(day, 8, True, big)
-check('account: 2 a day, MORE ONLY IF A+: a third A+ trade the same day is taken and counted as an A+ extra', d3['n'] == 3 and d3['skipped']['day_cap'] == 0 and d3['aplus_extra'] == 1, str(d3['skipped']))
+d3 = bt.simulate_account(day, 8, True, dict(big, aplus_overflow=True))
+check('account: the OLD rule (APLUS_OVERFLOW=on), 2 a day and MORE ONLY IF A+: a third A+ trade the same day is taken and counted as an A+ extra', d3['n'] == 3 and d3['skipped']['day_cap'] == 0 and d3['aplus_extra'] == 1, str(d3['skipped']))
 dayA = [Tr('2026-01-05 10:15', '2026-01-20 11:15', 10, 1.0, 'A'), Tr('2026-01-05 11:15', '2026-01-20 11:15', 9, 1.0, 'B'), Tr('2026-01-05 14:15', '2026-01-20 11:15', 7, 1.0, 'C')]
 d4 = bt.simulate_account(dayA, 6, True, big)
 check('account: past the base limit a trade below A+ (score 7) is blocked even when risk allows it', d4['n'] == 2 and d4['skipped']['day_cap'] == 1)
-check('account: with the default account rules, the open-risk ceiling still stops a third 0.75% trade (2.25% > 2%)', bt.simulate_account(day, 8, True, A0)['skipped']['open_cap'] == 1)
-check('account: the trade log lists what was taken', len(bt.simulate_account(day, 8, True, big)['log']) == 3)
+check('account: the default is now a STRICT 2 a day: even a third A+ trade is skipped', bt.simulate_account(day, 8, True, big)['n'] == 2 and bt.simulate_account(day, 8, True, big)['skipped']['day_cap'] == 1 and bt.ACCOUNT['aplus_overflow'] is False)
+check('account: with the old rule on, the open-risk ceiling still stops a third 0.75% trade (2.25% > 2%)', bt.simulate_account(day, 8, True, dict(A0, aplus_overflow=True))['skipped']['open_cap'] == 1)
+check('account: the trade log lists what was taken', len(bt.simulate_account(day, 8, True, dict(big, aplus_overflow=True))['log']) == 3 and len(bt.simulate_account(day, 8, True, big)['log']) == 2)
+tie = [Tr('2026-01-05 10:15', '2026-01-20 11:15', 8, 1.0, 'LOW'), Tr('2026-01-05 10:15', '2026-01-20 11:15', 10, 1.0, 'TOP'), Tr('2026-01-05 10:15', '2026-01-20 11:15', 9, 1.0, 'MID')]
+check('account: three setups at the same entry time: the two best scores are taken, as the live scan ranks them', sorted(o['sym'] for o in bt.simulate_account(tie, 8, True, big)['log']) == ['MID', 'TOP'], str(bt.simulate_account(tie, 8, True, big)['log']))
+gd = [Tr('2026-01-05 23:30', '2026-01-20 11:15', 10, 1.0, 'G1'), Tr('2026-01-06 01:10', '2026-01-20 11:15', 10, 1.0, 'G2'), Tr('2026-01-06 02:00', '2026-01-20 11:15', 10, 1.0, 'G3')]
+check('gold: the trading day starts at 03:30 IST, so 23:30, 01:10 and 02:00 are ONE day (third skipped); on the NSE clock they would be two days', bt.simulate_account(gd, 8, True, dict(big, day_shift_min=210))['n'] == 2 and bt.simulate_account(gd, 8, True, big)['n'] == 3)
 check('account: with no limits all three are taken', bt.simulate_account(day, 8, False, A0)['n'] == 3)
 cap = [Tr(f'2026-01-0{i} 14:15', '2026-01-30 11:15', 10, 1.0, f'S{i}') for i in (5, 6, 7)]
 c = bt.simulate_account(cap, 8, True, A0)

@@ -7,6 +7,7 @@ import publish
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 CLOSE = dt.time(15, 40)
+LIVE_TIMEOUT, STEP_TIMEOUT = 240, 90      # seconds: a live scan normally takes about 45 s; a stuck download must never freeze the loop (it stops the heartbeat until the watchdog restarts the job)
 
 def now_ist(): return dt.datetime.now(IST)
 
@@ -121,12 +122,12 @@ def main(argv=None):
         elif swing is None and not a.once and swing_catchup_due(tick, swing_age_min(data, tick), catchup_at):
             age = swing_age_min(data, tick); catchup_at = tick
             swing = subprocess.Popen([py, 'strategy_scanner.py', '--mode', 'swing', '--out', data, '--state-dir', '.cache']); log(f"swing catch-up scan started in the background (the published one is {'missing' if age is None else str(int(age)) + ' min old'})")
-        t0 = time.time(); rc = run([py, 'strategy_scanner.py', '--mode', 'live', '--out', data, '--state-dir', '.cache'], log)
+        t0 = time.time(); rc = run([py, 'strategy_scanner.py', '--mode', 'live', '--out', data, '--state-dir', '.cache'], log, timeout=LIVE_TIMEOUT)
         if swing is not None and swing.poll() is not None: log(f'swing scan finished ({swing.returncode})'); swing = None
         if swing is None and swing_fast_due(tick):                                                      # the 15m entry check, before the alerts go out in this same tick
             tf0 = time.time(); frc = run([py, 'strategy_scanner.py', '--mode', 'swing-fast', '--out', data, '--state-dir', '.cache'], log, timeout=170); hb.update(fast_last=tick.isoformat(timespec='seconds'), fast_rc=frc, fast_s=round(time.time() - tf0, 1))
-        run([py, 'notify.py', '--dir', data, '--state', state], log)
-        run([py, 'bot.py', '--dir', data, '--state', os.path.join(pub, 'state', 'bot.json')], log)       # answer Telegram commands (item 18)
+        run([py, 'notify.py', '--dir', data, '--state', state], log, timeout=STEP_TIMEOUT)
+        run([py, 'bot.py', '--dir', data, '--state', os.path.join(pub, 'state', 'bot.json')], log, timeout=STEP_TIMEOUT)       # answer Telegram commands (item 18)
         hb.update(ticks=hb['ticks'] + 1, last_tick=tick.isoformat(timespec='seconds'), last_scan_s=round(time.time() - t0, 1), last_rc=rc, swing_running=swing is not None)
         hb['bad_ticks'] = 0 if rc == 0 else hb.get('bad_ticks', 0) + 1
         heartbeat(pub, **hb, next_tick=next_tick(now_ist() + dt.timedelta(seconds=1), a.every, a.offset).isoformat(timespec='seconds'))
@@ -136,12 +137,15 @@ def main(argv=None):
             except Exception as ex: hb['publish'] = f'failed: {str(ex)[:120]}'; log(f'publish failed: {ex}')
             hb['bad_publish'] = hb.get('bad_publish', 0) + 1 if str(hb['publish']).startswith('failed') else 0
         watch_loop(pub, hb)
+        if not a.no_publish and not a.once:
+            try: import watchdog; watchdog.guard('gold', now_ist(), data, log); hb['guard'] = watchdog.GUARD_LOG.get('gold')     # keep the gold loop alive too (each loop watches the other)
+            except Exception as ex: log(f'gold guard failed: {ex}')
         if a.once: break
     if swing is not None:
         try: swing.wait(timeout=600)
         except Exception: swing.kill()
-        run([py, 'notify.py', '--dir', data, '--state', state], log)
-        run([py, 'bot.py', '--dir', data, '--state', os.path.join(pub, 'state', 'bot.json')], log)       # answer Telegram commands (item 18)
+        run([py, 'notify.py', '--dir', data, '--state', state], log, timeout=STEP_TIMEOUT)
+        run([py, 'bot.py', '--dir', data, '--state', os.path.join(pub, 'state', 'bot.json')], log, timeout=STEP_TIMEOUT)       # answer Telegram commands (item 18)
     hb.update(state='finished', swing_running=False); heartbeat(pub, **hb, next_tick=None)
     if not a.once and not a.no_publish and trading_day(now_ist().date()) and now_ist() < dt.datetime.combine(now_ist().date(), CLOSE, tzinfo=IST) - dt.timedelta(minutes=10): relay(log)
     if not a.no_publish:

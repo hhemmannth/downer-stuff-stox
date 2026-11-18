@@ -1,4 +1,5 @@
 """Swing engine against your swing playbook's own example. Run: python test_swing.py"""
+import os; os.environ['PLAYBOOK_V2'] = 'off'      # this file tests the PREVIOUS rules (1.5x volume, 15m entry, 5m structure), still available with PLAYBOOK_V2=off; the updated strategy (the default) is tested in test_playbook_v2.py
 import sys
 import strategy_scanner as sc, swing
 from playbook_fixture import frames
@@ -7,6 +8,7 @@ def check(name, cond, info=''):
     print(('PASS ' if cond else 'FAIL ') + name + (f'   {info}' if info else ''))
     if not cond: fails.append(name)
 sc.CFG.update(min_turnover_cr=0, min_price=0)
+swing.CFG.update(min_stop_pct=0, min_zone_q=0, min_hold_rvol=0, hold_regimes=())      # the 18 Nov 2026 hold-backs have their own tests (test_holdbacks.py); this file tests the engine's mechanics
 swing.CFG['lux_ob'] = False        # the written playbook example draws the order block as the last down candle; the LuxAlgo rule has its own tests at the end
 d, h, m = frames()
 wk = swing.weekly_location(d)
@@ -120,5 +122,28 @@ check('the old rule is still there as one switch (CFG lux_ob False gives the 335
 _d15, _h15, _m15 = frames(); swing.CFG['lux_ob'] = True
 _e = swing.entry_15m(_m15, dict(zone_bot=1041.0, zone_top=1076.0), None, 20.0)
 check('15m entry check also runs on the LuxAlgo rule: the 15m CHoCH 1,061 + BOS 1,065 + FVG 1,065-1,069 are still found (no order block drawn there, the gap is the zone)', _e['found'] and _e['fvg']['low'] == 1065 and _e['fvg']['high'] == 1069 and _e['ob']['low'] is None, str((_e['found'], _e['fvg'], _e['ob'], _e['note'])))
+
+
+# ---- your updated rules (17 Nov 2026): 1H volume above its own 20-bar average, and the 1H reclaim is the entry (no 15m step). Opt-in: PLAYBOOK_V2.
+_old = {k: swing.CFG[k] for k in ('rvol_min', 'slot_vol', 'entry_on_1h')}
+check('updated rules are OFF by default (the live scan keeps the 1.5x rule and the 15m step)', not swing.V2 and swing.CFG['entry_on_1h'] is False and swing.CFG['slot_vol'] is True and swing.CFG['rvol_min'] == 1.5)
+try:
+    swing.CFG.update(rvol_min=1.0, slot_vol=False, entry_on_1h=True)
+    _d, _h, _m = frames(); _v = swing.analyse(_d, _h)
+    check('updated rules: the 1H reclaim on volume is the ENTRY: stage 5 TRIGGERED, no 15m needed', _v['stage'] == 5 and _v['status'].startswith('TRIGGERED') and _v['m15'] == {} or _v['stage'] == 5 and not (_v.get('m15') or {}).get('entry'), str((_v['stage'], _v['status'])))
+    check('updated rules: the entry is the close of the 1H confirmation candle, stop below the zone, T1 1R', abs(_v['entry'] - _v['cf']['c_confirm']) < .01 and _v['sl'] < _v['zone_bot'] and abs(_v['t1'] - (_v['entry'] + (_v['entry'] - _v['sl']))) < .01, str((_v['entry'], _v['cf'].get('c_confirm'), _v['sl'])))
+    _ck = swing.checklist(_v, {}); check('updated rules: the checklist has no 15m rows and the 1H row names the 20-bar volume rule', not any(x['tf'] == '15m' for x in _ck) and any('20-bar' in x['title'] for x in _ck), str([x['title'] for x in _ck]))
+    check('updated rules: the plan says enter on the 1H close, not "15m trigger close"', '1H close above the 9 EMA' in swing.plan_text(_v)['execution'][0], swing.plan_text(_v)['execution'][0])
+    _hw = _h.copy(); _hw.loc[_hw.index[-3]:, 'Volume'] = 10; _vw = swing.analyse(_d, _hw)
+    check('updated rules: a reclaim on weak volume (below its own 20-bar average) is still NOT confirmed', _vw['stage'] == 3 and _vw['status'].startswith('1H RECLAIM, WEAK VOLUME') and '20-bar' in _vw['status'], _vw['status'])
+    _b = _h.copy().astype(float); _base = float(_b.Volume.iloc[-23:-3].mean()); _b.loc[_b.index[-3]:, 'Volume'] = _base * 1.2        # 1.2x the average of the 20 candles before: your rule passes, the 1.5x rule does not
+    _vm = swing.analyse(_d, _b); swing.CFG.update(rvol_min=1.5, slot_vol=True, entry_on_1h=False); _om = swing.analyse(_d, _b)
+    check('updated rules: 1.2x its 20-bar average passes; the old 1.5x rule does not confirm the same candle', _vm['stage'] >= 4 and _om['stage'] == 3, str((_vm['stage'], _vm['cf'].get('rvol'), _om['stage'])))
+    swing.CFG.update(rvol_min=1.0, slot_vol=False, entry_on_1h=True)
+    _hr = _h.copy().astype(float); _hr.loc[_hr.index[-1], ['High', 'Close']] = float(_hr.Close.iloc[-1]) + 5 * float(swing.H.atr(_d, 14).iloc[-1]); _vr = swing.analyse(_d, _hr)
+    check('updated rules: no chasing: price already far above the 1H entry is not a fresh trigger', _vr['stage'] == 4, str((_vr['stage'], _vr['status'])))
+finally:
+    swing.CFG.update(_old)
+check('updated rules: the switch restores (the 15m step is back for the old rule)', swing.analyse(_d, _h)['stage'] == 4)
 
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: {fails}'); sys.exit(1 if fails else 0)

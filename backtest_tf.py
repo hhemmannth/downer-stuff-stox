@@ -11,13 +11,13 @@ stop, intraday and options squared off at 15:15. Nothing here looks at a bar tha
   python backtest.py --segment positional|intraday|options --out pub/data [--top N] [--workers N] [--deep DAYS]"""
 import bisect, datetime as dt, json, math, os, sys, time
 import numpy as np, pandas as pd
-import backtest as bt, greeks, signals, strategy_scanner as sc
+import backtest as bt, greeks, holdbacks, signals, strategy_scanner as sc
 
 IST = 'Asia/Kolkata'; LOT = greeks.LOT_SIZE
 COST_INTRADAY_PCT, COST_POSITIONAL_PCT = bt.SEGMENTS['intraday']['cost_pct'], bt.SEGMENTS['positional']['cost_pct']
 OPT_FIXED_INR, OPT_VAR = 40.0, 0.0015              # options: brokerage per round trip, and STT + charges as a share of premium turnover
 OPT_RISK_FLOOR = 0.08                              # premium risk is never taken as less than 8% of the premium (a stop a hair away would make R explode)
-CFG_P = dict(sc.CFG, pivot=2, lookback=104, h_lookback=40, trigger_age=3, rvol_min=1.5, rvol_n=20, slot_rvol=False, min_bars=50, max_bos_age=40, max_zone_atr=3.5, max_zone_pct=15.0, trigger_max_atr=1.0, min_price=50.0, min_turnover_cr=20.0)
+CFG_P = dict(sc.CFG, lux_ob=sc.LUX_OB, pivot=2, lookback=104, h_lookback=40, trigger_age=3, rvol_min=sc.CFG['rvol_min'], rvol_n=20, slot_rvol=False, min_bars=50, max_bos_age=40, max_zone_atr=3.5, max_zone_pct=15.0, trigger_max_atr=1.0, min_price=50.0, min_turnover_cr=20.0)
 
 def _utc(x): return pd.Timestamp(x).value
 def _aware(df, tz=IST):
@@ -91,8 +91,11 @@ def replay_positional(sym, daily, sector='', regimes=None, nifty_up=None, cfg=No
                     risk_pct=round(100 * risk / entry, 2), rvol=None if r.get('rvol') is None or (isinstance(r['rvol'], float) and math.isnan(r['rvol'])) else round(float(r['rvol']), 2), regime=get_regime(day), weekday=pd.Timestamp(day).strftime('%a'))
         if not stock: base['risk_usd'] = round(risk, 2)
         rec, t_out = _record(sig, base, risk, entry, t_in + pd.Timedelta(hours=15, minutes=30), COST_POSITIONAL_PCT, cost_abs)
-        rec['hold_days'] = int((pd.Timestamp(rec['exit_t']).normalize() - pd.Timestamp(day).normalize()).days); trades.append(rec)
-        busy_until = pd.Timestamp(rec['exit_t']).normalize() if rec['closed'] else pd.Timestamp(d.index[-1]) + pd.Timedelta(days=1)
+        rec['hold_days'] = int((pd.Timestamp(rec['exit_t']).normalize() - pd.Timestamp(day).normalize()).days)
+        rec['held'] = [x[0] for x in holdbacks.reasons('positional' if stock else 'gold_positional', int(r['zone_q']), None, base['regime'])]      # the 18 Nov 2026 hold-backs
+        if r.get('atr'): rec['stop_atr'] = round(float(risk / r['atr']), 2)
+        trades.append(rec)
+        if not rec['held']: busy_until = pd.Timestamp(rec['exit_t']).normalize() if rec['closed'] else pd.Timestamp(d.index[-1]) + pd.Timedelta(days=1)
     return trades
 
 # ------------------------------------------------------------------ intraday (5m structure, 15m bias, stocks)
@@ -171,7 +174,14 @@ def replay_intraday(sym, f5, f15, cfg=None, min_score=4, hist_bars=375, bias_bar
                             risk_pct=round(100 * risk / entry, 3), rvol=None if r.get('rvol') is None or (isinstance(r['rvol'], float) and math.isnan(r['rvol'])) else round(float(r['rvol']), 2), regime=get_regime(day), weekday=day.strftime('%a'), bias=r.get('b15_kind'))
                 if not stock: base['risk_usd'] = round(risk, 2)
                 rec, t_out = _record(sig, base, risk, entry, T, cost_pct, cost_abs)
-                rec['hold_min'] = int((t_out - T).total_seconds() // 60) if t_out is not None else None; trades.append(rec); busy[side] = t_out if t_out is not None else sq
+                rec['hold_min'] = int((t_out - T).total_seconds() // 60) if t_out is not None else None
+                rec['held'] = [x[0] for x in holdbacks.reasons('intraday' if stock else 'gold_intraday', int(r['zone_q']), rec['risk_pct'])]      # the 18 Nov 2026 hold-backs, the same table the live scan uses
+                if stock:
+                    hh, mm = (int(x) for x in signals.last_entry('intraday').split(':'))
+                    if (T.hour, T.minute) >= (hh, mm): rec['held'].append(f'after {hh:02d}:{mm:02d}')
+                if r.get('atr'): rec['stop_atr'] = round(float(risk / r['atr']), 2)
+                trades.append(rec)
+                if not rec['held']: busy[side] = t_out if t_out is not None else sq
     return trades
 
 # ------------------------------------------------------------------ Nifty options (index signals, modelled premiums)
@@ -246,8 +256,11 @@ def replay_options(f5, f15, h1, vix_daily, holidays=(), cfg=None, min_score=4, h
                 base = dict(sym='NIFTY', sector='', side=side, instrument=ot['instrument'], strike=ot['strike'], dte=round(ot['dte_days'], 2), vix=round(vix, 2), grade=r['grade'], score=int(r['score']), structure=int(r['structure']), zone_q=int(r['zone_q']),
                             confirm=int(r['confirm']), context=int(r['context']), entry=entry, sl=sl, risk_pct=round(100 * risk / entry, 3), rvol=None, regime=get_regime(day), weekday=day.strftime('%a'), idx_r=round(float(sig['r_final']), 2),
                             premium=o['premium'], premium_exit=o['premium_exit'], pnl_lot=o['pnl_lot'], modelled=True)
-                rec = dict(base, entry_t=_stamp(T), exit_t=_stamp(t_out), outcome=sig['outcome'], r=o['r'], r_net=o['r_net'], hits=len(sig['hits']), closed=True, held=[], hold_min=int((t_out - T).total_seconds() // 60))
-                trades.append(rec); busy = t_out; closed_today.append((t_out, o['r_net']))
+                held = [x[0] for x in holdbacks.reasons('options', int(r['zone_q']), None)]                          # the 18 Nov 2026 hold-back: zone below 2/2
+                rec = dict(base, entry_t=_stamp(T), exit_t=_stamp(t_out), outcome=sig['outcome'], r=o['r'], r_net=o['r_net'], hits=len(sig['hits']), closed=True, held=held, hold_min=int((t_out - T).total_seconds() // 60))
+                if r.get('atr'): rec['stop_atr'] = round(float(risk / r['atr']), 2)
+                trades.append(rec)
+                if not held: busy = t_out; closed_today.append((t_out, o['r_net']))                              # a held setup was not taken: it blocks nothing and counts as no loss
     return trades
 
 
@@ -327,9 +340,17 @@ def _pool(fn, jobs, workers, label, every=25):
             if n % every == 0: print(f'  {label}: {n}/{len(jobs)}, {len(out)} trades, {time.time() - t0:.0f}s', flush=True)
     return sorted(out, key=lambda t: (t['exit_t'], t['entry_t']))
 
+RULE = ('lux' if sc.LUX_OB else 'old') + ('+v2' if sc.V2 else '')      # which rules this run replays: the order-block rule (SWING_LUX_OB) and your updated strategy (PLAYBOOK_V2); saved trades from another combination are never mixed in
+
 def _load_prev(out_dir, seg):
-    try: return json.load(open(os.path.join(out_dir, bt.SEGMENTS[seg]['files'][1])))
+    """Saved trades from earlier weeks. They are only kept when they were made with the same order-block rule as this run
+    (a file saved before the switch existed counts as the old rule), so an A/B comparison never blends two rules."""
+    try: prev = json.load(open(os.path.join(out_dir, bt.SEGMENTS[seg]['files'][1])))
     except Exception: return {}
+    was = (prev.get('params') or {}).get('rule', 'old')
+    if was != RULE:
+        print(f'backtest: saved {seg} trades were made with the {was} rule, this run uses the {RULE} rule, so starting fresh', flush=True); return {}
+    return prev
 
 def _save(out_dir, seg, rep, trades, window, universe, params):
     rf, tf = bt.SEGMENTS[seg]['files']
@@ -424,5 +445,6 @@ def main_segment(a):
         new = replay_options(f5, f15, h1, vix, hol, regimes=regimes, first_day=fd, min_score=ms)
         trades = bt.merge_trades(prev.get('trades', []), new); first = min([str(fd)[:10]] + ([prev['window']['from']] if prev.get('window', {}).get('from') else []))
         window = {'from': first, 'to': str(_aware(f5).index[-1])[:10], 'note': 'modelled premiums; grows every week'}; params = dict(days=a.deep or 60, seconds=round(time.time() - t0)); universe = 1
+    params['rule'] = RULE
     rep = bt.report(trades, (), window=window, universe=universe, params=params, acct=acct, segment=seg, rules=rules); _save(a.out, seg, rep, trades, window, universe, params)
     s = rep['summary']['net']; print(f"backtest {seg}: {s['n']} trades, win {s['win']}%, expectancy {s['avg']}R net, profit factor {s['pf']}, max drawdown {s['max_dd']}R, {time.time() - t0:.0f}s"); return 0

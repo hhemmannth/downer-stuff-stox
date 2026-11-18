@@ -22,11 +22,43 @@ H = None                          # helper module (strategy_scanner), bound at i
 def bind(mod):
     global H; H = mod
 
-CFG = dict(lux_ob=os.environ.get('SWING_LUX_OB', '').strip().lower() not in ('0', 'off', 'false', 'no'), pivot=3, zz=0.8, atr_n=14, lookback=150, disp_body_atr=1.0, fvg_min_atr=0.2, stack_gap_atr=0.5, sl_buffer_atr=0.25,
+V2 = os.environ.get('PLAYBOOK_V2', '').strip().lower() in ('1', 'on', 'true', 'yes')       # your updated rules (17 Nov 2026), your SECONDARY strategy: OFF by default, PLAYBOOK_V2=on turns it on: 1H volume above its own 20-bar average, entry on the 1H reclaim itself (no 15m step)
+import holdbacks
+HB_OFF = V2 or holdbacks.off()      # the 18 Nov 2026 hold-backs (see holdbacks.py): off for the secondary strategy (not measured there) and with HOLDBACKS=off
+CFG = dict(lux_ob=os.environ.get('SWING_LUX_OB', '').strip().lower() in ('1', 'on', 'true', 'yes'),     # LuxAlgo order block only when the variable is on (default: the old rule)
+           pivot=3, zz=0.8, atr_n=14, lookback=150, disp_body_atr=1.0, fvg_min_atr=0.2, stack_gap_atr=0.5, sl_buffer_atr=0.25,
            max_bos_age=60, max_zone_atr=3.5, max_zone_pct=10.0, alert_atr=2.0, choch_age=15,
-           rvol_min=1.5, bos_rvol_good=1.5, confirm_max_age=21, entry_fresh=8, entry_chase_atr=0.5, ran_away_atr=1.5, require_volume=True,
-           min_room_r=2.0, wide_stop_pct=8.0, wide_stop_atr=2.5, results_hold_days=14, pullback_gap=6, reclaim_bars=21, touch_max_age=21)
+           rvol_min=1.0 if V2 else 1.5, slot_vol=not V2, entry_on_1h=V2, entry_fresh_1h=2, bos_rvol_good=1.5, confirm_max_age=21, entry_fresh=8, entry_chase_atr=0.5, ran_away_atr=1.5, require_volume=True,
+           min_room_r=2.0, min_stop_pct=0 if HB_OFF else 7.0, min_zone_q=0 if HB_OFF else 2, min_hold_rvol=0 if HB_OFF else 2.0, hold_regimes=() if HB_OFF else ('Mixed / transitioning',), expiry_days=None, wide_stop_pct=8.0, wide_stop_atr=2.5, results_hold_days=14, pullback_gap=6, reclaim_bars=21, touch_max_age=21)
 STAGES = {1: 'DEVELOPING (CHoCH, wait for BOS)', 2: 'SET ALERT (wait for pullback)', 3: 'IN ZONE (wait for 1H)', 4: '1H CONFIRMED (wait for 15m entry)', 5: 'TRIGGERED'}
+GOLD_HB = dict(min_stop_pct=0, min_zone_q=0 if HB_OFF else 2, min_hold_rvol=0 if HB_OFF else 2.0, hold_regimes=())      # gold swing: zone 2/2 and 1H volume 2x (same engine as the stocks); no % stop rule (gold stops are in dollars) and no Nifty regime
+BENCH = None          # Nifty 50 daily closes (pd.Series), set by the scan and the backtest so relative strength can be measured; never looked at beyond the last candle of the window
+
+def regime_hold(regime, cfg=None):
+    """The market-regime hold-back: swing setups in these regimes lost money in the backtest (Mixed / transitioning: profit factor 0.38 over 70 trades)."""
+    cfg = cfg or CFG
+    return f'market regime "{regime}" (backtest: swing setups lost money in it)' if regime and regime in (cfg.get('hold_regimes') or ()) else None
+
+def confluences(d, s, plan, px, a, x):
+    """Extra confluences recorded on every setup (and on every backtest trade, so the Backtest lab can slice results by each one):
+    relative strength against Nifty, pullback volume against the volume before the break, trend (50-day average and its slope), liquidity sweep before the CHoCH,
+    stop size in ATRs and how far price sits above the zone. They are measured, not gates: only the ones the backtest proves become hold-backs."""
+    out = dict(rs20=None, pb_vol=None, above50=None, sweep=bool(x and x.get('sweep_i') is not None), stop_atr=None, ext_atr=None)
+    try:
+        c = d.Close; n = len(c)
+        if n >= 55: sma = c.rolling(50).mean(); out['above50'] = bool(c.iloc[-1] > sma.iloc[-1] and sma.iloc[-1] > sma.iloc[-6])
+        if BENCH is not None and n > 21:
+            b = BENCH[BENCH.index <= d.index[-1]]
+            if len(b) > 21: out['rs20'] = round(float(100 * (c.iloc[-1] / c.iloc[-21] - b.iloc[-1] / b.iloc[-21])), 1)
+        if s is not None and 'bos_i' in s and d.Volume.notna().any():
+            bi = int(s['bos_i']); base = d.Volume.iloc[max(0, bi - 20):bi].mean(); pull = d.Volume.iloc[bi + 1:]
+            if len(pull) >= 2 and base and base == base: out['pb_vol'] = round(float(pull.mean() / base), 2)
+        if plan and plan.get('risk_atr') is not None: out['stop_atr'] = round(float(plan['risk_atr']), 2)
+        if s is not None and a and s.get('zone_top') is not None: out['ext_atr'] = round(float((px - s['zone_top']) / a), 2)
+    except Exception: pass
+    return out
+
+def _vtxt(): return 'its 20-bar average volume' if CFG.get('entry_on_1h') else '1.5x volume'          # the volume rule in words (your updated rule, or the 1.5x one)
 STAGE_SHORT = {1: 'CHoCH', 2: 'BOS', 3: 'In zone', 4: '1H confirmed', 5: 'Entry'}
 
 # ------------------------------------------------------------------ helpers
@@ -98,14 +130,14 @@ def confirm_1h(h1, s, buf, since):
         if rg > 0 and c[i] >= lo[i] + 0.6 * rg and lw >= 0.5 * body: res['rejection'] = 1
     crosses = [t for t in range(max(ip, 1), min(n, ip + CFG['reclaim_bars'] + 1)) if c[t] > e[t] and c[t - 1] <= e[t - 1]]
     for t in crosses:                                          # in time order: the first cross that has the volume is the confirmation
-        rv = _rvol(full.index, v, t, slot=True); ok = not math.isnan(rv) and rv >= CFG['rvol_min']; cont = False; ic = t
+        rv = _rvol(full.index, v, t, slot=CFG['slot_vol']); ok = not math.isnan(rv) and rv >= CFG['rvol_min']; cont = False; ic = t
         if not ok and CFG.get('require_volume', True):
             for u in range(t + 1, n):                          # your "controlled continuation above the 9 EMA": a later 1H close still above
                 if c[u] <= e[u]: break                         # the EMA, on 1.5x volume, is the confirmation (ends if the EMA is lost)
-                ru = _rvol(full.index, v, u, slot=True)
+                ru = _rvol(full.index, v, u, slot=CFG['slot_vol'])
                 if not math.isnan(ru) and ru >= CFG['rvol_min']: rv, ok, cont, ic = ru, True, True, u; break
         if ok or t == crosses[-1]:                             # confirmed, or the last cross there is (shown as a weak reclaim)
-            res.update(reclaim=1, rvol=rv, rvol_ok=int(ok), t_confirm=str(full.index[ic])[:16], confirm_age=n - 1 - ic, i_confirm=ic)
+            res.update(reclaim=1, rvol=rv, rvol_ok=int(ok), t_confirm=str(full.index[ic])[:16], confirm_age=n - 1 - ic, i_confirm=ic, c_confirm=float(c[ic]))
             if cont: res['continuation'] = True
             break
     return res
@@ -179,7 +211,10 @@ def analyse(daily, h1=None, m15=None, weekly=None, levels=(), cfg=None):
         if st == 'IN_ZONE' or (cf and cf['touched'] and (cf.get('touch_age') or 0) <= cfg['touch_max_age']): ctx['stage'] = 3          # a pullback from weeks ago is not 'in zone'
         vol_ok = cf and (cf['rvol_ok'] if cfg.get('require_volume', True) else (cf['rejection'] or cf['rvol_ok']))      # your rule: strong relative volume (1.5x) is REQUIRED
         if cf and cf['reclaim'] and vol_ok and (cf['confirm_age'] or 0) <= cfg['confirm_max_age']: ctx['stage'] = 4
-        if ctx['stage'] >= 4 and m15 is not None:
+        if ctx['stage'] == 4 and cfg.get('entry_on_1h') and cf.get('c_confirm') is not None:          # your updated rule: the 1H reclaim IS the entry (no 15m step)
+            ent = float(cf['c_confirm']); last1h = float(h1.Close.iloc[-1])
+            if (cf['confirm_age'] or 0) <= cfg['entry_fresh_1h'] and last1h - ent <= cfg['entry_chase_atr'] * a and ent - s['zone_top'] <= cfg['ran_away_atr'] * a: ctx['stage'] = 5; ctx['entry_1h'] = ent
+        if ctx['stage'] >= 4 and m15 is not None and not cfg.get('entry_on_1h'):
             t_since = pd.Timestamp(cf['t_touch'])
             if m15.index.tz is not None and t_since.tzinfo is None: t_since = t_since.tz_localize(m15.index.tz)
             t_conf = pd.Timestamp(cf['t_confirm']) + pd.Timedelta(hours=1)                       # the 1H confirmation candle's close
@@ -213,7 +248,7 @@ def _result(d, ctx):
         ob = s['ob_low'] if not _nan(s['ob_low']) else zb
         pull = cf.get('pullback_low', float('nan'))
         sl = min(ob, zb, pull if not _nan(pull) else ob) - cfg['sl_buffer_atr'] * a
-        if stage == 5: entry = m['entry']
+        if stage == 5: entry = ctx['entry_1h'] if ctx.get('entry_1h') is not None else m['entry']
         elif stage == 4 and m.get('found') and m.get('fvg') and m['fvg'].get('high'): entry = m['fvg']['high']          # a FAILED 15m zone (found False) keeps its old FVG in the result: planning from it put the entry above price and
                                                                                                               # made room-to-resistance look tiny (EICHERMOT 0.7R instead of 2.8R), so the setup was held back for nothing
         else: entry = zt - .25 * (zt - zb)
@@ -226,14 +261,21 @@ def _result(d, ctx):
                         risk_atr=risk / a if a else None)
     # ---- status and hold-backs
     status = STAGES[stage]; holds = []
+    if cfg.get('entry_on_1h'): status = {4: '1H CONFIRMED (entry window passed: wait for a new pullback)', 5: 'TRIGGERED (1H close above the 9 EMA on volume)'}.get(stage, status)
     if stage == 3 and cf.get('reclaim') and not cf.get('rvol_ok') and cfg.get('require_volume', True):           # reclaimed the 9 EMA, but not on your volume
-        rv = cf.get('rvol'); status = ('1H RECLAIM, NO VOLUME DATA (wait for a close above the 9 EMA on 1.5x)' if _nan(rv) or not rv else
-                                       f'1H RECLAIM, WEAK VOLUME ({rv:.1f}x; wait for a close above the 9 EMA on 1.5x)')
+        rv = cf.get('rvol'); status = (f'1H RECLAIM, NO VOLUME DATA (wait for a close above the 9 EMA on {_vtxt()})' if _nan(rv) or not rv else
+                                       f'1H RECLAIM, WEAK VOLUME ({rv:.1f}x; wait for a close above the 9 EMA on {_vtxt()})')
     if stage >= 4 and weekly.get('up') is False: holds.append('weekly trend against')                       # your hold-backs apply from the 1H confirmation on,
     if stage >= 4 and room is not None and room < cfg['min_room_r']: holds.append(f'room < {cfg["min_room_r"]:.0f}R')   # not only at the 15m entry
+    # hold-backs added 18 Nov 2026 from the backtest of 287 closed swing trades (each held in both Apr-Jun and Jul-Nov): they stay listed as WATCH with the reason
+    if stage >= 4 and plan and cfg.get('min_stop_pct') and plan['risk_pct'] < cfg['min_stop_pct']: holds.append(f"stop only {plan['risk_pct']:.1f}% of price (under {cfg['min_stop_pct']:g}%: inside daily noise)")
+    if stage >= 4 and cfg.get('min_zone_q') and zone_q < cfg['min_zone_q']: holds.append(f'weak zone ({zone_q}/2)')
+    if stage >= 4 and cfg.get('min_hold_rvol') and not _nan(cf.get('rvol')) and cf.get('rvol') is not None and cf['rvol'] < cfg['min_hold_rvol']: holds.append(f"1H volume only {cf['rvol']:.1f}x (want {cfg['min_hold_rvol']:g}x)")
     if stage in (3, 4) and zt is not None and a and px - zt > cfg['ran_away_atr'] * a:         # price ran off before any 15m entry (stage 4), or touched the zone and left
         holds.append(f'price ran {(px - zt) / a:.1f} ATR above the zone, no chasing' if stage == 4 else        # without a confirmed 1H reclaim (stage 3): not "in zone" any more.
                      f'price left the zone and is {(px - zt) / a:.1f} ATR above it: wait for a new pullback')    # Same 1.5 ATR no-chase rule the backtest uses.
+    if stage == 3 and status == STAGES[3] and zt is not None and a and px > zt:                 # it touched the zone in the last days but price is above it now:
+        status = f'IN ZONE (touched it, price now {(px - zt) / a:.1f} ATR above; wait for 1H)'      # say so (the page said 'IN ZONE' with price outside the zone)
     if holds: status = f'WATCH ({holds[0]})'
     notes = []
     if plan and (plan['risk_pct'] > cfg['wide_stop_pct'] or (plan['risk_atr'] or 0) > cfg['wide_stop_atr']): notes.append('wide structural stop: reduce size or skip, never widen it')
@@ -241,7 +283,10 @@ def _result(d, ctx):
     if plan and plan['prior_high'] < plan['t1']: notes.append(f"the prior high {plan['prior_high']:,.2f} sits before T1: expect selling there")
     if weekly.get('up') is False: notes.append('weekly trend is not up: lower conviction')
     if s is not None and ctx.get('bos_rvol') is not None and not math.isnan(ctx['bos_rvol']) and ctx['bos_rvol'] < 1.2: notes.append(f"the BOS candle had only {ctx['bos_rvol']:.1f}x volume")
-    out = dict(stage=stage, stage_label=STAGE_SHORT[stage], status=status, holds=holds, structure=structure, zone_q=zone_q, confirm=conf, context=context, score=score, grade=H.grade(score),
+    cfl = confluences(d, s, plan, px, a, x)
+    if cfl.get('rs20') is not None: notes.append(f"relative strength: {cfl['rs20']:+.1f}% against Nifty over 20 days" + (' (a leader)' if cfl['rs20'] >= 5 else ' (lagging the index)' if cfl['rs20'] < 0 else ''))
+    if cfl.get('pb_vol') is not None: notes.append(f"pullback volume {cfl['pb_vol']:.1f}x the volume before the break" + (' (dried up: healthy)' if cfl['pb_vol'] < 0.8 else ' (heavy selling)' if cfl['pb_vol'] > 1.2 else ''))
+    out = dict(stage=stage, stage_label=STAGE_SHORT[stage], confl=cfl, status=status, holds=holds, structure=structure, zone_q=zone_q, confirm=conf, context=context, score=score, grade=H.grade(score),
                ticks=', '.join(ticks) or '-', notes='; '.join(notes), price=px, atr=a, weekly=weekly, rvol=cf.get('rvol', float('nan')),
                choch_level=x['level'] if x else float('nan'), choch_date=str(d.index[x['ci']])[:16] if x else '', sweep=bool(x and x['sweep_i'] is not None),
                sweep_low=x['sweep_low'] if x else None, sweep_level=x['prior_low'] if x else None, sweep_date=str(d.index[x['sweep_i']])[:10] if x and x['sweep_i'] is not None else None,
@@ -276,17 +321,17 @@ def checklist(r, extra):
     if st >= 2:
         add('1H', 'Pullback and rejection', bool(cf.get('touched') and cf.get('rejection')) if st >= 3 else False,
             (f"Price pulled back into the zone on the 1H ({cf.get('t_touch')}), low {_f(cf.get('pullback_low'))}" + (', with a rejection candle.' if cf.get('rejection') else ', no clean rejection candle yet.')) if cf.get('touched') else 'Waiting for price to pull back into the daily zone. Set an alert at the zone top.')
-        add('1H', 'Close above 9 EMA on 1.5x volume', bool(cf.get('reclaim') and cf.get('rvol_ok')) if st >= 3 else False,
-            (f"1H close above the 9 EMA at {cf.get('t_confirm')}" + (f" on {cf['rvol']:.1f}x volume (same hour on earlier days)." if not _nan(cf.get('rvol')) else '.') + ('' if cf.get('rvol_ok') else ' Volume is below 1.5x.')) if cf.get('reclaim') else 'No 1H close above the 9 EMA yet.')
+        add('1H', 'Close above 9 EMA on ' + _vtxt(), bool(cf.get('reclaim') and cf.get('rvol_ok')) if st >= 3 else False,
+            (f"1H close above the 9 EMA at {cf.get('t_confirm')}" + (f" on {cf['rvol']:.1f}x volume (" + ('the 20 candles before it' if CFG.get('entry_on_1h') else 'same hour on earlier days') + ")." if not _nan(cf.get('rvol')) else '.') + ('' if cf.get('rvol_ok') else f' Volume is below {_vtxt()}.')) if cf.get('reclaim') else 'No 1H close above the 9 EMA yet.')
         add('1H', 'Futures OI long buildup', None, 'Check it yourself: price up with open interest up.')
         res = extra.get('results') or {}
         add('Risk', 'No results inside the hold', (res.get('days') is None or res['days'] > CFG['results_hold_days']) if res else None,
             f"Results on {res['date']} ({res['days']} days)." if res.get('date') else 'Results date not found: check the NSE announcement before holding.')
         ix = extra.get('index_check') or {}
         if ix: add('Risk', 'Sector index not falling', ix.get('state') != 'falling' if ix.get('state') != 'unknown' else None, ix.get('reason') or ix.get('text') or ix.get('state', ''))
-        add('15m', 'CHoCH + BOS + FVG in the zone', bool(m.get('found')) if st >= 4 else False,
+        if not CFG.get('entry_on_1h'): add('15m', 'CHoCH + BOS + FVG in the zone', bool(m.get('found')) if st >= 4 else False,
             (f"15m CHoCH at {_f(m['choch']['level'])} ({m['choch']['at'][11:]}), BOS at {_f(m['bos']['level'])} ({m['bos']['at'][11:]})" + (f", FVG {_f(m['fvg']['low'])} to {_f(m['fvg']['high'])}." if m.get('fvg') and m['fvg'].get('low') else '.')) if m.get('found') else (m.get('note') or 'After the 1H confirms, drop to the 15m.'))
-        add('15m', 'Retest + close above 9 EMA on 1.5x volume', st == 5 or (m.get('entry') is not None),
+        if not CFG.get('entry_on_1h'): add('15m', 'Retest + close above 9 EMA on 1.5x volume', st == 5 or (m.get('entry') is not None),
             f"Retest at {m.get('retest')}, trigger close {_f(m.get('entry'))} at {m.get('trigger')} on {m['rvol']:.1f}x volume. Enter here." if m.get('entry') is not None else (m.get('note') or 'Wait for the controlled retest.'))
         if r.get('room_r') is not None or r.get('resistance') is None:
             add('Plan', 'Room to resistance at least 2R', True if r.get('resistance') is None else (None if r.get('room_r') is None else r['room_r'] >= CFG['min_room_r']),
@@ -297,7 +342,7 @@ def plan_text(r):
     if r['stage'] < 2 or r.get('entry') is None: return None
     risk = r['entry'] - r['sl']
     return dict(
-        execution=[('Entry ' + _f(r['entry']) + (' (15m trigger close).' if r['stage'] == 5 else ' planned: enter only after the 1H confirms and the 15m triggers.')),
+        execution=[('Entry ' + _f(r['entry']) + ((' (1H close above the 9 EMA).' if CFG.get('entry_on_1h') else ' (15m trigger close).') if r['stage'] == 5 else (' planned: enter on the 1H close above the 9 EMA on volume.' if CFG.get('entry_on_1h') else ' planned: enter only after the 1H confirms and the 15m triggers.'))),
                    f"Stop-loss {_f(r['sl'])}: below the daily OB with a 0.25 ATR buffer ({_f(risk)} points, {r['risk_pct']:.1f}%). Place it as a GTT/SL order right away.",
                    'Size from the stop: quantity = risk in rupees / stop distance. Never widen the stop to fit a bigger size.',
                    f"T1 {_f(r['t1'])} (1R): take a partial. T2 {_f(r['t2'])} (2R). T3 {_f(r['t3'])} (3R)."],

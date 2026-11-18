@@ -1,5 +1,6 @@
 """Round 6: the A+ gate, the financial-year window, "2 a day, more only if A+" and gold (XAUUSD)
 on its own session clock, end to end with a stand-in for Yahoo. No network. Run: python test_rules.py"""
+import os; os.environ['PLAYBOOK_V2'] = 'off'      # this file tests the PREVIOUS rules (1.5x volume, 15m entry, 5m structure), still available with PLAYBOOK_V2=off; the updated strategy (the default) is tested in test_playbook_v2.py
 import json, os, tempfile
 for k in ('BACKTEST_FROM', 'MIN_SCORE', 'APLUS_OVERFLOW', 'GOLD_SYMBOL', 'GOLD_COST'): os.environ.pop(k, None)
 import numpy as np, pandas as pd
@@ -30,10 +31,12 @@ check('report: the "your rules" view carries its own trade log', isinstance(rep[
 op = bt.report(mix + [T('2026-11-05 10:15', 9, 0.0, 'OPENX', closed=False)], universe=1)
 check('report: trades still open are listed separately (not counted in the results)', [x['sym'] for x in op['open_now']] == ['OPENX'] and op['summary']['net']['n'] == 3)
 acct = bt.account_from_env(dict(APLUS_OVERFLOW='off'))
-check('repo variable APLUS_OVERFLOW=off makes it a strict 2 a day', acct['aplus_overflow'] is False and bt.account_from_env({})['aplus_overflow'] is True)
+check('a strict 2 a day is the default; APLUS_OVERFLOW=on brings back the old "more only if A+"', acct['aplus_overflow'] is False and bt.account_from_env({})['aplus_overflow'] is False and bt.account_from_env(dict(APLUS_OVERFLOW='on'))['aplus_overflow'] is True)
+check('gold segments count the trading day from 03:30 IST', bt.account_from_env({}, 'gold_intraday')['day_shift_min'] == 210 and 'day_shift_min' not in bt.account_from_env({}, 'swing'))
 
 # ---- 2. the swing replay skips below-A+ and pre-window setups by itself (not only in the report)
 import playbook_fixture as pf, swing as _swing
+_swing.CFG.update(min_stop_pct=0, min_zone_q=0, min_hold_rvol=0, hold_regimes=())      # the 18 Nov 2026 hold-backs have their own tests (test_holdbacks.py); this file tests the engine's mechanics
 _swing.CFG['lux_ob'] = False             # the replay tests use your written playbook example (last down candle = order block)
 d, h, _ = pf.frames(vol=5_000_000)
 rows, t_, last = [], h.index[-1], float(h.Close.iloc[-1])

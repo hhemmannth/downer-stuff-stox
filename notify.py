@@ -148,7 +148,7 @@ def fresh(data, now):
 
 def update_text(key, data):
     t = datetime.datetime.fromisoformat(data['generated_at']).strftime('%H:%M'); st = data.get('setups', [])
-    trig = sum(s['status'].startswith('TRIGGER') for s in st); zone = sum(s['status'].startswith('WATCH') for s in st); near = len(st) - trig - zone
+    trig = sum(s['status'].startswith('TRIGGER') and '(not taken' not in s['status'] for s in st); zone = sum(s['status'].startswith('WATCH') for s in st); near = len(st) - trig - zone
     line = f"{t} IST. " + (f"{data['scanned']}/{data['universe']} scanned. " if key != 'options' else '')
     line += f"{len(st)} setups: {trig} triggered, {zone} in zone, {near} near zone." if st else 'No setups right now.'
     if key == 'options' and data.get('snapshot'):
@@ -180,7 +180,7 @@ def main():
         except Exception: continue
         for s in data.get('setups', []):
             k = f"{key}|{s['symbol']}|{s['direction']}|{s['bos_date']}|{s['status'].split(' ')[0]}"
-            if s['score'] < min_score or not s['status'].upper().startswith(statuses) or k in state['sent']: continue
+            if s['score'] < min_score or not s['status'].upper().startswith(statuses) or '(NOT TAKEN' in s['status'].upper() or k in state['sent']: continue      # a setup your daily rule did not take is not a trade to alert
             try:
                 link = deep(click, s=key, id=f"{s['symbol']}|{s['direction']}")
                 send_alert(base, topic, s, title, link, charts if key == 'swing' else None, (link + '&log=1') if link else None); state['sent'].append(k); sent += 1

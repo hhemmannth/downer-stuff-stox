@@ -1,8 +1,10 @@
 """Swing fast lane (15m entry checks between the hourly scans), the shared context rules, the loop schedule and the 2 ATR SET ALERT limit.
 No network. Run: python test_fastlane.py"""
+import os; os.environ['PLAYBOOK_V2'] = 'off'      # this file tests the PREVIOUS rules (1.5x volume, 15m entry, 5m structure), still available with PLAYBOOK_V2=off; the updated strategy (the default) is tested in test_playbook_v2.py
 import argparse, copy, datetime as dt, json, os, sys, tempfile
 import numpy as np, pandas as pd
 import strategy_scanner as sc, swing, signals, loop
+swing.CFG.update(min_stop_pct=0, min_zone_q=0, min_hold_rvol=0, hold_regimes=())      # the 18 Nov 2026 hold-backs have their own tests (test_holdbacks.py); this file tests the engine's mechanics
 from playbook_fixture import frames
 fails = []
 def check(name, cond, info=''):

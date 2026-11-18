@@ -6,6 +6,7 @@ going all day. It writes data/health/gold_loop.json on every tick so the app and
 import argparse, datetime as dt, os, subprocess, sys, time
 import pandas as pd
 import loop, publish, gold_live
+TICK_TIMEOUT = 240                     # seconds; a gold tick normally takes well under a minute
 
 def hourly_due(t, last):
     """The swing and positional scans run once an hour, from 2 minutes past (the 1H candle has closed by then)."""
@@ -47,7 +48,9 @@ def main(argv=None):
         if not gold_live.market_open(pd.Timestamp(tick)) and not a.once: log('Gold market closed for the weekend: stopping.'); break
         styles = ['intraday'] + (['swing', 'positional'] if hourly_due(tick, last_hour) else [])
         if len(styles) > 1: last_hour = (tick.date(), tick.hour)
-        t0 = time.time(); r = subprocess.run([py, 'gold_live.py', '--out', data, '--state', state, '--styles', ','.join(styles)], capture_output=True, text=True)
+        t0 = time.time()
+        try: r = subprocess.run([py, 'gold_live.py', '--out', data, '--state', state, '--styles', ','.join(styles)], capture_output=True, text=True, timeout=TICK_TIMEOUT)
+        except subprocess.TimeoutExpired: r = subprocess.CompletedProcess([], 124, '', f'timed out after {TICK_TIMEOUT}s')       # a stuck download must never freeze the loop
         log(f"tick {', '.join(styles)} -> {r.returncode} in {time.time() - t0:.0f}s\n{(r.stdout + r.stderr)[-1200:]}")
         hb.update(ticks=hb['ticks'] + 1, last_tick=tick.isoformat(timespec='seconds'), last_rc=r.returncode, bad_ticks=0 if r.returncode == 0 else hb['bad_ticks'] + 1,
                   next_tick=loop.next_tick(loop.now_ist() + dt.timedelta(seconds=1), a.every, a.offset).isoformat(timespec='seconds'))
@@ -61,6 +64,9 @@ def main(argv=None):
             alerts.watch('gold-scan', hb['bad_ticks'] >= 3, 'Gold scan is failing', f"{hb['bad_ticks']} gold ticks in a row failed. {hb.get('run_url') or ''}", os.path.join(state, 'alerts.json'), 60,
                          'Gold scan recovered', 'Gold ticks are succeeding again.')
         except Exception as ex: log(f'loop alerts failed: {ex}')
+        if not a.no_publish and not a.once:
+            try: import watchdog; watchdog.guard('market', loop.now_ist(), data, log); hb['guard'] = watchdog.GUARD_LOG.get('market')   # the gold loop runs all day: it also restarts a dead market loop
+            except Exception as ex: log(f'market guard failed: {ex}')
         if a.once: break
     hb.update(state='finished', next_tick=None); heartbeat(pub, **hb)
     if not a.once and gold_live.market_open(pd.Timestamp(loop.now_ist() + dt.timedelta(minutes=10))): relay(log)

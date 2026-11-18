@@ -1,6 +1,9 @@
 """Live XAUUSD gold: scanning through the sessions, long and short, tracked trades with the 02:00 IST square-off, your open-trade and
 daily limits, phone alerts sent once, the gold loop's timing and the gold watchdog. Stand-in data, no network. Run: python test_gold_live.py"""
+import os; os.environ['PLAYBOOK_V2'] = 'off'      # this file tests the PREVIOUS rules (1.5x volume, 15m entry, 5m structure), still available with PLAYBOOK_V2=off; the updated strategy (the default) is tested in test_playbook_v2.py
 import datetime as dt, json, os, tempfile
+import swing; swing.GOLD_HB.update(min_zone_q=0, min_hold_rvol=0)      # the 18 Nov 2026 gold hold-backs have their own tests (test_holdbacks.py); this file tests the mechanics
+import holdbacks; holdbacks.RULES['gold_intraday'] = {}; holdbacks.RULES['gold_positional'] = {}
 for k in ('BACKTEST_FROM', 'MIN_SCORE', 'GOLD_SESSIONS', 'GOLD_MAX_OPEN', 'GOLD_ACCOUNT', 'NTFY_TOPIC', 'TELEGRAM_BOT_TOKEN'): os.environ.pop(k, None)
 import numpy as np, pandas as pd
 import backtest as bt, backtest_tf as tf, gold_live as gl, gold_loop, signals, strategy_scanner as sc, tf_fixture as fx, watchdog, notify
@@ -74,9 +77,12 @@ r = dict(grade='A', score=7, zone_bot=1, zone_top=2, bos_date='x'); its = [gl.it
 o5 = tempfile.mkdtemp(); led5 = signals.load(os.path.join(o5, 'signals_gold_intraday.json'))
 for i in range(2): s_ = signals.new_signal('gold_intraday', dict(its[0], bos_date=f'b{i}'), now); s_['status'] = 'CLOSED'; led5['signals'].append(s_)
 signals.save(os.path.join(o5, 'signals_gold_intraday.json'), led5, now)
-check('your daily rule: after 2 trades today a trigger below A+ is not taken (only A+ may go past 2)', 'not A+' in gl.apply_rules(its, o5, now, 5, 2)[0]['status'])
+check('your daily rule: after 2 trades today a trigger below A+ is not taken', gl.apply_rules(its, o5, now, 5, 2)[0]['status'].startswith('TRIGGERED (not taken'))
 its2 = [gl.item('intraday', 'long', dict(r, grade='A+', score=9), 10, 9, 11, 12, 13, 'TRIGGERED')]
-check('your daily rule: past 2 trades today an A+ trigger IS taken', gl.apply_rules(its2, o5, now, 5, 2)[0]['status'] == 'TRIGGERED')
+s2 = gl.apply_rules(its2, o5, now, 5, 2)[0]['status']
+check('your daily rule (strict, 18 Nov 2026): past 2 trades today even an A+ trigger is NOT taken', s2.startswith('TRIGGERED (not taken: 2 trades already taken today'), s2)
+os.environ['APLUS_OVERFLOW'] = 'on'; its3 = [gl.item('intraday', 'long', dict(r, grade='A+', score=9), 10, 9, 11, 12, 13, 'TRIGGERED')]; s3 = gl.apply_rules(its3, o5, now, 5, 2)[0]['status']; os.environ.pop('APLUS_OVERFLOW')
+check('APLUS_OVERFLOW=on brings back the old rule: an A+ trigger past 2 IS taken', s3 == 'TRIGGERED', s3)
 check('outside the entry window (01:30 IST) the same trigger is shown but not taken', any(x['status'].startswith('TRIGGERED (outside') for x in gl.scan_intraday(f5, f15, pd.Timestamp('2026-11-12 01:30', tz=IST), 8)[0]))
 
 # ---- 5. swing and positional, both ways

@@ -86,7 +86,7 @@ def main_gold(now, repo, token, ref):
         try: gh('POST', f'/repos/{repo}/actions/runs/{run_id}/cancel', token); time.sleep(15)
         except Exception as ex: print(f'cancel failed: {ex}')
     if action in ('start', 'restart'):
-        gh('POST', f'/repos/{repo}/actions/workflows/gold-loop.yml/dispatches', token, {'ref': ref})
+        if not dispatch(repo, token, ref, 'gold-loop.yml', 'gold loop', reason, now): return 1
         if action == 'restart' or os.environ.get('GOLD_WATCHDOG_PUSH', '').strip().lower() in ('on', 'all'):
             push(f"Gold loop {'restarted' if action == 'restart' else 'started'} by the watchdog", f"{now:%H:%M} IST: {reason}. Gold scans resume within about 5 minutes.")
     return 0
@@ -105,10 +105,57 @@ def main():
         try: gh('POST', f'/repos/{repo}/actions/runs/{run_id}/cancel', token); time.sleep(15)
         except Exception as ex: print(f'cancel failed: {ex}')
     if action in ('start', 'restart'):
-        gh('POST', f'/repos/{repo}/actions/workflows/{WORKFLOW}/dispatches', token, {'ref': ref})
+        if not dispatch(repo, token, ref, WORKFLOW, 'market loop', reason, now): return 1
         push(f"Market loop {'restarted' if action == 'restart' else 'started'} by the watchdog",
              f"{now:%H:%M} IST: {reason}. Live scans resume within about 5 minutes.")
     return 0
+
+def dispatch(repo, token, ref, workflow, what, reason, now):
+    """Start a workflow run. If GitHub refuses (workflow disabled, token without actions: write, API down), say so on your phone
+    instead of failing silently: before, the watchdog run just went red in Actions and nobody knew the loop was still down."""
+    try: gh('POST', f'/repos/{repo}/actions/workflows/{workflow}/dispatches', token, {'ref': ref}); return True
+    except Exception as ex:
+        msg = str(ex); hint = ' Is the workflow disabled? Actions > the workflow > Enable workflow.' if '403' in msg or '422' in msg or 'disabled' in msg.lower() else ''
+        print(f'could not start the {what}: {msg}'); push(f'Could not start the {what}', f"{now:%H:%M} IST: {reason}, but GitHub refused to start it ({msg[:120]}).{hint}"); return False
+
+def _local_hb(path):
+    try: return json.load(open(path))
+    except Exception: return None
+
+_GUARD = {}
+GUARD_LOG = {}                          # kind -> the last check, written into the calling loop's heartbeat (System health shows it)
+def guard(kind, now, data_dir, log=print, every_min=10):
+    """Each loop watches the other one (17 Nov 2026). The gold loop runs every 5 minutes all week, the market loop every 5 minutes in
+    market hours, and both run inside GitHub without depending on GitHub's schedule, which skips runs (the watchdog workflow is itself
+    a scheduled run, so when GitHub drops schedules the watchdog drops too: on 17 Nov the market loop was down from about 12:20 to 14:02).
+    kind: 'market' (called by the gold loop) or 'gold' (called by the market loop). Uses the same decide() as the watchdog, the other
+    loop's heartbeat from the published data, and calls the Actions API only when that heartbeat is stale, at most every `every_min`."""
+    repo, token = os.environ.get('GITHUB_REPOSITORY'), os.environ.get('GITHUB_TOKEN')
+    if not repo or not token: return 'skip'
+    if kind == 'market':
+        trading = loop.trading_day(now.date()); window = (OPEN, LAST); wf, name, hbf = WORKFLOW, 'market-loop', 'loop.json'
+    else:
+        trading = gold_market_open(now); window = (dt.time(0, 0), dt.time(23, 59, 59)); wf, name, hbf = 'gold-loop.yml', 'gold-loop', 'gold_loop.json'
+    if not trading or not (window[0] <= now.time() <= window[1]): return 'skip'
+    hb = _local_hb(os.path.join(data_dir, 'health', hbf)); beat = minutes(now, (hb or {}).get('last_tick') or (hb or {}).get('started')) if hb else None
+    note = lambda act, why: GUARD_LOG.__setitem__(kind, dict(at=now.isoformat(timespec='minutes'), action=act, reason=why)) or act
+    if beat is not None and beat <= STALE_MIN and (hb or {}).get('state') == 'running': return note('ok', f'last tick {beat:.0f} min ago')
+    last = _GUARD.get(kind)
+    if last is not None and (now - last).total_seconds() < every_min * 60: return 'wait'
+    _GUARD[kind] = now
+    try: runs = gh('GET', f'/repos/{repo}/actions/workflows/{wf}/runs?per_page=15', token).get('workflow_runs', [])
+    except Exception as ex: log(f'guard {name}: could not read runs ({ex})'); return note('error', f'could not read the runs: {str(ex)[:80]}')
+    action, reason, run_id = decide(now, runs, hb, trading, window, name)
+    log(f'guard {name}: {action} ({reason})'); note(action, reason)
+    if action == 'restart':
+        try: gh('POST', f'/repos/{repo}/actions/runs/{run_id}/cancel', token); time.sleep(10)
+        except Exception as ex: log(f'guard {name}: cancel failed ({ex})')
+    if action in ('start', 'restart'):
+        what = 'market loop' if kind == 'market' else 'gold loop'; by = 'the gold loop' if kind == 'market' else 'the market loop'
+        if not dispatch(repo, token, os.environ.get('GITHUB_REF_NAME') or 'main', wf, what, reason, now): note('refused', f'{reason}; GitHub refused to start it')
+        else:
+            push(f"{what.capitalize()} {'restarted' if action == 'restart' else 'started'} by {by}", f"{now:%H:%M} IST: {reason}. It resumes within about 5 minutes.")
+    return action
 
 if __name__ == '__main__':
     sys.exit(main())

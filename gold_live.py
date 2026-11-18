@@ -13,7 +13,7 @@ Data: Yahoo GC=F (COMEX gold futures), the closest free intraday feed; it can la
   python gold_live.py --out pub/data --state pub/state [--styles intraday,swing,positional]"""
 import argparse, datetime as dt, json, math, os, sys
 import numpy as np, pandas as pd
-import backtest as bt, backtest_tf as tf, signals, strategy_scanner as sc
+import backtest as bt, backtest_tf as tf, holdbacks, signals, strategy_scanner as sc
 
 IST = 'Asia/Kolkata'; GOLD_TZ = tf.GOLD_TZ; LABEL = tf.GOLD_LABEL; STYLES = ('intraday', 'swing', 'positional')
 SECTION = {k: 'gold_' + k for k in STYLES}
@@ -97,14 +97,14 @@ def swing_why(rr, min_score):
 def _swing_one(daily, h1, side, K, min_score, why=None):
     import swing
     d, h = (daily, h1) if side == 'long' else (sc.invert(daily, K), sc.invert(h1, K))
-    rr = swing.analyse(d.tail(250), h)
+    rr = swing.analyse(d.tail(250), h, cfg=dict(swing.CFG, **swing.GOLD_HB))      # gold swing profile: zone 2/2 and 1H volume 2x (18 Nov 2026)
     if why is not None: why[side] = swing_why(rr, min_score)
     if not rr or rr.get('stage', 0) < 2 or rr['score'] < min_score or rr.get('sl') is None: return None, (None if not rr else rr.get('stage'))
     entry = float(h.Close.iloc[-1]); sl = float(rr['sl']); risk = entry - sl
     if risk <= 0: return None, rr.get('stage')
     fresh = rr.get('stage', 0) >= 4 and (rr.get('cf') or {}).get('confirm_age') == 0
     chase = entry - rr['zone_top'] > swing.CFG['entry_chase_atr'] * rr['atr'] * 3
-    held = (['weekly trend against'] if rr['weekly'].get('up') is False else []) + (['room under 2R'] if rr.get('room_r') is not None and rr['room_r'] < swing.CFG['min_room_r'] else [])
+    held = (['weekly trend against'] if rr['weekly'].get('up') is False else []) + (['room under 2R'] if rr.get('room_r') is not None and rr['room_r'] < swing.CFG['min_room_r'] else []) + [x for x in rr.get('holds', []) if x.startswith(('weak zone', '1H volume only'))]
     status = ('TRIGGERED' if not held and not chase else 'HELD BACK (' + ', '.join(held or ['price ran away from the zone']) + ')') if fresh else \
              {2: 'SET ALERT (wait for the pullback)', 3: 'IN ZONE (wait for the 1H)'}.get(rr['stage'], 'WATCH (1H confirmed earlier)')
     m = (lambda x: K - x) if side == 'short' else (lambda x: x)
@@ -160,14 +160,17 @@ def today_count(out, now):
     return n_day, n_open
 
 def apply_rules(items, out, now, max_open, max_day):
-    """Your rules before a trigger is taken: at most max_open gold trades open at once, and past max_day a day only A+."""
-    n_day, n_open = today_count(out, now); known = set()
-    for st in STYLES: known |= {s['id'] for s in signals.load(ledger_path(out, st))['signals']}
-    for it in items:
+    """Your rules before a trigger is taken: at most max_open gold trades open at once, and at most max_day gold trades a day across intraday, swing and positional
+    (18 Nov 2026: strict, even an A+ waits for tomorrow unless APLUS_OVERFLOW=on; only A+ is taken; the best score first when several trigger together)."""
+    n_day, n_open = today_count(out, now); taken = []
+    for st in STYLES: taken += signals.load(ledger_path(out, st))['signals']
+    sec = items[0]['section'] if items else 'gold_intraday'
+    signals.limit_items(items, taken, sec, now, rules=dict(signals.day_rules(), max_day=max_day))
+    known = {s['id'] for s in taken}
+    for it in sorted(items, key=lambda x: -(x.get('score') or 0)):
         if it['status'] != 'TRIGGERED' or signals.key(it['section'], it) in known: continue
         if n_open >= max_open: it['status'] = f'TRIGGERED (not taken: {n_open} gold trades already open, your limit is {max_open})'; continue
-        if n_day >= max_day and it['grade'] != 'A+': it['status'] = f'TRIGGERED (not taken: {n_day} trades today and this is not A+)'; continue
-        n_open += 1; n_day += 1
+        n_open += 1
     return items
 
 def lots_text(risk_usd):
@@ -239,6 +242,7 @@ def run(out, state_dir, styles=STYLES, now=None, fetch=None):
             elif style == 'swing': items, states = scan_swing(fr.get('daily'), fr.get('h1'), ms, why)
             else: items, states = scan_positional(fr.get('daily'), ms, why)
         except Exception as ex: print(f'gold {style} failed: {ex}', file=sys.stderr); doc['styles'][style] = dict(error=str(ex)[:200], scanned_at=now.isoformat(timespec='seconds')); continue
+        if style in ('intraday', 'positional'): holdbacks.hold_items(items, SECTION[style])            # your hold-backs by segment (holdbacks.py): zone below 2/2 is WATCH
         items = apply_rules(items, out, now, max_open, max_day)
         bars = {LABEL: fr.get('f5') if style == 'intraday' else fr.get('h1') if style == 'swing' and fr.get('h1') is not None else fr.get('daily')}
         if style == 'positional' and bars[LABEL] is not None:

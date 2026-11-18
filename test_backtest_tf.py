@@ -3,6 +3,8 @@
  2. a stand-in engine whose decisions depend on the exact data window it is given, so any peek at a bar that had not closed would change the results;
  3. the rules (one trade at a time, 15:00 cutoff, expiry afternoons, 1H alignment, stop after two losses) and the option pricing arithmetic.
 No network. Run: python test_backtest_tf.py"""
+import os; os.environ['HOLDBACKS'] = 'off'      # the 18 Nov 2026 hold-backs have their own tests (test_holdbacks.py); this file tests the machinery
+os.environ['PLAYBOOK_V2'] = 'off'      # this file tests the PREVIOUS rules (1.5x volume, 15m entry, 5m structure), still available with PLAYBOOK_V2=off; the updated strategy (the default) is tested in test_playbook_v2.py
 import datetime as dt, json, math
 import numpy as np, pandas as pd
 import backtest as bt, backtest_tf as tf, greeks, signals, strategy_scanner as sc, tf_fixture as fx
@@ -188,6 +190,16 @@ check('positional: the real engine runs end to end on random data without error 
 a = dict(sym='X', side='long', entry_t='2026-09-01 10:00', exit_t='2026-09-01 12:00', r=1.0); b = dict(a, r=2.0); c = dict(sym='X', side='short', entry_t='2026-09-02 10:00', exit_t='2026-09-02 11:00', r=-1.0)
 mg = bt.merge_trades([a], [b, c])
 check('merge: the same stock, side and entry time is the same trade (the new run replaces the old one); different ones are added; sorted by exit', len(mg) == 2 and mg[0]['r'] == 2.0 and mg[1]['side'] == 'short')
+import tempfile
+with tempfile.TemporaryDirectory() as td:
+    fn = os.path.join(td, bt.SEGMENTS['intraday']['files'][1]); keep = tf.RULE
+    other = 'old' if keep == 'lux' else 'lux'
+    json.dump(dict(window={'from': '2026-08-01'}, params=dict(rule=keep), trades=[a]), open(fn, 'w'))
+    check('saved trades: made with the same order-block rule as this run -> kept and merged', len(tf._load_prev(td, 'intraday').get('trades', [])) == 1)
+    json.dump(dict(window={'from': '2026-08-01'}, params=dict(rule=other), trades=[a]), open(fn, 'w'))
+    check('saved trades: made with the other order-block rule -> dropped, the run starts fresh (an A/B comparison is never blended)', tf._load_prev(td, 'intraday') == {})
+    json.dump(dict(window={'from': '2026-08-01'}, params={}, trades=[a]), open(fn, 'w'))
+    check('saved trades: a file from before the switch existed counts as the old rule', (len(tf._load_prev(td, 'intraday').get('trades', [])) == 1) == (keep == 'old'))
 def mk(i, seg):
     d = pd.Timestamp('2026-09-01') + pd.Timedelta(days=i); r = [1.75, -1.0, 0.0][i % 3]
     t = dict(sym='NIFTY' if seg == 'options' else f'S{i % 5}', sector='IT', side='long' if i % 2 else 'short', grade='A+', score=9, structure=2, zone_q=2, confirm=3, context=2, entry_t=f'{d:%Y-%m-%d} 10:{15 + i % 40}', exit_t=f'{d:%Y-%m-%d} 12:30', entry=100.0, sl=99.0, risk_pct=0.5,

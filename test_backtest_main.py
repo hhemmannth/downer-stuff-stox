@@ -2,8 +2,10 @@
 Checks that each run downloads, replays, reports, writes both files, that a second run MERGES instead of doubling, and that the files have what the page reads.
 No network. Run: python test_backtest_main.py"""
 import json, os, tempfile
+os.environ['HOLDBACKS'] = 'off'      # the 18 Nov 2026 hold-backs have their own tests (test_holdbacks.py); this file tests the machinery
 import numpy as np, pandas as pd
 import backtest as bt, backtest_tf as tf, strategy_scanner as sc, tf_fixture as fx
+import signals
 import os
 os.environ['BACKTEST_FROM'] = 'all'; os.environ['MIN_SCORE'] = '4'      # these tests check the machinery on every grade and old dates;
                                                                           # the A+ gate and the financial-year window have their own tests (test_rules.py)

@@ -1,4 +1,5 @@
 """End-to-end test of every section, the market and news pages and the phone alerts, with fake downloads. Run: python test_pipeline.py"""
+import os; os.environ['PLAYBOOK_V2'] = 'off'      # this file tests the PREVIOUS rules (1.5x volume, 15m entry, 5m structure), still available with PLAYBOOK_V2=off; the updated strategy (the default) is tested in test_playbook_v2.py
 import http.server, json, os, subprocess, sys, tempfile, threading
 import numpy as np, pandas as pd
 sys.argv = ['x']
@@ -7,6 +8,7 @@ sc, D, H, flip = ns['sc'], ns['D'], ns['H'], ns['flip']
 import market, newsfeed
 from playbook_fixture import frames as pb_frames
 import swing as _swing; _swing.CFG['lux_ob'] = False      # the pipeline tests run on your written playbook example (last down candle = order block)
+_swing.CFG.update(min_stop_pct=0, min_zone_q=0, min_hold_rvol=0, hold_regimes=())      # the 18 Nov 2026 hold-backs are tested in test_holdbacks.py; these fixtures test the engine's mechanics
 PBD, PBH, PBM = pb_frames(m15_after=20)                     # the playbook 15m sequence after the 1H confirmation (your rule)
 sc.CFG.update(min_turnover_cr=0, min_price=0, min_bars=30, rvol_n=10); sc.CFG_I.update(min_bars=30, rvol_n=10, max_zone_pct=6, max_zone_atr=5); sc.CFG_B.update(min_bars=20); market.MIN_BARS = 30
 tz = 'Asia/Kolkata'; n5 = len(D) + len(H); D15 = D[:32]
@@ -30,9 +32,10 @@ _we = sc.greeks.weekly_expiry                    # keep the test independent of 
 sc.greeks.weekly_expiry = lambda now, holidays=(): (lambda d: d + _dt.timedelta(days=7) if str(d) == str(pd.Timestamp(now).date()) else d)(_we(now, holidays))
 csv_ind = {'AAA': 'Information Technology', 'BBB': 'Information Technology', 'CCC': 'Realty', 'DDD': 'Realty', 'PBK': 'Information Technology'}
 sc.load_nifty500 = lambda *a, **k: (['AAA', 'BBB', 'CCC', 'DDD', 'PBK'], 'test universe (5 symbols)', csv_ind)
-_late = sc.late_cut; sc.late_cut = lambda items, now: None        # the 15:00 cut-off depends on the clock; it is checked on its own below
+_late = sc.late_cut; sc.late_cut = lambda items, now, section='options': None        # the 15:00 cut-off depends on the clock; it is checked on its own below
 its = [{'status': 'TRIGGERED'}]; _late(its, pd.Timestamp('2026-10-22 15:05', tz='Asia/Kolkata')); its2 = [{'status': 'TRIGGERED'}]; _late(its2, pd.Timestamp('2026-10-22 14:55', tz='Asia/Kolkata'))
-LATE_OK = its[0]['status'].startswith('WATCH (after 15:00') and its2[0]['status'] == 'TRIGGERED'
+its3 = [{'status': 'TRIGGERED'}]; _late(its3, pd.Timestamp('2026-10-22 14:05', tz='Asia/Kolkata'), 'intraday'); its4 = [{'status': 'TRIGGERED'}]; _late(its4, pd.Timestamp('2026-10-22 13:55', tz='Asia/Kolkata'), 'intraday')
+LATE_OK = its[0]['status'].startswith('WATCH (after 15:00') and its2[0]['status'] == 'TRIGGERED' and its3[0]['status'].startswith('WATCH (after 14:00') and its4[0]['status'] == 'TRIGGERED'
 RES_DAYS = {'PBK': 20}
 sc.results_info = lambda s, now: dict(date=str((now + pd.Timedelta(days=RES_DAYS[s])).date()), days=RES_DAYS[s], source='test') if s in RES_DAYS else None
 RSS = '<rss><channel><item><title>Markets rally as RBI holds rates - ET</title><link>https://example.com/a</link><pubDate>Wed, 21 Oct 2026 04:30:00 GMT</pubDate><source>ET</source></item><item><title>AAA wins big order - Mint</title><link>https://example.com/b</link><pubDate>Wed, 21 Oct 2026 03:00:00 GMT</pubDate><source>Mint</source></item></channel></rss>'
@@ -90,7 +93,7 @@ check('news: events include the weekly expiry and your setup results date; risk 
 
 
 print('--- trade lifecycle ---')
-check('options and intraday: a trigger after 15:00 is shown as WATCH, not a trade (before 15:00 it stays TRIGGERED)', LATE_OK)
+check('options after 15:00 and stock intraday after 14:00: a trigger is shown as WATCH, not a trade (before the cut-off it stays TRIGGERED)', LATE_OK)
 LS = json.load(open(os.path.join(out, 'signals_swing.json')))
 check('swing: the triggered PBK setup is now a tracked signal with a trigger event and its trade snapshot', any(s['symbol'] == 'PBK' and s['status'] == 'ACTIVE' and s['events'][0]['kind'] == 'trigger' and s['item']['symbol'] == 'PBK' for s in LS['signals']), str([(s['symbol'], s['status']) for s in LS['signals']]))
 check('swing: developing (stage 1) setups are never tracked as trades', not any(s['item'].get('stage') == 1 for s in LS['signals']))

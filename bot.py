@@ -33,7 +33,7 @@ def cmd_setups(d):
     import digest
     D = digest.load(d); L = ['Swing shortlist:'] + (['• ' + digest.setup_line(s) for s in digest.shortlist(D['swing'])] or ['• nothing in its zone right now'])
     for key, name in (('options', 'Nifty options'), ('intraday', 'Intraday')):
-        trig = [s for s in (D[key] or {}).get('setups', []) if str(s.get('status', '')).upper().startswith('TRIGGER')]
+        trig = [s for s in (D[key] or {}).get('setups', []) if str(s.get('status', '')).upper().startswith('TRIGGER') and '(NOT TAKEN' not in str(s.get('status', '')).upper()]
         if trig: L += ['', f'{name} triggered:'] + [f"• {s.get('symbol')} {s.get('label', '')} · {s.get('grade')} {s.get('score')}/10 · entry {s.get('entry')} · stop {s.get('sl')}" for s in trig[:5]]
     return '\n'.join(L)
 
