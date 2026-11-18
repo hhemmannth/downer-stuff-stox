@@ -15,7 +15,8 @@ permissions:
 
 env:
   PYTHONWARNINGS: ignore
-  SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}       # order block rule: empty or on = the LuxAlgo rule your charts draw; set the variable to off for the older last-down-candle rule
+  SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}       # order block rule: empty or off = the older last-down-candle rule (default); on = the LuxAlgo rule (tested worse on swing)
+  PLAYBOOK_V2: ${{ vars.PLAYBOOK_V2 }}     # your updated strategy is the SECONDARY one: off unless this repo variable is on
 
 concurrency:
   group: gold-loop
@@ -42,6 +43,7 @@ jobs:
           ALERTS_STATE: pub/state/alerts.json
           MIN_SCORE: ${{ vars.MIN_SCORE }}
           MAX_TRADES_PER_DAY: ${{ vars.MAX_TRADES_PER_DAY }}
+          APLUS_OVERFLOW: ${{ vars.APLUS_OVERFLOW }}
           GOLD_SYMBOL: ${{ vars.GOLD_SYMBOL }}
           GOLD_SESSIONS: ${{ vars.GOLD_SESSIONS }}
           GOLD_MAX_OPEN: ${{ vars.GOLD_MAX_OPEN }}

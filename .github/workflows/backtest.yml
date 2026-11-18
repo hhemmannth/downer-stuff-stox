@@ -1,6 +1,6 @@
 name: backtest
 
-# Every style counts A+ setups only (score 8-10) from 1 April 2026 (repo variables BACKTEST_FROM, MIN_SCORE), with your 2-a-day rule (more only if A+).
+# Every style counts A+ setups only (score 8-10) from 1 April 2026 (repo variables BACKTEST_FROM, MIN_SCORE), with your strict 2-a-day rule (repo variable APLUS_OVERFLOW=on brings back 'more only if A+').
 # Backtesting lab, stock playbooks: SWING (about two years, 1D structure with 1H trigger) and POSITIONAL (about ten years of daily history,
 # weekly structure with daily trigger), each replayed with the live engine and the live trade tracker. Runs every Saturday morning, or by hand.
 # INTRADAY and NIFTY OPTIONS are in the `backtest-intraday` workflow. Quick mode re-applies your account rules to all four saved results in about a minute.
@@ -10,6 +10,11 @@ on:
     - cron: '30 1 * * 6'               # Saturday 07:00 IST
   workflow_dispatch:
     inputs:
+      strategy:
+        description: Which strategy to backtest (previous = your main one, updated = your secondary one). Run once each to compare.
+        type: choice
+        options: [previous, updated]
+        default: previous
       top:
         description: How many of the most liquid Nifty 500 stocks (0 = all)
         default: '250'
@@ -58,6 +63,7 @@ jobs:
         env:
           PYTHONWARNINGS: ignore
           SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}
+          PLAYBOOK_V2: ${{ github.event.inputs.strategy == 'updated' && 'on' || github.event.inputs.strategy == 'previous' && 'off' || vars.PLAYBOOK_V2 }}     # your updated strategy is the SECONDARY one: off unless this repo variable is on
           TOP_IN: ${{ inputs.top }}
           VAR_IN: ${{ inputs.variants }}
           QUICK_IN: ${{ inputs.quick }}

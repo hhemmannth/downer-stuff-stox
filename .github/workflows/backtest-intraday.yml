@@ -9,6 +9,11 @@ on:
     - cron: '0 3 * * 6'                # Saturday 08:30 IST
   workflow_dispatch:
     inputs:
+      strategy:
+        description: Which strategy to backtest (previous = your main one, updated = your secondary one). Run once each to compare.
+        type: choice
+        options: [previous, updated]
+        default: previous
       top:
         description: How many of the most liquid Nifty 500 stocks for intraday
         default: '100'
@@ -51,6 +56,8 @@ jobs:
       - name: Replay
         env:
           PYTHONWARNINGS: ignore
+          SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}
+          PLAYBOOK_V2: ${{ github.event.inputs.strategy == 'updated' && 'on' || github.event.inputs.strategy == 'previous' && 'off' || vars.PLAYBOOK_V2 }}     # your updated strategy is the SECONDARY one: off unless this repo variable is on
           TOP_IN: ${{ inputs.top }}
           DEEP_IN: ${{ inputs.deep }}
           OPT_IN: ${{ inputs.options }}

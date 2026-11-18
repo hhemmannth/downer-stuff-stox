@@ -19,7 +19,8 @@ permissions:
 
 env:
   PYTHONWARNINGS: ignore              # keeps the log readable (yfinance + pandas 3 deprecation spam)
-  SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}       # order block rule: empty or on = the LuxAlgo rule your charts draw; set the variable to off for the older last-down-candle rule
+  SWING_LUX_OB: ${{ vars.SWING_LUX_OB }}       # order block rule: empty or off = the older last-down-candle rule (default); on = the LuxAlgo rule (tested worse on swing)
+  PLAYBOOK_V2: ${{ vars.PLAYBOOK_V2 }}     # your updated strategy is the SECONDARY one: off unless this repo variable is on
 
 concurrency:
   group: market-loop
@@ -52,6 +53,9 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           PAGE_URL: ${{ vars.PAGE_URL }}
           NTFY_MIN_SCORE: ${{ vars.NTFY_MIN_SCORE || '6' }}
+          MIN_SCORE: ${{ vars.MIN_SCORE }}
+          MAX_TRADES_PER_DAY: ${{ vars.MAX_TRADES_PER_DAY }}
+          APLUS_OVERFLOW: ${{ vars.APLUS_OVERFLOW }}
           NTFY_STATUSES: ${{ vars.NTFY_STATUSES || 'TRIGGER' }}
           NTFY_UPDATES: ${{ vars.NTFY_UPDATES || 'swing' }}
           NTFY_EVENTS: ${{ vars.NTFY_EVENTS || 'on' }}
