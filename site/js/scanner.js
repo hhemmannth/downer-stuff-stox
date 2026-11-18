@@ -4,6 +4,7 @@
 const SC = App.scanner = {};
 /* A swing setup your rules hold back (ran away, sector falling, under 2R room, ...) stays listed with its reason but is not counted as actionable. */
 SC.held = s => (s.holds || []).length > 0 || String(s.status || '').startsWith('WATCH');
+const STG_V2 = { 5: ['Entry', '1H closed above the 9 EMA on volume: take it if the checklist is clean'], 4: ['1H confirmed', 'entry window passed: wait for a new pullback'] };       // your updated rule (the 1H reclaim is the entry); swing.json says playbook v2
 const STG = { 5: ['Entry', '15m trigger fired: take it if the checklist is clean'], 4: ['1H confirmed', 'wait for the 15m precision entry'], 3: ['In zone', 'wait for the 1H confirmation'], 2: ['Set alert', 'BOS done: wait for the pullback'], 1: ['Developing', 'CHoCH only: wait for the BOS'] };
 const stCls = it => it.status.startsWith('WATCH') ? 'hold' : 's' + (it.stage || (it.status === 'TRIGGERED' ? 5 : it.status.startsWith('WATCH') ? 3 : 2));
 const key = (sec, it) => `${sec}|${it.symbol}|${it.direction}|${it.bos_date}`;
@@ -55,7 +56,7 @@ const meta = d => d ? `<span class="pill info">${esc(dateIST(d.generated_at))} $
 const SU = () => App.ui.sw || (App.ui.sw = { view: 'setups', stage: 'all', grade: 'all', q: '' });
 App.pages.swing = () => {
   const u = SU(), d = App.data.swing;
-  let h = `<div class="ph"><div><h1>Swing scanner</h1><p>Nifty 500 · long only</p>${App.ui.flow(['Weekly location', '1D CHoCH · BOS', 'FVG + OB · fib', '1H 9 EMA close · 1.5× vol', '15m entry'])}</div><span class="sp"></span>${meta(d)}</div>`;
+  let h = `<div class="ph"><div><h1>Swing scanner</h1><p>Nifty 500 · long only</p>${App.ui.flow((d || {}).playbook === 'v2' ? ['Weekly location', '1D CHoCH · BOS', 'FVG + OB · fib', '1H 9 EMA close · vol above 20-bar avg = entry'] : ['Weekly location', '1D CHoCH · BOS', 'FVG + OB · fib', '1H 9 EMA close · 1.5× vol', '15m entry'])}</div><span class="sp"></span>${meta(d)}</div>`;
   h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">${viewSeg('swing', u.view)}</div>`;
   if (u.view !== 'setups') return h + ledgerView('swing', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No swing data yet', 'Scans run before the open, after each 1H close and after the close.')}</div></div>`;
@@ -66,7 +67,7 @@ App.pages.swing = () => {
   const links = [5, 4, 3, 2, 1].map((k, i) => `<path d="M0,50 C55,50 45,${ys[i]} 100,${ys[i]}" class="${sel === String(k) ? 'on' : ''}${k >= 4 && cnt(k) ? ' live' : ''}"/>`).join('');
   h += `<div class="hero-pipe" style="margin-bottom:14px"><div class="hp-orb"><canvas data-orb data-energy="${Math.min(1, (ready * 3 + inplay / 6) / 12).toFixed(2)}" aria-hidden="true"></canvas><div class="hp-cap"><b>Nifty 500</b><small>${d.scanned || ''} scanned</small></div></div>
     <svg class="hp-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${links}</svg>
-    <div class="pipeline hp-nodes">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${STG[k][1]}</div></button>`).join('')}</div>
+    <div class="pipeline hp-nodes">${[5, 4, 3, 2, 1].map(k => `<button class="pipe p${k}" type="button" data-stage="${k}" aria-pressed="${String(u.stage) === String(k)}"><div class="k">${k}. ${STG[k][0]}</div><div class="v">${cnt(k)}</div><div class="d">${(((d || {}).playbook === 'v2' && STG_V2[k]) || STG[k])[1]}</div></button>`).join('')}</div>
     <div class="hp-panel"><div class="hp-main"><div class="cap">Swing scan</div><div class="big">${ready}</div><div class="sub">ready: 1H confirmed or entry</div>
       <div class="hp-kv"><span>In play</span><b>${inplay}</b><span>Listed</span><b>${S.length}</b><span>Held back</span><b>${nHeld}</b><span>Full scan</span><b>${esc(hmIST(d.generated_at))}</b><span>15m entries</span><b>${d.fast_at ? esc(hmIST(d.fast_at)) : 'hourly'}</b></div></div>
       ${(() => { const P = S.filter(s => s.stage >= 2 && !SC.held(s)), sec = {}; P.forEach(s => { const k = s.sector || 'Other'; sec[k] = (sec[k] || 0) + 1; });         // what the in-play setups are made of
@@ -113,7 +114,7 @@ function bindView(sec, u) { $$(`[data-seg="view_${sec}"]`).forEach(b => b.onclic
 const OU = () => App.ui.op || (App.ui.op = { view: 'setups' });
 App.pages.options = () => {
   const u = OU(), d = App.data.options;
-  let h = `<div class="ph"><div><h1>Nifty options</h1><p>Nifty · strike by delta and India VIX</p>${App.ui.flow(['1H alignment', '15m bias', '5m CHoCH + BOS', 'FVG + OB pullback', '9 EMA close'])}</div><span class="sp"></span>${meta(d)}</div>
+  let h = `<div class="ph"><div><h1>Nifty options</h1><p>Nifty · strike by delta and India VIX</p>${App.ui.flow((d || {}).playbook === 'v2' ? ['1H trend', '15m CHoCH + BOS', 'FVG + OB + fib pullback', '5m 9 EMA close'] : ['1H alignment', '15m bias', '5m CHoCH + BOS', 'FVG + OB pullback', '9 EMA close'])}</div><span class="sp"></span>${meta(d)}</div>
     <div style="margin-bottom:14px">${viewSeg('options', u.view)}</div>`;
   if (u.view !== 'setups') return h + ledgerView('options', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No options data yet', 'Runs every 5 minutes during market hours.')}</div></div>`;
@@ -133,7 +134,7 @@ App.binds.options = () => bindView('options', OU());
 const IU = () => App.ui.in || (App.ui.in = { view: 'setups', side: 'all' });
 App.pages.intraday = () => {
   const u = IU(), d = App.data.intraday;
-  let h = `<div class="ph"><div><h1>Intraday</h1><p>Liquid Nifty 500 · long and short · MIS, out by 15:10</p>${App.ui.flow(['15m CHoCH', '5m CHoCH + BOS', 'FVG + OB pullback', '9 EMA close · 1.5× vol'])}</div><span class="sp"></span>${meta(d)}</div>
+  let h = `<div class="ph"><div><h1>Intraday</h1><p>Liquid Nifty 500 · long and short · MIS, out by 15:10</p>${App.ui.flow((d || {}).playbook === 'v2' ? ['1H trend', '15m CHoCH + BOS', 'FVG + OB + fib pullback', '5m 9 EMA close · vol above 20-bar avg'] : ['15m CHoCH', '5m CHoCH + BOS', 'FVG + OB pullback', '9 EMA close · 1.5× vol'])}</div><span class="sp"></span>${meta(d)}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${viewSeg('intraday', u.view)}${u.view === 'setups' ? App.ui.seg('inside', [['all', 'Both'], ['long', 'Long'], ['short', 'Short']], u.side) : ''}</div>`;
   if (u.view !== 'setups') return h + ledgerView('intraday', u.view);
   if (!d) return h + `<div class="card"><div class="bd">${App.ui.empty('No intraday data yet', '')}</div></div>`;
@@ -240,12 +241,12 @@ function pineText(it) {
   return L.join('\n');
 }
 /* Pre-trade check: a compact badge in the corner of the order ticket. Portfolio heat for THIS symbol (its sector cluster, what you already hold
-   in that sector, stocks that move with it) and your daily rule (2 trades a day, more only if A+). Review it before you place the order. */
+   in that sector, stocks that move with it) and your daily rule (a strict 2 trades a day). Review it before you place the order. */
 SC.preCheck = function (it, sec) {
   const d = App.data.swing || {}, ht = d.heat || {}, map = (App.lazyNow('sectors') || {}).map || {}, sym = (it.symbol || '').toUpperCase(), sector = it.sector || map[sym] || '';
   const lines = [], rs = App.journal.riskStatus(); let lvl = 'ok';
   const warn = (m, bad) => { lines.push([bad ? 'bad' : 'warn', m]); lvl = bad || lvl === 'bad' ? 'bad' : 'warn'; };
-  if (rs.trades >= rs.S.maxIntra) { if (it.grade === 'A+') lines.push(['good', `${rs.trades} trades today: past your base ${rs.S.maxIntra}, allowed because this one is A+.`]); else warn(`${rs.trades} trades today and this one is ${esc(it.grade || 'ungraded')}: past ${rs.S.maxIntra} a day only A+ is allowed. Skip it.`, true); }
+  if (rs.trades >= rs.S.maxIntra) warn(`${rs.trades} trades today: your limit is ${rs.S.maxIntra} a day, strict. Skip it, even an A+ waits for tomorrow.`, true);
   else lines.push(['good', `${rs.trades} of ${rs.S.maxIntra} trades today.`]);
   if (it.grade !== 'A+') warn(`Grade ${esc(it.grade || '-')} ${it.score}/10: your backtests count A+ only (8 to 10).`);
   if (sec === 'swing' || sec === 'positional') {

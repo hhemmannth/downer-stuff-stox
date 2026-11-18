@@ -31,6 +31,9 @@ function paintMfa() {
     App.toast('Two-factor is off'); await mfaLoad(); paintMfa(); };
 }
 async function enroll() {
+  /* An earlier set-up that was never finished (the QR shown, then the page closed) leaves an unverified factor behind. Supabase refuses
+     new factors after a few of those, so turning two-factor on failed with an error. Clear the unfinished ones first. */
+  try { const f = await App.sb.auth.mfa.listFactors(); for (const x of ((f.data && f.data.all) || []).filter(x => x.factor_type === 'totp' && x.status !== 'verified')) await App.sb.auth.mfa.unenroll({ factorId: x.id }); } catch (e) { }
   const { data, error } = await App.sb.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'DownerStuff ' + new Date().toISOString().slice(0, 16).replace('T', ' ') });
   if (error) { App.toast(error.message); return; }
   const bg = document.createElement('div'); bg.className = 'modal-bg';

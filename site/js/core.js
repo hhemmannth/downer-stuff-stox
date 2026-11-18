@@ -267,22 +267,49 @@ function gateView(msg, fatal) {
 /* Two-factor: when an account has an authenticator app set up, a password alone is not enough. Supabase reports the session as "aal1" (password only)
    and wants "aal2" (password and code). Until the code is entered, nothing in the app is built and no data is loaded. */
 async function needsCode() {
-  try { const { data } = await App.sb.auth.mfa.getAuthenticatorAssuranceLevel(); return !!data && data.nextLevel === 'aal2' && data.currentLevel !== 'aal2'; } catch (e) { return false; }
+  /* Fails CLOSED (17 Nov 2026). Before, any error here (a network blip, an expired token being refreshed, a change in the sign-in library)
+     returned false, so the app opened on the password alone: two-factor was skipped without a word, and with require_2fa.sql in place the
+     journal then refused to load. Now an error asks for the code if the account has an authenticator, and otherwise shows a retry screen. */
+  let res; try { res = await App.sb.auth.mfa.getAuthenticatorAssuranceLevel(); } catch (e) { res = { data: null, error: e }; }
+  const data = res && res.data;
+  if (data && !res.error) return data.nextLevel === 'aal2' && data.currentLevel !== 'aal2';
+  try { const f = await App.sb.auth.mfa.listFactors(); if (f && !f.error && f.data) return ((f.data.totp || []).length > 0); } catch (e) { }
+  throw new Error((res && res.error && res.error.message) || 'Could not check two-factor status.');
+}
+/* The two-factor check could not reach Supabase: never open the app, offer a retry. Resolves when the check has an answer. */
+function checkCode() {
+  return new Promise(done => {
+    const attempt = async () => { try { done(await needsCode()); } catch (e) { paint(e.message); } };
+    const paint = msg => {
+      let g = $('#gate'); if (!g) { g = document.createElement('div'); g.id = 'gate'; document.body.appendChild(g); }
+      const html = `<form class="gate-card" id="gateR" novalidate><div class="gate-mark"><span class="logo">DS</span><div><b>DownerStuff</b><small>Private trading desk</small></div></div>
+        <h1>Checking two-factor</h1><p class="gate-sub">The sign-in service did not answer, so the desk stays locked. Check your connection and try again.</p>
+        <p class="gate-msg" id="gMsg" role="alert">${esc(msg || '')}</p><button class="btn primary gate-btn" id="gBtn" type="submit">Try again</button>
+        <p class="gate-sub" style="margin-top:12px"><a href="#" id="gOut">Sign out</a></p></form>`;
+      let ok0 = false; if (App.gateMount) { try { App.gateMount(g, html); ok0 = true; } catch (e) { console.error(e); } } if (!ok0) g.innerHTML = html;
+      g.onclick = async e => { if (e.target.id === 'gOut') { e.preventDefault(); try { await App.sb.auth.signOut(); } catch (x) { } location.reload(); } };
+      g.onsubmit = ev => { ev.preventDefault(); const b = $('#gBtn', g); if (b) { b.disabled = true; b.textContent = 'Checking…'; } attempt(); };
+    };
+    attempt();
+  });
 }
 function stepUp() {
   return new Promise(async done => {
     let g = $('#gate'); if (!g) { g = document.createElement('div'); g.id = 'gate'; document.body.appendChild(g); }
-    let factor = null; try { const { data } = await App.sb.auth.mfa.listFactors(); factor = ((data && data.totp) || [])[0] || null; } catch (e) { }
+    let factor = null, loadErr = ''; try { const { data, error } = await App.sb.auth.mfa.listFactors(); if (error) throw error; factor = ((data && data.totp) || [])[0] || null; } catch (e) { loadErr = e.message || 'Could not load your authenticator.'; }
     const paint = msg => { const html = `<form class="gate-card" id="gateM" novalidate><div class="gate-mark"><span class="logo">DS</span><div><b>DownerStuff</b><small>Private trading desk</small></div></div>
       <h1>Two-factor code</h1><p class="gate-sub">Open your authenticator app and enter the 6-digit code for DownerStuff.</p>
       <div class="field"><label for="gCode">Code</label><input id="gCode" inputmode="numeric" autocomplete="one-time-code" maxlength="9" required></div>
       <p class="gate-msg" id="gMsg" role="alert">${msg ? esc(msg) : ''}</p><button class="btn primary gate-btn" id="gBtn" type="submit">Verify</button>
       <p class="gate-sub" style="margin-top:12px"><a href="#" id="gOut">Use a different account</a></p></form>`;
       let done0 = false; if (App.gateMount) { try { App.gateMount(g, html); done0 = true; } catch (e) { console.error(e); } } if (!done0) g.innerHTML = html; setTimeout(() => { const i = $('#gCode', g); if (i) i.focus(); }, 50); };
-    if (!factor) { paint('This account needs a code, but no authenticator app was found on it. Ask for help before signing out.'); $('#gBtn', g).disabled = true; }
+    if (!factor && loadErr) { paint(loadErr + ' Check your connection, then tap Verify to try again.'); }
+    else if (!factor) { paint('This account needs a code, but no authenticator app was found on it. Ask for help before signing out.'); $('#gBtn', g).disabled = true; }
     else paint('');
     g.onclick = async e => { if (e.target.id === 'gOut') { e.preventDefault(); try { await App.sb.auth.signOut(); } catch (x) { } location.reload(); } };
-    g.onsubmit = async ev => { ev.preventDefault(); if (!factor) return; const m = $('#gMsg', g), b = $('#gBtn', g), code = $('#gCode', g).value.replace(/\s+/g, '');
+    g.onsubmit = async ev => { ev.preventDefault();
+      if (!factor && loadErr) { try { const { data, error } = await App.sb.auth.mfa.listFactors(); if (error) throw error; factor = ((data && data.totp) || [])[0] || null; loadErr = ''; if (!factor) { paint('No authenticator app was found on this account.'); return; } } catch (e) { $('#gMsg', g).textContent = (e.message || 'Still no answer.') + ' Try again in a moment.'; return; } }
+      if (!factor) return; const m = $('#gMsg', g), b = $('#gBtn', g), code = $('#gCode', g).value.replace(/\s+/g, '');
       if (!/^\d{6}$/.test(code)) { m.textContent = 'Enter the 6 digits from your app.'; return; }
       b.disabled = true; b.textContent = 'Checking…'; m.textContent = '';
       try { const ch = await App.sb.auth.mfa.challenge({ factorId: factor.id }); if (ch.error) throw ch.error;
@@ -294,15 +321,15 @@ async function gate() {
   if (!window.supabase) { gateView('The sign-in service did not load. Check your connection and reload the page.', true); return null; }
   App.sb = window.supabase.createClient(App.SUPA.url, App.SUPA.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
   try { const { data } = await App.sb.auth.getSession(); const u = data && data.session && data.session.user;
-    if (allowedUser(u)) { if (await needsCode()) { await stepUp(); const g0 = $('#gate'); if (g0) g0.remove(); } return u; } if (u) await App.sb.auth.signOut(); } catch (e) { console.error(e); }
+    if (allowedUser(u)) { if (await checkCode()) await stepUp(); const g0 = $('#gate'); if (g0) g0.remove(); return u; } if (u) await App.sb.auth.signOut(); } catch (e) { console.error(e); }
   return new Promise(done => {
     const g = gateView(''); const f = $('#gateF', g); setTimeout(() => { const e = $('#gEm', g); if (e) e.focus(); }, 50);
-    f.onsubmit = async ev => { ev.preventDefault(); const m = $('#gMsg', g), b = $('#gBtn', g), em = $('#gEm', g).value.trim(), pw = $('#gPw', g).value;
+    f.onsubmit = async ev => { ev.preventDefault(); ev.stopPropagation(); const m = $('#gMsg', g), b = $('#gBtn', g), em = $('#gEm', g).value.trim(), pw = $('#gPw', g).value;
       if (!em || !pw) { m.textContent = 'Enter your email and password.'; return; }
       b.disabled = true; b.textContent = 'Signing in…'; m.textContent = '';
       try { const { data, error } = await App.sb.auth.signInWithPassword({ email: em, password: pw }); if (error) throw error;
         if (!allowedUser(data.user)) { await App.sb.auth.signOut(); throw new Error('This account does not have access.'); }
-        if (await needsCode()) { await stepUp(); }
+        if (await checkCode()) { await stepUp(); }
         g.remove(); done(data.user); }
       catch (e) { m.textContent = /invalid/i.test(e.message || '') ? 'Wrong email or password.' : (e.message || 'Sign-in failed.'); b.disabled = false; b.textContent = 'Sign in'; $('#gPw', g).select(); } };
   });

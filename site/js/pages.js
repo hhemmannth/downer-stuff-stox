@@ -6,9 +6,23 @@ const JR = App.journal, SC = App.scanner;
 /* ---------- system health ---------- */
 /* "journal-20261110-2237-ab12cd34.dsbk" -> "10 Nov 22:37" */
 const bkName = n => { const m = String(n || '').match(/^journal-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})-/); return m ? `${+m[3]} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][+m[2] - 1]} ${m[4]}:${m[5]}` : '-'; };
-const HEALTH_FILES = ['live', 'swing', 'all', 'options', 'intraday', 'market', 'news'], HEALTH_LAZY = HEALTH_FILES.concat(['readiness', 'backup']);
+const HEALTH_FILES = ['live', 'swing', 'all', 'options', 'intraday', 'market', 'news'], HEALTH_LAZY = HEALTH_FILES.concat(['readiness', 'backup', 'gold_loop']);
 const FRESH = [['swing', 'Swing', 'hourly at :25 in market hours, plus 08:37 and 16:17', 100], ['options', 'Nifty options', 'every 5 minutes', 12], ['intraday', 'Intraday', 'every 5 minutes', 12],
   ['market', 'Market', 'every 5 minutes', 12], ['news', 'News & events', 'about every 30 minutes', 45]];
+/* Self-diagnosis (17 Nov 2026): one plain sentence on WHY the loop is not running, from what the app can see, and what the other loop did about it. */
+const whyDown = (hb, age) => {
+  const g = App.lazyNow('health/gold_loop'), gd = g && g.guard, rd = App.lazyNow('health/readiness'), timer = rd && (rd.checks || []).find(c => c.name === 'Outside timer');
+  const parts = [];
+  if (!hb || !hb.started || dateIST(hb.started) !== dateIST(new Date().toISOString())) parts.push('No market loop has started today: GitHub skipped the 09:05 start and its backups.');
+  else if (hb.state === 'finished') parts.push(`The last loop finished at ${hmIST(hb.updated_at || hb.last_tick)} and the next one has not started yet.`);
+  else parts.push(`The loop's last tick was ${age != null ? Math.round(age) + ' min ago' : 'unknown'}: the job is stuck or was cancelled.`);
+  if (gd) parts.push(`The gold loop checked at ${esc(hmIST(gd.at))}: ${esc(gd.action)} (${esc(gd.reason)}).`);
+  else parts.push('The gold loop has not checked it yet (it restarts a dead market loop within about 10 minutes when it is running).');
+  if (timer && (timer.status === 'warn' || timer.status === 'fail')) parts.push('The outside timer (cron-job.org) is not set up or did not fire, so restarts depend on GitHub\'s own schedule.');
+  return parts.join(' ') + ' To start it now: open market-loop on GitHub and press Run workflow.';
+};
+const guardLine = () => { const g = App.lazyNow('health/gold_loop'), gd = g && g.guard;
+  return gd ? `<p class="help" style="margin-top:8px">Watched by the gold loop: last check ${esc(hmIST(gd.at))}, ${esc(gd.action)} (${esc(gd.reason)}).</p>` : ''; };
 App.pages.health = () => {
   const hb = App.data['health/loop'], live = App.marketOpen() && App.tradingDay(), age = App.loopAge(), wf = App.actionsUrl() + '/workflows/market-loop.yml';
   const st = !hb ? ['bad', 'No heartbeat yet'] : hb.state === 'running' ? (age != null && age <= 11 ? ['ok', 'Running'] : ['bad', 'Silent']) : ['', 'Finished for the day'];
@@ -20,7 +34,7 @@ App.pages.health = () => {
     <span>Ticks this run</span><b>${hb ? hb.ticks : '-'}</b><span>Last scan took</span><b>${hb && hb.last_scan_s != null ? hb.last_scan_s + ' s' : '-'}${hb && hb.last_rc ? ' <span class="bad">(exit ' + hb.last_rc + ')</span>' : ''}</b>
     <span>Last publish</span><b class="${hb && String(hb.publish || '').startsWith('failed') ? 'bad' : ''}">${esc(hb ? hb.publish || '-' : '-')}</b></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${hb && hb.run_url ? `<a class="btn sm" href="${esc(hb.run_url)}" target="_blank" rel="noopener">Open this run</a>` : ''}<a class="btn sm" href="${wf}" target="_blank" rel="noopener">market-loop on GitHub</a></div>
-    ${live && st[0] !== 'ok' ? `<p class="help bad" style="margin-top:10px">The loop should be running now. The watchdog restarts it within about 10 minutes, or open market-loop on GitHub and press Run workflow.</p>` : ''}</div></div>`;
+    ${live && st[0] !== 'ok' ? `<p class="help bad" style="margin-top:10px">${whyDown(hb, age)}</p>` : ''}${guardLine()}</div></div>`;
   h += `<div class="card"><div class="hd"><h2>Data freshness</h2><span class="cap">${live ? 'market hours: late sections are red' : 'market closed: ages are expected to grow'}</span></div><div class="bd"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Section</th><th>Updated</th><th>Expected</th><th class="n">Status</th></tr></thead><tbody>
     ${FRESH.map(([k, name, every, lim]) => { const d = App.data[k], g = d && d.generated_at, a = g ? (Date.now() - new Date(g)) / 6e4 : null, late = live && (a == null || a > lim);
       return `<tr><td><b>${name}</b></td><td>${g ? `${dateIST(g)} ${hmIST(g)} <small class="muted">${esc(ago(g))}</small>` : '-'}</td><td><small>${every}</small></td><td class="n"><span class="pill ${late ? 'bad' : g ? 'ok' : ''}">${late ? 'Late' : g ? 'OK' : 'No data'}</span></td></tr>`; }).join('')}
@@ -47,7 +61,8 @@ App.pages.health = () => {
   h += `<div class="card"><div class="hd"><h2>Symbols with no data</h2></div><div class="bd">${fl.length ? fl.map(([k, f]) => `<p style="margin:0 0 8px"><b>${k}</b> <small class="muted">${f.length}</small><br><small>${f.map(esc).join(', ')}</small></p>`).join('') + '<p class="help">Yahoo returned nothing for these. Usually a renamed, merged or newly listed symbol. One or two is normal; dozens means Yahoo was blocking that run.</p>' : App.ui.empty('None', 'Every symbol returned data in the last scans.')}</div></div>`;
   h += `<div class="card"><div class="hd"><h2>What keeps it running</h2></div><div class="bd"><ul class="ins">
     <li><i></i><span><b>market-loop</b> scans every 5 minutes from about 09:05 to 15:40 and runs the swing scan hourly at :25.</span></li>
-    <li><i></i><span><b>watchdog</b> checks every 10 minutes in market hours: it starts the loop if none is running and restarts it if it goes silent for 20 minutes. It pushes a phone alert only when it acts.</span></li>
+    <li><i></i><span><b>watchdog</b> checks every 10 minutes in market hours: it starts the loop if none is running and restarts it if it goes silent for 20 minutes. It pushes a phone alert only when it acts, and also when GitHub refuses to start the loop.</span></li>
+    <li><i></i><span><b>gold-loop</b> runs all week and checks the market loop on every tick; the market loop checks the gold loop the same way. Neither depends on GitHub's schedule, so a skipped schedule no longer leaves the loop down for hours.</span></li>
     <li><i></i><span><b>readiness</b> (08:50), <b>digest</b> (08:45 and 15:45) and <b>ci</b> (tests on every upload, with a <b>rollback</b> button) keep you informed and protected. Problems with a scan or a data source reach your phone with a cool-down so they never flood it.</span></li>
     <li><i></i><span>GitHub sometimes skips scheduled runs. For on-time starts, point a cron-job.org job at the <b>watchdog</b> workflow every 10 minutes from 09:05 to 15:25 (setup in the README).</span></li></ul></div></div>`;
   return h + `</div></div>`;
@@ -77,7 +92,7 @@ function liveNowCard() {
   }
   if (sw.generated_at) {
     const S = sw.setups || [], held = s => SC.held(s), ent = S.filter(s => s.stage === 5 && !held(s)).length, conf = S.filter(s => s.stage === 4 && !held(s)).length;
-    rows.push(row('Swing', '#/swing', `${ent ? `<span class="hot">${ent} entry</span> · ` : 'No entry · '}${conf} 1H confirmed waiting for the 15m entry · ${sw.fast_at ? `15m checked ${esc(hmIST(sw.fast_at))}` : `scanned ${esc(hmIST(sw.generated_at))}`}`));
+    rows.push(row('Swing', '#/swing', `${ent ? `<span class="hot">${ent} entry</span> · ` : 'No entry · '}${conf} 1H confirmed ${sw.playbook === 'v2' ? '(entry window passed)' : 'waiting for the 15m entry'} · ${sw.fast_at ? `15m checked ${esc(hmIST(sw.fast_at))}` : `scanned ${esc(hmIST(sw.generated_at))}`}`));
   }
   return `<div class="card"><div class="hd"><h2>Live now</h2><span class="cap">${App.marketOpen() ? 'market open' : 'market closed'}</span></div><div class="bd">${rows.join('')}</div></div>`;
 }
@@ -190,8 +205,10 @@ App.pages.playbook = () => {
   const tbl = (head, rows) => `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head.map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td>${i === 0 ? '<b>' + c + '</b>' : c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   return `<div class="ph"><div><h1>Playbook & rules</h1><p>The steps the scanner checks, and your rules.</p></div></div>
     <div class="card" style="margin-bottom:14px"><div class="hd"><h2>Swing playbook: 1D, 1H and 15m</h2><span class="cap">illustrative chart, not a forecast</span></div><div class="bd" id="pb">${pbBody(App.ui.pbs || 0)}</div></div>
-    <div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>Swing: timeframes</h2></div><div class="bd">${tbl(['Timeframe', 'Job', 'What you check'], [['Weekly', 'Location', 'Trend up, price near support'], ['1D', 'Structure and zone', 'Sweep, CHoCH, BOS, FVG + OB, fib, round number'], ['1H', 'Confirmation', 'Rejection, 9 EMA reclaim, volume at least 1.5x'], ['15m', 'Precision entry', 'CHoCH, BOS and FVG inside the zone, retest, trigger']])}
-      <p class="help" style="margin-top:8px">Plan: stop below the daily OB with a buffer · T1 1R partial · T2 2R · T3 3R · trail by daily structure, never widen. Check results date and futures OI before holding.</p></div></div>
+    <div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>Swing: timeframes</h2></div><div class="bd">${tbl(['Timeframe', 'Job', 'What you check'], [['Weekly', 'Location', 'Trend up, price near support'], ['1D', 'Structure and zone', 'Sweep, CHoCH, BOS, FVG + OB, fib, round number'], ['1H', 'Confirmation', 'Rejection, 9 EMA reclaim, volume at least 1.5x to confirm (2x or more to take the trade)'], ['15m', 'Precision entry', 'CHoCH, BOS and FVG inside the zone, retest, trigger']])}
+      <p class="help" style="margin-top:8px">Plan: stop below the daily OB with a buffer · T1 1R partial · T2 2R · T3 3R · trail by daily structure, never widen. Check results date and futures OI before holding.</p>
+      <p class="help" style="margin-top:8px"><b>Your daily rule since 18 Nov 2026:</b> at most 2 trades a day across swing, options and intraday together (gold has its own 2 across its three styles), only A+ (8 or more), the best scores first. Strict: even an A+ waits for tomorrow. A setup the rule does not take stays listed as "not taken" with the reason.</p>
+      <p class="help" style="margin-top:8px"><b>Held back as WATCH (from the backtests of your published trades):</b> <b>swing</b>: stop under 7% of price, zone below 2/2, 1H volume under 2x, Mixed / transitioning market · <b>stock intraday</b>: no new trade from 14:00, stop under 0.5% · <b>options, gold intraday, positional</b>: zone below 2/2 (positional also the Mixed market) · <b>gold swing</b>: zone below 2/2, 1H volume under 2x. They stay on the list with the reason and are not counted as entries.</p></div></div>
     <div class="card"><div class="hd"><h2>Nifty options: timeframes</h2></div><div class="bd">${tbl(['Timeframe', 'Job', 'What you check'], [['1H', 'Alignment', 'Price on the same side of the 9 EMA as your trade'], ['15m', 'Bias and context', 'Previous-day high or low sweep, CHoCH, 9 EMA'], ['5m', 'Setup and trigger', 'CHoCH + BOS, FVG + OB, fib, pullback, 9 EMA close']])}
       <p class="help" style="margin-top:8px">Skip expiry-day afternoons and big event days. Convert the index stop to premium (points × delta) and size so that loss is your fixed risk. Stop after two losses in a day.</p></div></div></div>
     <div class="card" style="margin-bottom:14px"><div class="hd"><h2>Scorecard</h2></div><div class="bd">${tbl(['Category', 'Points', 'What counts'], [['Structure', '0 to 2', '1D CHoCH + BOS (options: 15m CHoCH + 5m CHoCH + BOS)'], ['Zone', '0 to 2', 'FVG + OB overlap and quality'], ['Confirmation', '0 to 3', '1H rejection + 9 EMA reclaim + relative volume'], ['Context', '0 to 3', 'Key level, fib 0.618, MTF EMA (futures OI: you check), capped at 3']])}<p class="help" style="margin-top:8px">A+ 8–10 · A 6–7 · B 4–5 observe · under 4 no trade.</p></div></div>
