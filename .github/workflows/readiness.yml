@@ -41,6 +41,7 @@ jobs:
       - name: Check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}

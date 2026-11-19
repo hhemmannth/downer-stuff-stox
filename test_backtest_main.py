@@ -80,6 +80,6 @@ os.environ['MAX_TRADES_PER_DAY'] = '1'; rc = bt.main(['--resim', '--out', q]); o
 rq = RD(q, 'backtest_options.json'); check('quick mode: re-applies new rules to a saved segment in seconds (and skips the segments that have not run yet without failing)', rc == 0 and rq['account']['max_per_day'] == 1 and rq['params'].get('quick') and not os.path.exists(os.path.join(q, 'backtest_positional.json')))
 sent = []
 import notify; notify.post = lambda base, topic, title, body, tags, click, **k: sent.append((title, body)); os.environ['NTFY_TOPIC'] = 't'
-bt.notify_result(out, 'success'); check('phone message: one line per playbook that has a result, with trades, win rate, expectancy and profit factor', sent and sent[-1][0] == 'Backtest finished' and 'Nifty options:' in sent[-1][1] and 'profit factor' in sent[-1][1], str(sent[-1] if sent else ''))
+bt.notify_result(out, 'success'); check('phone message: one line per playbook that has a result, with trades, win rate, expectancy and profit factor', sent and sent[-1][0] == 'Backtest finished' and 'Nifty options (THEORETICAL, estimated premiums):' in sent[-1][1] and 'profit factor' in sent[-1][1], str(sent[-1] if sent else ''))
 bt.notify_result(tempfile.mkdtemp(), 'success'); check('phone message: with no result files it says so instead of claiming success', sent[-1][0] == 'Backtest failed')
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED'); raise SystemExit(1 if fails else 0)

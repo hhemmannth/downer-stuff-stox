@@ -58,6 +58,23 @@ def gate(trades, rules=None):
 def start_stamp(rules=None):
     f = (rules or rules_from_env()).get('window_from'); return pd.Timestamp(f) if f else None
 
+def replay_start(rules=None):
+    """Where a replay starts: the earlier of your window (1 Apr 2026) and the validation window (evaluation.py, default 1 Apr 2025), so the
+    trades the rules were NOT chosen on exist and can be scored separately. Your headline numbers still count only your window."""
+    import evaluation
+    f = start_stamp(rules); v = pd.Timestamp(evaluation.validation_from())
+    return None if f is None else min(f, v)
+
+OPTIONS_METHOD = [
+    dict(item='Actual historical option prices', used=False, how='Not used: no free source of historical NSE option prices was found (NSE bhavcopies give daily settlement prices only, not intraday premiums at your entry and exit times).'),
+    dict(item='Underlying price movement', used=True, how='Real 5-minute and 15-minute Nifty 50 candles decide every entry, stop and target (the same engine as the live scan).'),
+    dict(item='Option premiums', used=True, how='ESTIMATED with Black-Scholes at the index level and time of each leg (entry, T1, T2, exit).'),
+    dict(item='Implied volatility', used=True, how='ASSUMED: the previous day\'s India VIX close, held constant through the trade (no intraday volatility change, no skew, no smile).'),
+    dict(item='Greeks', used=True, how='Estimated from the same model: the strike is chosen by Black-Scholes delta (0.40 to 0.60, 0.50 to 0.70 late or short-dated).'),
+    dict(item='Bid-ask spread and slippage', used=False, how='Not modelled beyond the cost allowance (Rs 40 + 0.15% of premium turnover); real fills are usually worse.')]
+
+EVIDENCE = dict(historical_backtest='Historical backtest', out_of_sample='Out-of-sample backtest', paper='Paper trading', live='Actual live trading', theoretical_simulation='Theoretical options simulation')
+
 def rules_text(r):
     g = 'A+ only (score 8 to 10)' if r.get('min_score', 0) >= A_PLUS else f"score {r.get('min_score')} or more"
     return g + (f" · from {pd.Timestamp(r['window_from']).strftime('%d %b %Y')}" if r.get('window_from') else ' · all history')
@@ -74,8 +91,9 @@ SEGMENT_NOTES = {
                 'R is measured on the premium: (premium at exit - premium paid) / (premium paid - modelled premium at the index stop). Half comes off at T1, a quarter at T2, the rest at T3, the stop or 15:15, like your plan.',
                 'Costs per trade: 40 rupees brokerage plus 0.15% of the premium turnover (STT, exchange charges, GST). Lot size 65.',
                 'Free 5-minute history only reaches back about 60 days, so this view GROWS: each Saturday run adds new days and keeps the old trades.']}
-GOLD_NOTE = ('Gold = XAUUSD price action, replayed on COMEX gold futures (Yahoo GC=F), the closest free intraday history. Futures trade a few dollars away from spot '
-             '(the basis), so levels differ slightly from your broker\'s XAUUSD chart; structure and timing are the same. Times are shown in IST.')
+GOLD_NOTE = ('Instrument: XAUUSD Spot · quote currency USD · price unit USD per troy ounce · market type Spot Gold · data source Twelve Data XAU/USD spot, '
+             'checked on every download (symbol, USD, not a futures contract). Never COMEX futures (GC=F) and never MCX. Results saved before 18 Nov 2026 came from '
+             'GC=F futures: they are archived as historical futures-based analysis and are not part of these statistics. Your broker\'s XAUUSD quote can differ by its spread. Times are shown in IST.')
 GOLD_COST_NOTE = 'Costs: 0.35 dollars per ounce on a round trip (spread plus commission), taken off every trade in R. Overnight swap or financing on held positions is NOT modelled.'
 SEGMENT_NOTES.update({
     'gold_intraday': [GOLD_NOTE, 'Gold intraday = your intraday engine on gold: 5-minute structure and trigger with the 15-minute CHoCH bias, long and short, volume at least 1.5x. Entries in every session (Asia, London, New York: 04:00 to 00:30 IST; GOLD_SESSIONS=london_ny for London and New York only), everything closed by 02:00 IST.',
@@ -225,12 +243,12 @@ def _naive(ts):
     ts = pd.Timestamp(ts); return ts.tz_convert(IST).tz_localize(None) if ts.tzinfo is not None else ts
 
 def session_day(ts, tz=IST):
-    """The trading day a timestamp belongs to, on the clock whose midnight ends the daily candle (IST for NSE, UTC+2 for COMEX gold)."""
+    """The trading day a timestamp belongs to, on the clock whose midnight ends the daily candle (IST for NSE; the UTC day for XAUUSD spot daily candles)."""
     t = pd.Timestamp(ts); return (t.tz_convert(tz).tz_localize(None) if t.tzinfo is not None else t).normalize()
 
-def replay_symbol(sym, daily, h1, sector='', regimes=None, min_score=4, window_days=250, start_at=None, day_tz=IST, stock=True, cost_abs=None):
+def replay_symbol(sym, daily, h1, sector='', regimes=None, min_score=4, window_days=250, start_at=None, day_tz=IST, stock=True, cost_abs=None, cfg_extra=None):
     """All the trades the playbook would have opened on one stock. daily: OHLCV with a daily index; h1: hourly OHLCV (tz-aware IST).
-    Gold (stock=False): day_tz is the clock that ends the trading day when the daily candle ends (UTC+2 for COMEX gold, so the hours of a
+    Gold (stock=False): day_tz is the clock that ends the trading day when the daily candle ends (UTC for XAUUSD spot, matching its daily candles, so the hours of a
     session belong to the daily candle of that session and never to the one before), the NSE liquidity and locked-circuit rules are off,
     and costs are cost_abs in price units instead of a percentage."""
     import swing, signals, strategy_scanner as sc
@@ -239,6 +257,7 @@ def replay_symbol(sym, daily, h1, sector='', regimes=None, min_score=4, window_d
     sday = lambda ts: session_day(ts, day_tz)
     hdays = pd.DatetimeIndex([sday(t) for t in h1.index]); h_first = hdays[0]; lows = d.Low.values
     busy_until = None; cfg = swing.CFG; ccfg = cfg if stock else dict(cfg, **swing.GOLD_HB)         # gold swing has its own hold-back profile (swing.GOLD_HB)
+    if cfg_extra: ccfg = dict(ccfg, **cfg_extra)
     for i in range(sc.CFG['min_bars'], len(d) - 1):
         day, nxt = d.index[i], d.index[i + 1]
         if nxt < h_first or (start_at is not None and nxt < start_at): continue
@@ -396,7 +415,7 @@ def dimensions(segment, live):
 
 def report(trades, variants=(), window=None, universe=0, params=None, now=None, acct=None, segment='swing', rules=None):
     """Everything the Backtest lab page shows, from the list of trades of one segment. Only A+ trades inside the window count (see gate)."""
-    seg = SEGMENTS.get(segment, SEGMENTS['swing']); rules = rules or rules_from_env(); trades = gate(trades, rules)
+    seg = SEGMENTS.get(segment, SEGMENTS['swing']); rules = rules or rules_from_env(); raw = list(trades); trades = gate(trades, rules)
     done = [t for t in trades if t['closed']]; live = [t for t in done if not t.get('held')]; now = now or dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30)))
     rs_net = [t['r_net'] for t in live]; span_days = 1
     if live:
@@ -438,6 +457,16 @@ def report(trades, variants=(), window=None, universe=0, params=None, now=None, 
                                     verdict='Better in both halves: worth considering' if better else 'Not better in both halves: keep your current rule'))
     out['base'] = {k: base[k] for k in ('n', 'win', 'avg', 'pf')}
     a = {**ACCOUNT, **ACCOUNT_SEG.get(segment, {}), **(acct or {})}; out['account'] = a; out['scenarios'], out['scenario_curves'] = scenarios(trades, a)
+    import evaluation                                                     # 18 Nov 2026: what is evidence and what is not
+    ms = rules.get('min_score') or 0
+    out['evaluation'] = evaluation.split(raw, ms); out['walk_forward'] = evaluation.walk_forward(raw, 3, ms)
+    out['in_sample_note'] = ('These headline numbers are the DEVELOPMENT window: the 18 Nov 2026 hold-backs were chosen on these same trades, so they are in-sample '
+                             'and cannot validate the rules. Independent evidence is in the validation and out-of-sample windows only.')
+    if segment == 'options':
+        out['evidence'] = 'theoretical_simulation'; out['methodology'] = OPTIONS_METHOD
+        out['evidence_text'] = 'THEORETICAL SIMULATION with estimated option premiums. Not historical trading performance, not proof of an options edge, never combined with price-verified results.'
+    else:
+        out['evidence'] = 'historical_backtest'; out['evidence_text'] = 'Historical backtest on real candles (see the windows for in-sample and out-of-sample).'
     return out
 
 def merge_trades(old, new):
@@ -475,7 +504,8 @@ def notify_result(out, status):
     for seg, d in SEGMENTS.items():
         try:
             r = json.load(open(os.path.join(out, d['files'][0]))); n = r['summary']['net']
-            lines.append(f"{d['title']}: {n['n']} trades · win {n['win']}% · {n['avg']}R per trade after costs · profit factor {n['pf']}")
+            ev = r.get('evidence') or d.get('evidence')                        # the class stored in the result file itself (19 Nov 2026)
+            lines.append(f"{d['title']}{' (THEORETICAL, estimated premiums)' if ev == 'theoretical_simulation' else ' (in-sample window)'}: {n['n']} trades · win {n['win']}% · {n['avg']}R per trade after costs · profit factor {n['pf']}")
         except Exception: pass
     if not lines: ok = False
     body = '\n'.join(lines) if ok else 'No result file was written.'
@@ -510,7 +540,7 @@ def main(argv=None):
     nraw, _ = sc.yahoo_many(['^NSEI'], '3y', '1d'); regimes = regime_map(sc.tidy_daily(nraw['^NSEI'], now)) if '^NSEI' in nraw else {}
     import swing; swing.BENCH = sc.tidy_daily(nraw['^NSEI'], now).Close if '^NSEI' in nraw else None       # for the relative-strength confluence (replay_symbol cuts it at each day: no look-ahead)
     dsel = {s: daily[s] for s in pick if s in hourly}
-    rules = rules_from_env(); start = start_stamp(rules)
+    rules = rules_from_env(); start = replay_start(rules)
     print(f'backtest: replaying {len(dsel)} stocks on {a.workers} cores, {rules_text(rules)}', flush=True)
     trades = run_all(dsel, hourly, industries, regimes, workers=a.workers, start_at=start, min_score=rules['min_score'])
     var = []

@@ -1,0 +1,338 @@
+{
+ "versions": [
+  {
+   "version": "1.0.0",
+   "frozen_at": "2026-11-18T17:02:35+05:30",
+   "hash": "7514b8e4594cb2618b15e45a4ef05d0ba4647462c8a3be636cd2419d3cbf5056",
+   "note": "Main strategy as of 18 Nov 2026: the old (original) rules with the 18 Nov hold-backs, 2 A+ trades a day strict, XAUUSD spot for gold. Hold-backs were chosen on Apr-Nov 2026 trades, so that window is in-sample for this version; its independent evaluation starts at this freeze.",
+   "rules": {
+    "timeframes": "Swing: weekly location, 1D structure, 1H confirmation, 15m entry (long only). Intraday stocks and Nifty options: 15m bias, 5m structure and trigger. Positional: weekly structure, daily trigger. Gold (XAUUSD spot): the same engines; intraday, swing and positional, long and short.",
+    "entry": "Daily (or 5m) CHoCH then BOS with displacement; zone = order block + FVG (+ fib 0.618-0.705); pullback into the zone; confirmation = rejection and a close back over the 9 EMA on relative volume >= 1.5x (swing: same hour on earlier days); swing entry = 15m CHoCH + BOS + FVG in the zone, retest, 15m close over the 9 EMA on 1.5x; no chasing.",
+    "stop": "Below the order block / zone / pullback low minus 0.25 ATR (mirrored for shorts). Never widened.",
+    "targets": "Swing: T1 1R (half, no early breakeven), T2 2R (a quarter, stop to entry), T3 3R, trail below each new daily higher low; expiry 28 days (positional 120). Intraday/options: T1 = prior leg extreme or 1R, then 2R and 3R; stop to entry at T1; square-off 15:15 IST (gold 02:00 IST).",
+    "filters": "Score 0-10 (A+ 8-10 only taken); at most 2 new trades a day (India shared, gold separate), strict; hold-backs in holdbacks.py and swing.CFG; no options after 15:00 or on expiry afternoons, stop after 2 losses; no stock intraday from 14:00; stale data = no trade.",
+    "risk": "0.5% a trade (A+ 0.75%), open risk cap 2%, day stop 0.75%, week 2%, month half size 3% and stop 5% (journal Settings / repo variables)."
+   },
+   "evaluation_starts": "2026-11-18T17:02:35+05:30",
+   "config": {
+    "costs": {
+     "delivery_pct": 0.3,
+     "gold_usd_per_oz": 0.35,
+     "options_fixed_inr": 40.0,
+     "options_var": 0.0015,
+     "segments": {
+      "gold_intraday": null,
+      "gold_positional": null,
+      "gold_swing": null,
+      "intraday": 0.08,
+      "options": null,
+      "positional": 0.3,
+      "swing": 0.3
+     }
+    },
+    "engine": {
+     "bias_15m": {
+      "approach_atr": 1.5,
+      "atr_n": 14,
+      "disp_body_atr": 1.0,
+      "fvg_min_atr": 0.2,
+      "h_lookback": 48,
+      "lookback": 160,
+      "lux_ob": false,
+      "max_bos_age": 120,
+      "max_zone_atr": 3.0,
+      "max_zone_pct": 3.0,
+      "min_bars": 60,
+      "min_price": 0.0,
+      "min_turnover_cr": 0.0,
+      "pivot": 3,
+      "rvol_min": 1.5,
+      "rvol_n": 20,
+      "sl_buffer_atr": 0.25,
+      "slot_rvol": false,
+      "stack_gap_atr": 0.5,
+      "trigger_age": 6,
+      "trigger_max_atr": 1.0
+     },
+     "gold_no_volume": {
+      "min_hold_rvol": 0,
+      "require_volume": false
+     },
+     "gold_positional": {
+      "approach_atr": 1.5,
+      "atr_n": 14,
+      "disp_body_atr": 1.0,
+      "fvg_min_atr": 0.2,
+      "h_lookback": 40,
+      "lookback": 104,
+      "lux_ob": false,
+      "max_bos_age": 40,
+      "max_zone_atr": 3.5,
+      "max_zone_pct": 15.0,
+      "min_bars": 50,
+      "min_price": 0.0,
+      "min_turnover_cr": 0.0,
+      "pivot": 2,
+      "rvol_min": 1.5,
+      "rvol_n": 20,
+      "sl_buffer_atr": 0.25,
+      "slot_rvol": false,
+      "stack_gap_atr": 0.5,
+      "trigger_age": 3,
+      "trigger_max_atr": 1.0
+     },
+     "gold_swing_holdbacks": {
+      "hold_regimes": [],
+      "min_hold_rvol": 2.0,
+      "min_stop_pct": 0,
+      "min_zone_q": 2
+     },
+     "intraday_5m": {
+      "approach_atr": 1.5,
+      "atr_n": 14,
+      "disp_body_atr": 1.0,
+      "fvg_min_atr": 0.2,
+      "h_lookback": 48,
+      "lookback": 240,
+      "lux_ob": false,
+      "max_bos_age": 150,
+      "max_zone_atr": 3.0,
+      "max_zone_pct": 3.0,
+      "min_bars": 120,
+      "min_price": 0.0,
+      "min_turnover_cr": 0.0,
+      "pivot": 3,
+      "rvol_min": 1.5,
+      "rvol_n": 20,
+      "sl_buffer_atr": 0.25,
+      "slot_rvol": false,
+      "stack_gap_atr": 0.5,
+      "trigger_age": 6,
+      "trigger_max_atr": 1.0
+     },
+     "positional": {
+      "approach_atr": 1.5,
+      "atr_n": 14,
+      "disp_body_atr": 1.0,
+      "fvg_min_atr": 0.2,
+      "h_lookback": 40,
+      "lookback": 104,
+      "lux_ob": false,
+      "max_bos_age": 40,
+      "max_zone_atr": 3.5,
+      "max_zone_pct": 15.0,
+      "min_bars": 50,
+      "min_price": 50.0,
+      "min_turnover_cr": 20.0,
+      "pivot": 2,
+      "rvol_min": 1.5,
+      "rvol_n": 20,
+      "sl_buffer_atr": 0.25,
+      "slot_rvol": false,
+      "stack_gap_atr": 0.5,
+      "trigger_age": 3,
+      "trigger_max_atr": 1.0
+     },
+     "swing_daily": {
+      "approach_atr": 1.5,
+      "atr_n": 14,
+      "disp_body_atr": 1.0,
+      "fvg_min_atr": 0.2,
+      "h_lookback": 40,
+      "lookback": 150,
+      "max_bos_age": 60,
+      "max_zone_atr": 3.5,
+      "max_zone_pct": 10.0,
+      "min_bars": 60,
+      "min_price": 50.0,
+      "min_turnover_cr": 20.0,
+      "pivot": 3,
+      "rvol_min": 1.5,
+      "rvol_n": 20,
+      "sl_buffer_atr": 0.25,
+      "slot_rvol": true,
+      "stack_gap_atr": 0.5,
+      "trigger_age": 3,
+      "trigger_max_atr": 1.0
+     },
+     "swing_playbook": {
+      "alert_atr": 2.0,
+      "atr_n": 14,
+      "bos_rvol_good": 1.5,
+      "choch_age": 15,
+      "confirm_max_age": 21,
+      "disp_body_atr": 1.0,
+      "entry_chase_atr": 0.5,
+      "entry_fresh": 8,
+      "entry_fresh_1h": 2,
+      "entry_on_1h": false,
+      "expiry_days": null,
+      "fvg_min_atr": 0.2,
+      "hold_regimes": [
+       "Mixed / transitioning"
+      ],
+      "lookback": 150,
+      "lux_ob": false,
+      "max_bos_age": 60,
+      "max_zone_atr": 3.5,
+      "max_zone_pct": 10.0,
+      "min_hold_rvol": 2.0,
+      "min_room_r": 2.0,
+      "min_stop_pct": 7.0,
+      "min_zone_q": 2,
+      "pivot": 3,
+      "pullback_gap": 6,
+      "ran_away_atr": 1.5,
+      "reclaim_bars": 21,
+      "require_volume": true,
+      "results_hold_days": 14,
+      "rvol_min": 1.5,
+      "sl_buffer_atr": 0.25,
+      "slot_vol": true,
+      "stack_gap_atr": 0.5,
+      "touch_max_age": 21,
+      "wide_stop_atr": 2.5,
+      "wide_stop_pct": 8.0,
+      "zz": 0.8
+     },
+     "v2_15m": {
+      "approach_atr": 1.5,
+      "atr_n": 14,
+      "disp_body_atr": 1.0,
+      "fvg_min_atr": 0.2,
+      "h_lookback": 48,
+      "lookback": 160,
+      "lux_ob": false,
+      "max_bos_age": 120,
+      "max_zone_atr": 3.0,
+      "max_zone_pct": 3.0,
+      "min_bars": 60,
+      "min_price": 0.0,
+      "min_turnover_cr": 0.0,
+      "pivot": 3,
+      "rvol_min": 1.5,
+      "rvol_n": 20,
+      "sl_buffer_atr": 0.25,
+      "slot_rvol": false,
+      "stack_gap_atr": 0.5,
+      "struct15": true,
+      "trigger_age": 6,
+      "trigger_max_atr": 1.0
+     }
+    },
+    "flags": {
+     "APLUS_OVERFLOW": "",
+     "GOLD_SESSIONS": "",
+     "GOLD_VOLUME_RULE": "",
+     "HOLDBACKS": "",
+     "PLAYBOOK_V2": "",
+     "REGIME_FILTER": "",
+     "SWING_LUX_OB": ""
+    },
+    "gold_instrument": {
+     "instrument": "XAUUSD Spot",
+     "market_type": "Spot Gold",
+     "provider": "Twelve Data",
+     "quote_currency": "USD",
+     "source": "Twelve Data XAU/USD spot, checked on every download (symbol, quote currency, not a futures contract)",
+     "symbol": "XAU/USD",
+     "unit": "USD per troy ounce"
+    },
+    "holdbacks": {
+     "off": false,
+     "rules": {
+      "gold_intraday": {
+       "min_zone_q": 2
+      },
+      "gold_positional": {
+       "min_zone_q": 2
+      },
+      "intraday": {
+       "min_stop_pct": 0.5
+      },
+      "options": {
+       "min_zone_q": 2
+      },
+      "positional": {
+       "min_zone_q": 2,
+       "regimes": [
+        "Mixed / transitioning"
+       ]
+      }
+     },
+     "swing_regimes": [
+      "Mixed / transitioning"
+     ]
+    },
+    "options": {
+     "div": 0.013,
+     "lot": 65,
+     "r_free": 0.056,
+     "strike_step": 50
+    },
+    "risk": {
+     "aplus_overflow": false,
+     "aplus_score": 8,
+     "day_stop": 0.75,
+     "max_per_day": 2,
+     "month_half": 3.0,
+     "month_stop": 5.0,
+     "open_cap": 2.0,
+     "risk": 0.5,
+     "risk_aplus": 0.75,
+     "stop_after_losses": null,
+     "week_stop": 2.0
+    },
+    "sessions": {
+     "gold_all": {
+      "first": 30,
+      "last": 1260,
+      "square": 1350,
+      "tz": "Etc/GMT-2"
+     },
+     "gold_london_ny": {
+      "first": 540,
+      "last": 1260,
+      "square": 1350,
+      "tz": "Etc/GMT-2"
+     },
+     "nse": {
+      "first": 570,
+      "last": 900,
+      "square": 915,
+      "tz": "Asia/Kolkata"
+     }
+    },
+    "tracker": {
+     "day_rules": {
+      "max_day": 2,
+      "min_score": 8,
+      "overflow": false
+     },
+     "gold_square_off": [
+      22,
+      30
+     ],
+     "last_entry": "15:00",
+     "last_entry_by": {
+      "intraday": "14:00"
+     },
+     "partials": "swing-like: half at T1 (no breakeven), a quarter at T2 (stop to entry, then trail daily higher lows); others: half at T1 (stop to entry), a quarter at T2 (stop to T1)",
+     "positional_expiry_days": 120,
+     "square_off": [
+      15,
+      15
+     ],
+     "swing_expiry_days": 28,
+     "swing_like": [
+      "swing",
+      "positional",
+      "gold_swing",
+      "gold_positional"
+     ]
+    }
+   }
+  }
+ ],
+ "_about": "Frozen strategy versions (strategy_config.py). Never edit a version: change the rules in code, then freeze a NEW version. Each version's paper-trading evaluation starts at its evaluation_starts time; earlier results belong to earlier versions."
+}

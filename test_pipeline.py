@@ -1,4 +1,5 @@
 """End-to-end test of every section, the market and news pages and the phone alerts, with fake downloads. Run: python test_pipeline.py"""
+import os; os.environ['STALE_CHECK'] = 'off'      # audit 18 Nov 2026: these fixtures are dated weeks before the real clock; the stale-data fail-safe is tested in test_audit.py
 import os; os.environ['PLAYBOOK_V2'] = 'off'      # this file tests the PREVIOUS rules (1.5x volume, 15m entry, 5m structure), still available with PLAYBOOK_V2=off; the updated strategy (the default) is tested in test_playbook_v2.py
 import http.server, json, os, subprocess, sys, tempfile, threading
 import numpy as np, pandas as pd

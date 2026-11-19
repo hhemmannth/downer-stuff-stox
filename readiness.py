@@ -95,8 +95,30 @@ def run_checks(env, now, is_trading, probes=None, fetch_runs=None, swing_iso=Non
     ok, msg = P['universe'](); R.append((OK if ok else WARN, 'Nifty 500 list', msg if ok else 'live list unavailable, the local fallback list will be used (' + msg + ')'))
     R.append(check_channels(env)); R.append(check_cron(env, now, is_trading, fetch_runs or (lambda: []))); R.append(check_token(env, now))
     if env.get('BACKUP_REPO', '').strip() or env.get('BACKUP_TOKEN_EXPIRES', '').strip(): R.append(check_token(env, now, 'BACKUP_TOKEN_EXPIRES', 'Backup token', 'backup', 'update the BACKUP_TOKEN secret'))
-    R.append(check_data(swing_iso or '', now)); R.append(check_backup(backup, now))
+    R.append(check_data(swing_iso or '', now)); R.append(check_backup(backup, now)); R.append(check_calendar(now)); R.append(check_gold_feed(env, P.get('gold')))
     return R
+
+def check_calendar(now):
+    """The NSE holiday list (market_calendar.json): fails when this year has no official list, warns from 1 Dec when next year's is missing."""
+    import market_calendar; st, msg = market_calendar.check(now)
+    return ({'ok': OK, 'warn': WARN, 'fail': FAIL}[st], 'NSE holiday calendar', msg)
+
+def probe_gold(env):
+    """One real request (1 of the free plan's 800 a day): the last hourly XAU/USD candles, validated exactly as the scanner validates them
+    (symbol XAU/USD, USD quote, not a future, plausible and continuous prices, IST timestamps). (ok, message)."""
+    import gold_feed, pandas as pd
+    try:
+        f = gold_feed.fetch('1h', None, 5, env=env, gap=0); now = pd.Timestamp.now(tz='Asia/Kolkata')
+        lag = gold_feed.lag_minutes(f, now, 60)
+        return True, f"{gold_feed.PROVIDER} {gold_feed.SYMBOL} spot answered and passed the checks: last hourly close {float(f.Close.iloc[-1]):,.2f} USD/oz at {f.index[-1]:%d %b %H:%M} IST ({lag:.0f} min after it closed)"
+    except Exception as ex: return False, str(ex)[:160]
+
+def check_gold_feed(env, probe=None):
+    """XAUUSD spot feed (gold_feed.py): without its key, or when the answer fails validation, there are no gold recommendations at all (never a futures fallback)."""
+    import gold_feed
+    if not gold_feed.api_key(env): return (WARN, 'XAUUSD spot feed', 'TWELVEDATA_API_KEY secret not set: gold recommendations are OFF (no futures fallback). Free key at twelvedata.com')
+    ok, msg = (probe or (lambda: probe_gold(env)))()
+    return (OK, 'XAUUSD spot feed', msg) if ok else (FAIL, 'XAUUSD spot feed', 'key set but the spot feed failed its checks, so gold recommendations are OFF: ' + msg)
 
 def summarize(R):
     level = FAIL if any(s == FAIL for s, _, _ in R) else WARN if any(s == WARN for s, _, _ in R) else OK

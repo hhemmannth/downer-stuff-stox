@@ -17,7 +17,8 @@ const SET0 = JR.SET0 = { capital: 200000, riskN: .005, riskA: .0075, riskC: .01,
 JR.SETKEYS = [['capital', 'Trading capital (₹)', 'n'], ['riskN', 'Normal risk per trade', 'p'], ['riskA', 'A+ risk per trade', 'p'], ['riskC', 'Hard ceiling per trade', 'p'], ['openMax', 'Max total open risk', 'p'],
   ['dayCaution', 'Daily: caution', 'p'], ['dayStop', 'Daily: stop new trades', 'p'], ['dayLim', 'Daily: loss limit', 'p'], ['weekAlert', 'Weekly: reduce size', 'p'], ['weekReview', 'Weekly: review mode', 'p'],
   ['monthHalf', 'Monthly: half size', 'p'], ['monthStop', 'Monthly: stop', 'p'], ['maxIntra', 'Trades a day (strict, even A+)', 'i'], ['be', 'Breakeven band (± R)', 'd'], ['minN', 'Trades before a pattern counts', 'i']];
-const TDEF = { d: '', tm: '', inst: '', cat: 'Intraday', setup: '', tf: '', dir: 'Long', grade: null, cap: null, qty: null, entry: null, sl: null, tgt: null, exit: null, chg: null, emo: null, brk: null, xt: null, note: '', ovr: null, exp: null, mae: null, mfe: null, reg: null, evt: null };
+const TDEF = { d: '', tm: '', inst: '', cat: 'Intraday', setup: '', tf: '', dir: 'Long', grade: null, cap: null, qty: null, entry: null, sl: null, tgt: null, exit: null, chg: null, emo: null, brk: null, xt: null, note: '', ovr: null, exp: null, mae: null, mfe: null, reg: null, evt: null, xd: '', xtm: '', parts: null };
+const SCHEMA = 2;                  // 2 (18 Nov 2026): exit date and time (xd, xtm) and partial exits (parts) stored on every trade; realized P&L is dated by them
 const NUMK = ['cap', 'qty', 'entry', 'sl', 'tgt', 'exit', 'chg', 'ovr', 'mae', 'mfe'];
 const LSK = 'tji_journals_v1', LSL = 'tji_last_v1', LSU = 'tji_ui_v1', LSD = 'tji_deleted_v1';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -30,11 +31,26 @@ function normTrade(t) {
   const o = { ...TDEF, ...t }; NUMK.forEach(k => o[k] = nn(o[k]));
   ['tm', 'inst', 'setup', 'tf', 'note'].forEach(k => o[k] = o[k] == null ? '' : String(o[k]).trim());
   ['grade', 'emo', 'brk', 'xt', 'reg', 'evt', 'exp'].forEach(k => o[k] = (o[k] == null || o[k] === '') ? null : String(o[k]).trim());
-  o.dir = o.dir === 'Short' ? 'Short' : 'Long'; o.d = String(o.d || '').slice(0, 10); if (!o.id) o.id = uid(); return o;
+  o.dir = o.dir === 'Short' ? 'Short' : 'Long'; o.d = String(o.d || '').slice(0, 10); if (!o.id) o.id = uid();
+  o.xd = ymd(o.xd) ? String(o.xd).slice(0, 10) : ''; o.xtm = o.xtm ? String(o.xtm).slice(0, 5) : '';
+  o.parts = Array.isArray(o.parts) && o.parts.length ? o.parts.map(p => ({ d: ymd(p.d) ? p.d : '', tm: p.tm ? String(p.tm).slice(0, 5) : '', qty: nn(p.qty), px: nn(p.px), chg: nn(p.chg) })).filter(p => p.qty > 0 && p.px != null) : null;
+  if (!o.parts) o.parts = null; return o;
 }
 const decodeRows = (rows, pfx) => rows.map((r, n) => { const o = {}; TKEYS.forEach((k, i) => o[k] = r[i] === undefined ? null : r[i]); if (pfx) o.id = pfx + (n + 1); return normTrade(o); });
 const newJournal = (name, o = {}) => ({ id: uid(), name, demo: !!o.demo, asOf: o.asOf || null, updated: Date.now(), set: { ...SET0 }, lists: { setups: [...SETUPS0] }, trades: o.trades || [] });
-const fillJ = J => { J.set = { ...SET0, ...(J.set || {}) }; J.lists = { setups: [...SETUPS0], ...(J.lists || {}) }; J.trades = (J.trades || []).map(normTrade); return J; };
+const fillJ = J => { const raw = (J.schema || 1) < SCHEMA ? JSON.parse(JSON.stringify(J)) : null;          // the journal exactly as stored, before anything is normalized
+  J.set = { ...SET0, ...(J.set || {}) }; J.lists = { setups: [...SETUPS0], ...(J.lists || {}) }; J.trades = (J.trades || []).map(normTrade); return migrate(J, raw); };
+/* Schema 2 migration (18 Nov 2026), safe and additive: the journal as it was is copied to localStorage first (key below, once), nothing is
+   removed, and a closed trade with no stored exit date is marked xd_unknown. Its P&L still counts in totals, but in no day, week or month
+   until you add the real exit date (Journal shows the list). No date is guessed. */
+const LSB = 'tji_backup_before_schema2';
+function migrate(J, raw) {
+  if ((J.schema || 1) >= SCHEMA) return J;
+  try { if (!J.demo && typeof store !== 'undefined' && !store.get(LSB + '_' + J.id, null)) store.set(LSB + '_' + J.id, { at: new Date().toISOString(), from_schema: (raw && raw.schema) || 1, journal: raw || JSON.parse(JSON.stringify(J)) }); } catch (e) { }
+  J.trades.forEach(t => { if ((t.exit != null || t.ovr != null) && !t.xd) t.xd_unknown = true; });
+  J.schema = SCHEMA; return J;
+}
+JR.backupKey = id => LSB + '_' + id;
 function mainJournal() { const j = newJournal('Hemanth’s journal', { trades: decodeRows(REAL_ROWS, 's') }); j.id = 'j_main'; j.updated = 0; return fillJ(j); }
 
 let E = { list: [], cur: null, deleted: [] }; JR.E = E;
@@ -60,9 +76,9 @@ JR.enrich = function (J) {
     t.q = t.qty > 0 ? t.qty : (t.cap > 0 && t.entry > 0 ? Math.floor(t.cap / t.entry + 1e-6) : null);
     t.risk = (t.q != null && t.sl != null && t.entry != null) ? Math.abs(t.entry - t.sl) * t.q : null;
     t.riskP = t.risk != null ? t.risk / cap : null;
-    t.closed = t.exit != null || t.ovr != null;
-    t.gross = (t.q != null && t.exit != null && t.entry != null) ? (t.exit - t.entry) * t.q * sgn : null;
-    t.net = !t.closed ? null : (t.ovr != null ? t.ovr : (t.gross != null ? t.gross - (t.chg || 0) : null));
+    const P = PnL.totals(t, t.q);                                                      // the shared realized-P&L rules (pnl.js): the same for Trade Insight
+    t._legs = P.legs; t.closed = P.closed; t.gross = P.gross; t.net = P.net; t.realized = P.realized; t.openQty = P.openQty;
+    t.xdUnknown = P.unknown.length > 0; t.xkey = (P.legs.filter(l => l.known).map(l => l.d).sort().pop()) || null; t.xmkey = t.xkey ? t.xkey.slice(0, 7) : null;
     t.r = (t.net != null && t.risk > 0) ? t.net / t.risk : null;
     t.res = t.net == null ? null : (t.r != null ? (t.r > S.be ? 'Win' : t.r < -S.be ? 'Loss' : 'BE') : (t.net > 0 ? 'Win' : t.net < 0 ? 'Loss' : 'BE'));
     t.mkey = t.d.slice(0, 7); t.wd = wdOf(t.d); t.hr = t.tm ? +t.tm.slice(0, 2) : null; t.wk = weekStart(t.d);
@@ -91,11 +107,15 @@ JR.openCount = () => JR.enrich().filter(t => t.open).length;
 /* ---------- risk status from your rules (daily / weekly / monthly limits, open risk, intraday count) ---------- */
 JR.riskStatus = () => {
   const J = JR.J(), S = J.set, cap = S.capital || 1, T = JR.enrich(J), td = todayIST(), wk = weekStart(td), mo = td.slice(0, 7);
-  const sum = a => a.reduce((x, t) => x + (t.net || 0), 0), closed = T.filter(t => t.closed && t.net != null);
-  const day = sum(closed.filter(t => t.d === td)) / cap, week = sum(closed.filter(t => t.wk === wk)) / cap, month = sum(closed.filter(t => t.mkey === mo)) / cap;
+  // 18 Nov 2026: realized P&L is dated by the EXIT (each partial exit on its own date), never by the entry date (pnl.js)
+  const D = PnL.realized(T, d => d === td), W = PnL.realized(T, d => weekStart(d) === wk), M = PnL.realized(T, d => d.slice(0, 7) === mo);
+  const day = D.net / cap, week = W.net / cap, month = M.net / cap, closed = T.filter(t => t.closed && t.net != null);
+  const use = { day: PnL.limitUse(D.net, cap, S.dayLim), week: PnL.limitUse(W.net, cap, S.weekReview), month: PnL.limitUse(M.net, cap, S.monthStop) };
+  const unknownT = T.filter(t => t.xdUnknown), recentUnknown = unknownT.filter(t => t.d >= new Date(Date.now() - 31 * 864e5).toISOString().slice(0, 10));
+  const unreal = T.filter(t => t.open).reduce((a, t) => { let lp = null; try { lp = livePrice(t); } catch (e) { } const u = PnL.unrealized(t, t.q, lp); return u == null ? a : a + u; }, 0);   // separate: never in realized day/week P&L
   const openRisk = T.filter(t => t.open && t.risk).reduce((x, t) => x + t.risk, 0) / cap, intra = T.filter(t => t.d === td && t.cat === 'Intraday').length;
   const todayT = T.filter(t => t.d === td), trades = todayT.length, over = todayT.filter(t => t.didx > S.maxIntra);
-  const fullLoss = closed.filter(t => t.d === td && t.r != null && t.r <= -0.9).length; const msgs = []; let level = 'ok';
+  const fullLoss = closed.filter(t => t.xkey === td && t.r != null && t.r <= -0.9).length; const msgs = []; let level = 'ok';
   const bump = (l, m) => { msgs.push([l, m]); if (l === 'bad' || (l === 'warn' && level === 'ok')) level = l; };
   if (day <= -S.dayLim) bump('bad', `Day is over: down ${pct(-day)} (limit ${pct(S.dayLim)}). No recovery trade.`); else if (day <= -S.dayStop) bump('bad', `Stop new trades today: down ${pct(-day)}.`); else if (day <= -S.dayCaution) bump('warn', `Caution: down ${pct(-day)} today.`);
   if (week <= -S.weekReview) bump('bad', `Weekly review mode: down ${pct(-week)} this week. Never increase risk to recover.`); else if (week <= -S.weekAlert) bump('warn', `Reduce size: down ${pct(-week)} this week.`);
@@ -104,13 +124,26 @@ JR.riskStatus = () => {
   if (over.length) bump('bad', `Trade ${over.map(t => '#' + t.didx + ' (' + (t.inst || '?') + ', ' + (t.grade || 'ungraded') + ')').join(', ')} today is past your ${S.maxIntra} a day: strict, even an A+ waits for tomorrow.`);
   else if (trades >= S.maxIntra) bump('warn', `${trades} trades today: your limit. No more today, even an A+ waits for tomorrow.`);
   if (fullLoss >= 2) bump('bad', 'Two full-risk losses today: trading stops for the day.'); else if (fullLoss === 1) bump('warn', 'One full-risk loss today: take a 20 to 30 minute reset before the next idea.');
-  return { level, msgs, day, week, month, openRisk, intra, trades, over: over.length, fullLoss, cap, S };
+  if (recentUnknown.length) bump('warn', `${recentUnknown.length} closed trade${recentUnknown.length > 1 ? 's have' : ' has'} no exit date (${recentUnknown.slice(0, 3).map(t => t.inst || '?').join(', ')}${recentUnknown.length > 3 ? '…' : ''}): ${inr(Math.abs(recentUnknown.reduce((a, t) => a + (t.net || 0), 0)))} of P&L is NOT in today's or this week's limits. Open the trade and add the exit date.`);
+  return { level, msgs, day, week, month, use, realizedRs: { day: D.net, week: W.net, month: M.net }, unrealized: unreal, unknownExit: unknownT.length, unknownRecent: recentUnknown.length, openRisk, intra, trades, over: over.length, fullLoss, cap, S };
 };
 JR.sizeFor = (entry, sl, grade) => { const S = JR.J().set, rp = grade === 'A+' ? S.riskA : S.riskN, risk = S.capital * rp, per = Math.abs(entry - sl); return { rp, risk, qty: per > 0 ? Math.floor(risk / per) : 0, ceiling: S.capital * S.riskC, capital: S.capital }; };
 JR.findByTag = tag => JR.enrich().find(t => (t.note || '').includes('DS:' + tag));
 
 /* ---------- trade form ---------- */
 const opt = (list, v, blank = true) => (blank ? '<option value=""></option>' : '') + list.map(x => `<option${x === v ? ' selected' : ''}>${esc(x)}</option>`).join('');
+const partRow = p => `<div class="fgrid" data-part><div class="field"><label>Part date</label><input type="date" data-p="d" value="${esc(p.d || '')}"></div><div class="field"><label>Time</label><input type="time" data-p="tm" value="${esc(p.tm || '')}"></div><div class="field"><label>Quantity</label><input type="number" step="any" data-p="qty" value="${p.qty == null ? '' : esc(p.qty)}"></div><div class="field"><label>Price</label><input type="number" step="any" data-p="px" value="${p.px == null ? '' : esc(p.px)}"></div><div class="field"><label>Charges (₹)</label><input type="number" step="any" data-p="chg" value="${p.chg == null ? '' : esc(p.chg)}"></div><div class="field"><label>&nbsp;</label><button class="btn sm ghost" type="button" data-delpart>Remove</button></div></div>`;
+/* Exit date rules for saving a trade (schema 2): a closed trade needs its exit date (never guessed), not before the entry date; partial exits need
+   a date each and cannot add up to more than the position. Returns a message, or '' when the trade can be saved. */
+JR.exitProblem = o => {
+  const closed = o.exit != null || o.ovr != null, q = o.qty > 0 ? o.qty : (o.cap > 0 && o.entry > 0 ? Math.floor(o.cap / o.entry + 1e-6) : null);
+  if (closed && !o.xd) return 'Add the exit date (the day you closed it): your daily and weekly loss limits count the P&L on that day';
+  if (o.xd && o.d && o.xd < o.d) return 'The exit date is before the entry date';
+  if ((o.parts || []).some(p => !p.d)) return 'Each partial exit needs its date';
+  if ((o.parts || []).some(p => o.d && p.d < o.d)) return 'A partial exit is dated before the entry';
+  if (q != null && (o.parts || []).reduce((a, p) => a + p.qty, 0) > q + 1e-9) return 'Partial exits add up to more than the position';
+  return '';
+};
 JR.openForm = function (id, prefill) {
   const J = JR.J(); if (J.demo) { const real = E.list.find(x => !x.demo); if (real) { E.cur = real.id; } }
   const ex = id ? JR.J().trades.find(t => t.id === id) : null, last = JR.J().trades[JR.J().trades.length - 1];
@@ -124,22 +157,28 @@ JR.openForm = function (id, prefill) {
     ${s('cat', 'Category', CATS)}${s('dir', 'Direction', DIRS)}${s('setup', 'Setup', setups, 'w2')}${s('tf', 'Timeframe', TFS)}${s('grade', 'Grade', GRADES)}${s('reg', 'Market regime', REGIMES)}${s('evt', 'Event risk', EVENTS)}${f('exp', 'Expiry (options)', 'date')}</div>
     <div class="fsec">Size and risk</div><div class="fgrid">${f('entry', 'Entry', 'number')}${f('sl', 'Stop-loss', 'number')}${f('tgt', 'Target', 'number')}${f('qty', 'Quantity', 'number')}${f('cap', 'Capital used (₹)', 'number')}${f('chg', 'Charges (₹)', 'number')}</div>
     <div class="calc" id="fcalc"></div>
-    <div class="fsec">Exit and review</div><div class="fgrid">${f('exit', 'Exit price', 'number')}${s('xt', 'Exit type', XTYPES)}${f('mae', 'Worst price (MAE)', 'number')}${f('mfe', 'Best price (MFE)', 'number')}${f('ovr', 'P/L override (₹)', 'number')}${s('emo', 'Emotion', EMOS)}${s('brk', 'Rule break', BREAKS, 'w2')}
+    <div class="fsec">Exit and review</div><div class="fgrid">${f('exit', 'Exit price', 'number')}${f('xd', 'Exit date', 'date')}${f('xtm', 'Exit time', 'time')}${s('xt', 'Exit type', XTYPES)}${f('mae', 'Worst price (MAE)', 'number')}${f('mfe', 'Best price (MFE)', 'number')}${f('ovr', 'P/L override (₹)', 'number')}${s('emo', 'Emotion', EMOS)}${s('brk', 'Rule break', BREAKS, 'w2')}
     <div class="field w4"><label for="f-note">Notes / lesson</label><textarea id="f-note" data-k="note">${esc(t.note || '')}</textarea></div></div>
+    <div class="fsec">Partial exits <small class="muted">(each part counts on its own date; the exit above is the rest of the position)</small></div><div id="fparts">${(t.parts || []).map(partRow).join('')}</div><button class="btn sm ghost" type="button" data-addpart>+ Partial exit</button>
     ${JR.extraForm(t)}<datalist id="instList">${[...new Set(JR.J().trades.map(x => x.inst).filter(Boolean))].slice(-60).map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
     <div class="mf">${ex ? '<button class="btn danger" data-del>Delete</button><span style="flex:1"></span>' : ''}<button class="btn" data-x>Cancel</button><button class="btn primary" data-save>${ex ? 'Save changes' : 'Save trade'}</button></div></div>`;
   document.body.appendChild(bg);
-  const read = () => { const o = { ...t }; $$('[data-k]', bg).forEach(el => o[el.dataset.k] = el.value); return normTrade(o); };
+  const read = () => { const o = { ...t }; $$('[data-k]', bg).forEach(el => o[el.dataset.k] = el.value);
+    o.parts = $$('[data-part]', bg).map(r => ({ d: $('[data-p="d"]', r).value, tm: $('[data-p="tm"]', r).value, qty: $('[data-p="qty"]', r).value, px: $('[data-p="px"]', r).value, chg: $('[data-p="chg"]', r).value }));
+    const n = normTrade(o); if (n.xd) delete n.xd_unknown; return n; };
   const calc = () => { const o = read(), J2 = { ...JR.J(), trades: [o] }, e = JR.enrich(J2)[0] || {}, S = JR.J().set;
     $('#fcalc', bg).innerHTML = `<div><small>Quantity used</small><b>${e.q != null ? fmt0(e.q) : '-'}</b></div><div><small>Risk</small><b class="${e.riskP > S.riskC ? 'bad' : ''}">${e.risk != null ? inr(e.risk) : '-'}</b><small>${e.riskP != null ? pct(e.riskP, 2) + ' of capital' : ''}</small></div>
       <div><small>Planned R:R</small><b>${e.prr != null ? e.prr.toFixed(1) : '-'}</b>${e.prr != null && e.prr < 2 ? '<small class="warn">under 2R</small>' : ''}</div><div><small>Result</small><b class="${cls(e.net)}">${e.closed ? (e.net != null ? inrS(e.net) : '?') : 'Open'}</b><small>${e.r != null ? rr(e.r) : ''}</small></div>`; };
   bg.addEventListener('input', calc); calc();
   const close = () => bg.remove();
   bg.addEventListener('click', e => {
+    if (e.target.closest('[data-addpart]')) { $('#fparts', bg).insertAdjacentHTML('beforeend', partRow({})); calc(); return; }
+    if (e.target.closest('[data-delpart]')) { e.target.closest('[data-part]').remove(); calc(); return; }
     if (e.target === bg || e.target.closest('[data-x]')) close();
     if (e.target.closest('[data-del]') && confirm('Delete this trade?')) { const J = JR.J(); J.trades = J.trades.filter(x => x.id !== id); JR.touch(); JR.persist(); close(); App.render(); App.toast('Trade deleted'); }
     if (e.target.closest('[data-save]')) {
       const o = read(); if (!o.d || !o.inst) { App.toast('Add at least a date and an instrument'); return; }
+      const bad = JR.exitProblem(o); if (bad) { App.toast(bad); const el = $('#f-xd', bg); if (el) el.focus(); return; }
       if (!ex && !bg._gate) { JR.gate(o, r => { bg._gate = true; t.chk = r; $('[data-save]', bg).click(); }); return; }       // pre-trade checklist (item 19)
       const J = JR.J(); if (ex) J.trades[J.trades.findIndex(x => x.id === id)] = o; else J.trades.push(o);
       if (o.setup && !J.lists.setups.includes(o.setup)) J.lists.setups.push(o.setup);
@@ -253,12 +292,13 @@ JR.paintSync = () => { const p = $('#syncp'); if (!p) return; const m = Cloud.mo
   p.innerHTML = `<i></i>${m === 'cloud' ? 'Synced' : m === 'signin' ? 'Sign in' : m === 'error' ? 'Sync paused' : m === 'local' ? 'This device' : '…'}`;
   p.title = m === 'cloud' ? `Journal saved here and in your cloud (${Cloud.email || ''})` : m === 'signin' ? 'Sign in to sync your journal' : 'Saved in this browser'; };
 JR.init = () => { load(); cloudInit(); };
+JR.loadLocal = load;                 // the local load path on its own (tests: schema-2 migration)
 
 /* ---------- import / export ---------- */
 JR.exportJSON = () => { const J = JR.J(); dl((J.name || 'journal').replace(/[^\w]+/g, '-') + '-backup.json', JSON.stringify({ format: 'trade-insight', version: 1, exported: new Date().toISOString(), journal: { name: J.name, set: J.set, lists: J.lists, trades: J.trades } }, null, 1), 'application/json'); };
-JR.exportCSV = () => { const T = JR.enrich(); const head = ['Date', 'Time', 'Instrument', 'Category', 'Setup', 'Timeframe', 'Direction', 'Grade', 'Qty', 'Entry', 'SL', 'Target', 'Exit', 'Charges', 'Net P/L', 'R', 'Result', 'Emotion', 'Rule break', 'Exit type', 'Notes'];
+JR.exportCSV = () => { const T = JR.enrich(); const head = ['Date', 'Time', 'Instrument', 'Category', 'Setup', 'Timeframe', 'Direction', 'Grade', 'Qty', 'Entry', 'SL', 'Target', 'Exit', 'Exit date', 'Exit time', 'Partial exits', 'Charges', 'Net P/L', 'R', 'Result', 'Emotion', 'Rule break', 'Exit type', 'Notes'];
   const q = v => v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
-  dl('journal.csv', [head.join(','), ...T.map(t => [t.d, t.tm, t.inst, t.cat, t.setup, t.tf, t.dir, t.grade, t.q, t.entry, t.sl, t.tgt, t.exit, t.chg, t.net != null ? t.net.toFixed(2) : '', t.r != null ? t.r.toFixed(2) : '', t.res, t.emo, t.brk, t.xt, t.note].map(q).join(','))].join('\n'), 'text/csv'); };
+  dl('journal.csv', [head.join(','), ...T.map(t => [t.d, t.tm, t.inst, t.cat, t.setup, t.tf, t.dir, t.grade, t.q, t.entry, t.sl, t.tgt, t.exit, t.xd || (t.xdUnknown ? 'unknown' : ''), t.xtm, (t.parts || []).map(p => `${p.d} ${p.tm} ${p.qty}@${p.px}`).join(' | '), t.chg, t.net != null ? t.net.toFixed(2) : '', t.r != null ? t.r.toFixed(2) : '', t.res, t.emo, t.brk, t.xt, t.note].map(q).join(','))].join('\n'), 'text/csv'); };
 function dl(name, text, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
 JR.importFile = file => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => { try {
   const o = JSON.parse(r.result), src = o.journal || o, trades = Array.isArray(src) ? src : src.trades; if (!Array.isArray(trades)) throw new Error('No trades in this file');
@@ -286,7 +326,7 @@ App.pages.journal = () => {
     <div class="hd" style="padding-top:10px"><div class="chips">${[['all', 'All'], ...CATS.map(c => [c, c])].map(([v, t]) => `<button class="chip" data-jcat="${v}" aria-pressed="${u.cat === v}">${t}</button>`).join('')}</div><span class="sp"></span>${App.ui.seg('jres', [['all', 'All'], ['Win', 'Wins'], ['Loss', 'Losses'], ['open', 'Open'], ['brk', 'Rule breaks']], u.res)}</div>
     <div class="bd tbl-wrap">${T.length ? `<table class="tbl"><thead><tr><th>Date</th><th>Instrument</th><th>Cat</th><th>Setup</th><th>Grade</th><th class="n">Entry</th><th class="n">SL</th><th class="n">Exit</th><th class="n">Qty</th><th class="n">Net P&L</th><th class="n">R</th><th>Result</th><th>Notes</th></tr></thead><tbody>
     ${T.slice().reverse().slice(0, u.n).map(t => `<tr class="click${t.open ? ' open' : ''}" data-id="${t.id}"><td class="n">${esc(t.d.slice(2))}</td><td><b>${esc(t.inst)}</b> <span class="tag ${t.dir === 'Short' ? 'short' : 'long'}">${t.dir === 'Short' ? 'S' : 'L'}</span>${t.src === 'Scanner' ? ' <span class="pill info" style="padding:0 6px;font-size:11px">DS</span>' : ''}</td><td>${esc(t.cat || '')}</td><td>${esc(t.setup || '-')}</td><td>${t.grade ? App.ui.grade(t.grade) : '-'}</td>
-      <td class="n">${fmt(t.entry)}</td><td class="n">${fmt(t.sl)}</td><td class="n">${fmt(t.exit)}</td><td class="n">${t.q != null ? fmt0(t.q) : '-'}</td><td class="n ${cls(t.net)}">${t.net != null ? inrS(t.net) : t.open ? '<span class="muted">open</span>' : '?'}</td><td class="n ${cls(t.r)}">${t.r != null ? rr(t.r) : '-'}</td>
+      <td class="n">${fmt(t.entry)}</td><td class="n">${fmt(t.sl)}</td><td class="n">${fmt(t.exit)}${t.xd ? `<br><small class="muted">${esc(t.xd.slice(5))}</small>` : t.xdUnknown ? '<br><small class="warn" title="Exit date unknown: this P&L is not counted in any day or week. Open the trade to add it.">date?</small>' : ''}</td><td class="n">${t.q != null ? fmt0(t.q) : '-'}</td><td class="n ${cls(t.net)}">${t.net != null ? inrS(t.net) : t.open ? '<span class="muted">open</span>' : '?'}</td><td class="n ${cls(t.r)}">${t.r != null ? rr(t.r) : '-'}</td>
       <td>${t.res ? `<span class="pill ${t.res === 'Win' ? 'ok' : t.res === 'Loss' ? (t.lt === 'Bad loss' ? 'bad' : 'warn') : ''}">${t.res === 'Loss' ? t.lt : t.res}</span>` : ''}${t.brkd ? ` <span class="pill bad" title="${esc(t.brk)}">rule</span>` : ''}</td><td class="muted" style="max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((t.note || '').replace(/DS:\S+\s*\|?\s*/, ''))}</td></tr>`).join('')}</tbody></table>
     ${T.length > u.n ? `<div style="text-align:center;padding:10px"><button class="btn" id="jMore">Show more (${T.length - u.n})</button></div>` : ''}` : App.ui.empty('No trades here yet', 'Add one, or use "Log trade" on any scanner setup.')}</div></div>`;
   return h;

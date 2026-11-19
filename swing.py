@@ -113,9 +113,10 @@ def confirm_1h(h1, s, buf, since):
     shown as 'A+ 1H RECLAIM' (14 of 43 live A+/A setups at stage 3 or 4). Now the reclaim must follow the pullback low, within CFG['reclaim_bars'] candles."""
     res = dict(touched=False, rejection=0, reclaim=0, rvol_ok=0, rvol=float('nan'), pullback_low=float('nan'), t_touch=None, t_confirm=None, broken=False, confirm_age=None, touch_age=None)
     if h1 is None or len(h1) < 10: return res
-    h1 = h1[h1.index > since] if since is not None else h1
+    e_all = H.ema(h1.Close, 9)                                # audit 18 Nov 2026: the 9 EMA over ALL the 1H history, as TradingView draws it; before, it was
+    h1 = h1[h1.index > since] if since is not None else h1     # computed on the candles since the BOS only, so it restarted at the first one and sat up to ~0.5% off
     if len(h1) < 2: return res
-    full = h1; e = H.ema(full.Close, 9).values; o, hi, lo, c, v = (full[k].values for k in ('Open', 'High', 'Low', 'Close', 'Volume')); n = len(full)
+    full = h1; e = e_all.loc[full.index].values; o, hi, lo, c, v = (full[k].values for k in ('Open', 'High', 'Low', 'Close', 'Volume')); n = len(full)
     zb, zt = s['zone_bot'], s['zone_top']; touch = [i for i in range(n) if lo[i] <= zt and lo[i] >= zb - 2 * buf]
     if not touch: return res
     if np.any(c[touch[0]:] < zb - buf): res.update(touched=True, t_touch=str(full.index[touch[0]])[:16], broken=True); return res           # the zone failed on the 1H at any time since the first touch
@@ -155,7 +156,7 @@ def entry_15m(m15, s, since, daily_atr, not_before=None):
     cfg = dict(H.CFG_I, pivot=2, zz=0.8, lookback=len(f), min_bars=15, disp_body_atr=0.8, lux_ob=CFG.get('lux_ob'))
     cands = [z for z in H.find_structures(f, cfg) if z['zone_top'] >= s['zone_bot'] - 0.5 * daily_atr and z['zone_bot'] <= s['zone_top'] + 0.5 * daily_atr]
     if not cands: out['note'] = 'No 15m CHoCH + BOS inside the daily zone yet.'; return out
-    z = cands[0]; o, hi, lo, c, v = (f[k].values for k in ('Open', 'High', 'Low', 'Close', 'Volume')); e = H.ema(f.Close, 9).values; b = z['bos_i']
+    z = cands[0]; o, hi, lo, c, v = (f[k].values for k in ('Open', 'High', 'Low', 'Close', 'Volume')); e = H.ema(m15.Close, 9).values[start:]; b = z['bos_i']      # 9 EMA over all the 15m history (audit 18 Nov 2026)
     zt = z['fvg_high'] if not _nan(z['fvg_high']) else z['zone_top']; zb = z['zone_bot']
     out.update(found=True, choch=dict(level=float(z['choch_level']), at=str(f.index[z['choch_i']])[:16]), bos=dict(level=float(z['bos_level']), at=str(f.index[b])[:16]),
                fvg=dict(low=float(z['fvg_low']) if not _nan(z['fvg_low']) else None, high=float(z['fvg_high']) if not _nan(z['fvg_high']) else None), ob=dict(low=float(z['ob_low']) if not _nan(z['ob_low']) else None, high=float(z['ob_high']) if not _nan(z['ob_high']) else None),

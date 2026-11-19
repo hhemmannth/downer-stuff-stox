@@ -14,6 +14,7 @@ def fake_download(tickers, period=None, interval=None, group_by=None, auto_adjus
     return pd.concat(frames, axis=1)
 sys.modules['yfinance'] = types.SimpleNamespace(download=fake_download)
 import strategy_scanner as sc
+import datasource as _ds; _ds.STATE['dir'] = tempfile.mkdtemp()      # 19 Nov 2026: an own, empty cache, so a daily cache left by another test (same day) can never answer the download
 fails = []
 def check(name, cond, info=''):
     print(('PASS ' if cond else 'FAIL ') + name + (f'   {info}' if info else ''))

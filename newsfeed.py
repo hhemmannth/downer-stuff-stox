@@ -68,8 +68,14 @@ def build_news(now, symbols, fetch=None, max_headlines=60):
     return dict(generated_at=now.isoformat(timespec='seconds'), headlines=heads, by_symbol=by, feeds=len(MARKET_QUERIES) + len(symbols[:15]), ok=bool(heads or by))
 
 def load_events(path='events.json'):
-    try: return json.load(open(path, encoding='utf-8'))
-    except Exception: return dict(holidays=[], events=[])
+    """Your events (events.json) plus the NSE holidays from market_calendar.json, the single holiday source (18 Nov 2026). A 'holidays' list
+    still present in an old events.json is ignored, so dates can never be kept in two places."""
+    import market_calendar
+    try: cfg = json.load(open(path, encoding='utf-8'))
+    except Exception: cfg = dict(events=[])
+    cfg = dict(cfg); cfg['holidays'] = [dict(date=h['date'], name=h['name']) for h in market_calendar.holidays(with_names=True)]
+    cfg['calendar'] = dict(provisional=market_calendar.provisional(), special_sessions=market_calendar.special_sessions(), covered_to=str(market_calendar.coverage_end() or ''))
+    return cfg
 
 def _last_tuesday(y, m, hol):
     d = dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1)

@@ -79,16 +79,16 @@ check('session day: 04:00 IST (22:30 UTC) belongs to the NEXT gold session', bt.
 now = pd.Timestamp('2026-11-11 20:00', tz='Asia/Kolkata')
 idx = pd.date_range('2026-11-11 09:00', periods=6, freq='5min', tz='UTC')                  # 14:30 to 14:55 IST
 fake = lambda syms, period, interval: ({syms[0]: pd.DataFrame({'Open': 1.0, 'High': 2.0, 'Low': 0.5, 'Close': 1.5, 'Volume': 10}, index=idx)}, [])
-gi = tf.gold_intraday('GC=F', '60d', '5m', pd.Timestamp('2026-11-11 14:57', tz='Asia/Kolkata'), fetch=fake)
+gi = tf.gold_intraday('XAU/USD', '60d', '5m', pd.Timestamp('2026-11-11 14:57', tz='Asia/Kolkata'), fetch=fake)
 check('gold candles: converted to IST and the unfinished last 5m candle (14:55-15:00) dropped', str(gi.index.tz) == 'Asia/Kolkata' and len(gi) == 5 and str(gi.index[-1])[11:16] == '14:50')
 didx = pd.DatetimeIndex(['2026-11-09', '2026-11-10', '2026-11-11'])
 fd_ = lambda syms, period, interval: ({syms[0]: pd.DataFrame({'Open': 1.0, 'High': 2.0, 'Low': 0.5, 'Close': 1.5, 'Volume': 10}, index=didx)}, [])
-gd = tf.gold_daily('GC=F', '3y', now, fetch=fd_)
-check('gold daily: today\'s session (still trading at 20:00 IST) is left out', list(gd.index.strftime('%Y-%m-%d')) == ['2026-11-09', '2026-11-10'])
-gd2 = tf.gold_daily('GC=F', '3y', pd.Timestamp('2026-11-12 04:00', tz='Asia/Kolkata'), fetch=fd_)
-check('gold daily: after the session ends (04:00 IST next morning) it is included', len(gd2) == 3)
-check('Yahoo symbols: GC=F is passed through as it is (no .NS added), stocks still get .NS', sc._yahoo('GC=F') == 'GC=F' and sc._yahoo('TCS') == 'TCS.NS' and sc._yahoo('^NSEI') == '^NSEI')
-check('gold settings: GC=F and 0.35 dollars by default; repo variables can change them; bad values fall back', tf.gold_symbol({}) == 'GC=F' and tf.gold_cost({}) == 0.35 and tf.gold_cost(dict(GOLD_COST='0.5')) == 0.5 and tf.gold_cost(dict(GOLD_COST='x')) == 0.35)
+gd = tf.gold_daily('XAU/USD', '3y', now, fetch=fd_)
+check('gold daily (XAUUSD spot, one candle per UTC day): today (still trading at 20:00 IST) is left out', list(gd.index.strftime('%Y-%m-%d')) == ['2026-11-09', '2026-11-10'])
+gd2 = tf.gold_daily('XAU/USD', '3y', pd.Timestamp('2026-11-12 06:00', tz='Asia/Kolkata'), fetch=fd_)
+check('gold daily: once the UTC day has ended (06:00 IST next morning) it is included', len(gd2) == 3)
+check('Yahoo symbols: FX-style symbols are passed through as they are (no .NS added), stocks still get .NS', sc._yahoo('EURINR=X') == 'EURINR=X' and sc._yahoo('TCS') == 'TCS.NS' and sc._yahoo('^NSEI') == '^NSEI')
+check('gold settings: XAU/USD spot always (the old GOLD_SYMBOL=GC=F is ignored) and 0.35 dollars by default; bad cost values fall back', tf.gold_symbol({}) == 'XAU/USD' and tf.gold_symbol({'GOLD_SYMBOL': 'GC=F'}) == 'XAU/USD' and tf.gold_cost({}) == 0.35 and tf.gold_cost(dict(GOLD_COST='0.5')) == 0.5 and tf.gold_cost(dict(GOLD_COST='x')) == 0.35)
 
 # ---- 5. the command line, end to end, with a stand-in for Yahoo
 SYMS = [f'STK{i}' for i in range(4)]; CALLS = []
@@ -109,6 +109,20 @@ def fake_yahoo(symbols, period, interval, chunk=50, pause=1.0):
             hh = fx.walk5(3, days=20, start='2026-09-14')[0].resample('60min').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna(); out[s] = utc(hh)
     return out, []
 sc.yahoo_many = fake_yahoo
+import gold_feed; os.environ['TWELVEDATA_API_KEY'] = 'test'; os.environ['GOLD_FEED_GAP_S'] = '0'; GOLD_CALLS = []
+os.environ['GOLD_MAX_JUMP_PCT'] = '100'      # the tiled fixture stitches sessions at different price levels on purpose; the jump guard is tested in test_audit2.py
+def fake_spot(url):
+    """Twelve Data stand-in for the gold runs: XAU/USD spot candles in the provider's own JSON shape (the gold pipeline never calls Yahoo)."""
+    iv = {'5min': '5m', '15min': '15m', '1h': '1h', '1day': '1d'}[url.split('interval=')[1].split('&')[0]]; GOLD_CALLS.append(iv)
+    big = 'end_date' not in url
+    if not big: return {'status': 'error', 'code': 400, 'message': 'No data is available on the specified dates'}
+    if iv == '1d': f = fx.daily_walk(30, 2600, p0=2400.0); f.index = pd.bdate_range(end='2026-11-06', periods=len(f)); fmt = '%Y-%m-%d'; idx = f.index
+    elif iv == '1h': f = fx.walk5(3, days=20, start='2026-09-14')[0].resample('60min').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna(); fmt = '%Y-%m-%d %H:%M:%S'; idx = utc(f).index
+    else:
+        a5, a15 = fx.tiled(10, days=10, start='2026-09-14'); a5, a15 = shift(a5, 8), shift(a15, 8); f = a15 if iv == '15m' else a5; fmt = '%Y-%m-%d %H:%M:%S'; idx = utc(f).index
+    vals = [dict(datetime=t.strftime(fmt), open=str(r.Open), high=str(r.High), low=str(r.Low), close=str(r.Close), volume=str(r.Volume)) for t, r in zip(idx, f.itertuples())]
+    return dict(meta=dict(symbol='XAU/USD', interval=iv, currency_base='Gold Spot', currency_quote='US Dollar', type='Physical Currency'), values=vals, status='ok')
+gold_feed._http = fake_spot
 RD = lambda out, f: json.load(open(os.path.join(out, f)))
 run = lambda seg, out, extra=(): bt.main(['--segment', seg, '--out', out, '--workers', '1', *extra])
 for seg in ('gold_intraday', 'gold_swing', 'gold_positional'):
@@ -116,7 +130,7 @@ for seg in ('gold_intraday', 'gold_swing', 'gold_positional'):
     rf, tfile = bt.SEGMENTS[seg]['files']; ok = rc == 0 and os.path.exists(os.path.join(out, rf)) and os.path.exists(os.path.join(out, tfile))
     rp = RD(out, rf) if ok else {}
     check(f'{seg} run: exits cleanly, writes the report and the saved trades, A+ and the window on the page', ok and rp['segment'] == seg and rp['rules']['min_score'] == 8 and rp['window']['from'] >= '2026-04-01' and rp['assumptions'], f"rc={rc} n={(rp.get('summary') or {}).get('net', {}).get('n')}")
-    if seg.startswith('gold'): check(f'{seg} run: data comes from GC=F, marked as gold, with the session table where it applies', any(c[0] == ('GC=F',) for c in CALLS) and rp.get('gold') is True and (seg != 'gold_intraday' or rp['summary']['net']['n'] == 0 or 'session' in rp['by']), str(CALLS[:3]))
+    if seg.startswith('gold'): check(f'{seg} run: data comes from XAU/USD spot (never GC=F, never Yahoo), marked as gold, with the session table where it applies', not any('GC=F' in str(c) for c in CALLS) and GOLD_CALLS and (rp.get('params') or {}).get('source') == gold_feed.SOURCE_ID and rp.get('gold') is True and (seg != 'gold_intraday' or rp['summary']['net']['n'] == 0 or 'session' in rp['by']), str(CALLS[:3]))
 out = tempfile.mkdtemp(); rc = run('gold_intraday', out); n1 = len(RD(out, 'backtest_gold_intraday_trades.json')['trades']); rc = run('gold_intraday', out); n2 = len(RD(out, 'backtest_gold_intraday_trades.json')['trades'])
 check('gold intraday run again: trades are merged, not doubled', n1 == n2 and n1 >= 1, f'{n1} -> {n2}')
 q = tempfile.mkdtemp()

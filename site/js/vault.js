@@ -90,6 +90,6 @@ App.binds.journal = q => {
   $$('[data-fimp]').forEach(b => b.onclick = () => { const p = find(b.dataset.fimp); if (p) JR.openForm(null, Fills.prefill(p)); });
   $$('[data-fdis]').forEach(b => b.onclick = () => { const p = find(b.dataset.fdis); if (p && confirm(`Dismiss ${p.inst}? It will not be offered again.`)) markImported(p.ids); });
   $$('[data-fcls]').forEach(b => b.onclick = () => { const p = find(b.dataset.fcls); if (!p) return; const t = JR.J().trades.find(x => x.id === p.tradeId); if (!t) return;
-    if (!confirm(`Set the exit of ${p.inst} to ${fmt(p.exit)} in your journal?`)) return; t.exit = p.exit; t.note = (t.note || '') + (t.note ? ' | ' : '') + 'BR:' + p.key; JR.touch(); JR.persist(); markImported(p.ids); App.render(); App.toast('Trade closed in your journal'); });
+    if (!confirm(`Set the exit of ${p.inst} to ${fmt(p.exit)} in your journal?`)) return; t.exit = p.exit; if (p.d) { t.xd = p.d; t.xtm = p.tm || ''; delete t.xd_unknown; } t.note = (t.note || '') + (t.note ? ' | ' : '') + 'BR:' + p.key;      /* exit date and time from the broker fill itself (a reliable source) */ JR.touch(); JR.persist(); markImported(p.ids); App.render(); App.toast('Trade closed in your journal'); });
 };
 })();

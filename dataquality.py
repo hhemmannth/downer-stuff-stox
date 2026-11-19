@@ -36,6 +36,53 @@ def skip_reason(fl):
         if f['kind'] == 'halted': return f"Data check: {f['text']}."
     return None
 
+def sanitize(df):
+    """Candle hygiene applied to EVERY downloaded frame before any rule sees it (audit 18 Nov 2026). Returns (clean frame, counts).
+    Yahoo frames were used as they came: a repeated timestamp (Yahoo sometimes sends the live row twice), rows out of time order, or a candle
+    whose high is below its low could reach the swing detector. Here:
+      duplicate timestamps   -> the last one is kept (the newest print of that candle)
+      out of order           -> sorted by time
+      non-positive / missing price, or high below low -> the row is dropped (it cannot be a real candle)
+      open or close outside the high-low range        -> high/low widened to include them (a rounding mismatch in the feed; the row is kept)
+      negative volume        -> 0 (the engine already reads 0 as 'no volume data')
+    Zero volume is left alone: an index (^NSEI) or a quiet candle can legitimately have none."""
+    counts = dict(dupes=0, unsorted=0, dropped=0, repaired=0, neg_volume=0)
+    if df is None or not len(df): return df, counts
+    cols = [c for c in ('Open', 'High', 'Low', 'Close') if c in df.columns]
+    if len(cols) < 4: return df, counts
+    f = df
+    dup = f.index.duplicated(keep='last')
+    if dup.any(): counts['dupes'] = int(dup.sum()); f = f[~dup]
+    if not f.index.is_monotonic_increasing: counts['unsorted'] = 1; f = f.sort_index()
+    p = f[cols].apply(pd.to_numeric, errors='coerce')
+    hlc = p[['High', 'Low', 'Close']]
+    bad = hlc.isna().any(axis=1) | (hlc <= 0).any(axis=1) | (p.High < p.Low)
+    if bad.any(): counts['dropped'] = int(bad.sum()); f = f[~bad]; p = p[~bad]
+    no_open = p.Open.isna() | (p.Open <= 0)                  # some index feeds (India VIX) print no open: use the close, a doji, never a 'down candle'
+    if no_open.any():
+        counts['repaired'] += int(no_open.sum()); f = f.copy(); f.loc[no_open, 'Open'] = p.Close[no_open]; p = p.copy(); p.loc[no_open, 'Open'] = p.Close[no_open]
+    hi = p[['Open', 'High', 'Close']].max(axis=1); lo = p[['Open', 'Low', 'Close']].min(axis=1)
+    fix = (hi > p.High) | (lo < p.Low)
+    if fix.any():
+        counts['repaired'] += int(fix.sum()); f = f.copy(); f.loc[fix, 'High'] = hi[fix]; f.loc[fix, 'Low'] = lo[fix]
+    if 'Volume' in f.columns:
+        v = pd.to_numeric(f.Volume, errors='coerce'); neg = v < 0
+        if neg.any(): counts['neg_volume'] = int(neg.sum()); f = f.copy(); f.loc[neg, 'Volume'] = 0
+    return f, counts
+
+def ohlc_problems(df):
+    """Independent invariant check (used by the tests and the System health validation): the problems still present in a frame."""
+    out = []
+    if df is None or not len(df): return out
+    if df.index.duplicated().any(): out.append('duplicate timestamps')
+    if not df.index.is_monotonic_increasing: out.append('timestamps out of order')
+    o, h, l, c = (df[k].astype(float) for k in ('Open', 'High', 'Low', 'Close'))
+    if (h < l).any(): out.append('high below low')
+    if (h < o).any() or (h < c).any(): out.append('high below open/close')
+    if (l > o).any() or (l > c).any(): out.append('low above open/close')
+    if 'Volume' in df.columns and (df.Volume.astype(float) < 0).any(): out.append('negative volume')
+    return out
+
 def market_latest(frames):
     """The session most stocks have as their last candle. Using the most common date (not the newest) means one stock with an early
     candle, or a batch that is a few minutes late, cannot make the rest look halted."""

@@ -62,7 +62,7 @@ App.pages.analytics = () => {
     <div class="card"><div class="hd"><h2>Insights</h2></div><div class="bd"><ul class="ins">${A.insights(st, C, S).map(([k, t]) => `<li class="${k}"><i></i><span>${t}</span></li>`).join('')}</ul></div></div></div>`;
   h += `<div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>Drawdown</h2><span class="cap">distance below the equity peak</span></div><div class="bd" id="chDd" data-w></div></div>
     <div class="card"><div class="hd"><h2>R curve</h2><span class="cap">cumulative R: skill without position size</span></div><div class="bd" id="chR" data-w></div></div></div>`;
-  const months = A.group(C, t => t.mkey, 1).sort((a, b) => a.k < b.k ? -1 : 1);
+  const months = A.group(C, t => t.xmkey || 'exit date unknown', 1).sort((a, b) => a.k < b.k ? -1 : 1);
   h += `<div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>Monthly P&L</h2></div><div class="bd" id="chMo" data-w></div><div class="bd tbl-wrap" style="padding-top:0"><table class="tbl"><thead><tr><th>Month</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Avg R</th><th class="n">Net</th></tr></thead><tbody>${months.slice().reverse().slice(0, 6).map(g => `<tr><td>${MON[+g.k.slice(5) - 1]} ${g.k.slice(0, 4)}</td><td class="n">${g.n}</td><td class="n">${pct(g.win, 0)}</td><td class="n ${cls(g.avgR)}">${rr(g.avgR)}</td><td class="n ${cls(g.net)}">${inrS(g.net)}</td></tr>`).join('')}</tbody></table></div></div>
     <div class="card"><div class="hd"><h2>Calendar</h2><span class="sp"></span>${calNav(C, u)}</div><div class="bd">${calendar(C, u)}</div></div></div>`;
   h += `<div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>R distribution</h2><span class="cap">how big your wins and losses are, in R</span></div><div class="bd" id="chHist" data-w></div></div>
@@ -84,11 +84,11 @@ App.pages.analytics = () => {
   h += systemCard(C);
   return h;
 };
-function calNav(C, u) { const ms = [...new Set(C.map(t => t.mkey))].sort(); if (!u.calM || !ms.includes(u.calM)) u.calM = ms[ms.length - 1]; const i = ms.indexOf(u.calM);
+function calNav(C, u) { const ms = [...new Set(C.map(t => t.xmkey).filter(Boolean))].sort(); if (!u.calM || !ms.includes(u.calM)) u.calM = ms[ms.length - 1]; const i = ms.indexOf(u.calM);
   return `<button class="btn sm" data-cal="${ms[i - 1] || ''}" ${i > 0 ? '' : 'disabled'} aria-label="Previous month">‹</button><b style="min-width:80px;text-align:center">${MON[+u.calM.slice(5) - 1]} ${u.calM.slice(0, 4)}</b><button class="btn sm" data-cal="${ms[i + 1] || ''}" ${i < ms.length - 1 ? '' : 'disabled'} aria-label="Next month">›</button>`; }
 function calendar(C, u) {
   const m = u.calM, y = +m.slice(0, 4), mo = +m.slice(5) - 1, first = new Date(Date.UTC(y, mo, 1)), days = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate(), lead = (first.getUTCDay() + 6) % 7, by = {};
-  C.filter(t => t.mkey === m).forEach(t => { by[t.d] = by[t.d] || { net: 0, n: 0 }; by[t.d].net += t.net; by[t.d].n++; }); const mx = Math.max(...Object.values(by).map(x => Math.abs(x.net)), 1);
+  C.forEach(t => (t._legs || []).forEach(l => { if (!l.known || l.net == null || l.d.slice(0, 7) !== m) return; by[l.d] = by[l.d] || { net: 0, n: 0 }; by[l.d].net += l.net; by[l.d].n++; }));     // realized on its exit date (pnl.js) const mx = Math.max(...Object.values(by).map(x => Math.abs(x.net)), 1);
   let h = WD.map(d => `<div class="dh">${d}</div>`).join('') + '<div class="d x"></div>'.repeat(lead);
   for (let d = 1; d <= days; d++) { const k = `${m}-${String(d).padStart(2, '0')}`, x = by[k], a = x ? .15 + .6 * Math.abs(x.net) / mx : 0;
     h += `<div class="d" style="${x ? `background:color-mix(in srgb,${x.net >= 0 ? 'var(--good)' : 'var(--bad)'} ${Math.round(a * 100)}%,var(--panel-2))` : ''}" title="${k}${x ? ': ' + inrS(x.net) + ', ' + x.n + ' trades' : ''}"><span class="muted">${d}</span>${x ? `<b>${Math.abs(x.net) >= 1000 ? (x.net / 1000).toFixed(1) + 'k' : Math.round(x.net)}</b>` : ''}</div>`; }
@@ -114,7 +114,7 @@ App.binds.analytics = () => {
     put('chEq', App.charts.line([{ pts: st.curve, c: st.net >= 0 ? 'good' : 'bad', area: true }], { W: w('chEq'), H: 220, zero: true, labels: lab, fmt: v => inr(v), label: 'Equity curve' }));
     put('chDd', App.charts.line([{ pts: st.ddc, c: 'bad', area: true }], { W: w('chDd'), H: 170, zero: true, labels: lab, fmt: v => inr(v), label: 'Drawdown' }));
     put('chR', App.charts.line([{ pts: st.rc, c: 'brand', area: true }], { W: w('chR'), H: 170, zero: true, labels: lab, fmt: v => v.toFixed(1) + 'R', label: 'R curve' }));
-    const ms = A.group(st.C, t => t.mkey, 1).sort((a, b) => a.k < b.k ? -1 : 1).slice(-12);
+    const ms = A.group(st.C.filter(t => t.xmkey), t => t.xmkey, 1).sort((a, b) => a.k < b.k ? -1 : 1).slice(-12);
     put('chMo', App.charts.bars(ms.map(g => ({ l: MON[+g.k.slice(5) - 1] + ' ' + g.k.slice(2, 4), v: g.net })), { W: w('chMo'), H: 170, fmt: v => inr(v), label: 'Monthly P&L' }));
     const edges = [-Infinity, -2, -1, -.5, 0, .5, 1, 2, 3, Infinity], lbl = ['<-2', '-2..-1', '-1..-.5', '-.5..0', '0..+.5', '+.5..1', '1..2', '2..3', '>3'];
     put('chHist', App.charts.bars(lbl.map((l, i) => ({ l, v: st.R.filter(r => r > edges[i] && r <= edges[i + 1]).length, c: i < 4 ? 'bad' : 'good' })), { W: w('chHist'), H: 170, fmt: v => String(Math.round(v)), label: 'R distribution' }));

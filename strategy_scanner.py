@@ -262,7 +262,7 @@ def detect(struct, trig, cfg, K=None, section='swing', bias=None, levels=(), ext
     elif section != 'swing':
         b = choch_bias(bias)
         if b is None: return dict(symbol=None, state='NO_BIAS', score=0, grade='skip')     # your rule: the 15m must show a CHoCH
-    use_vol = section != 'options'                                                         # options: you check volume yourself
+    use_vol = section != 'options' and cfg.get('use_volume', True)                         # options: you check volume yourself; gold spot with GOLD_VOLUME_RULE=off: no volume data
     cf = confirm(trig, s, cfg); a = s['atr']; ticks = []
     triggered = bool(cf['reclaim'] and cf['touched']); last_t = trig.Close.iloc[-1] if trig is not None and len(trig) else px
     if triggered and (last_t - s['zone_top']) > cfg['trigger_max_atr'] * a: return dict(symbol=None, state='EXTENDED', score=0, grade='skip')
@@ -405,7 +405,7 @@ def _http_get(url):
     return urllib.request.urlopen(req, timeout=30).read().decode('utf-8-sig')
 
 # ------------------------------------------------------------------ data (yfinance)
-def _yahoo(sym): return sym if sym.startswith('^') or sym.endswith('.NS') or '=' in sym else sym + '.NS'      # '=': futures and FX (GC=F gold), not NSE stocks
+def _yahoo(sym): return sym if sym.startswith('^') or sym.endswith('.NS') or '=' in sym else sym + '.NS'      # '=': FX-style symbols, not NSE stocks (gold does not come from Yahoo: see gold_feed.py)
 
 def _extract(d, t, multi):
     f = (d[t] if multi else d)[COLS].dropna()
@@ -991,7 +991,7 @@ def run_news(args, now):
     for name in ('swing', 'intraday'):
         for s in (read_json(args.out, name + '.json') or {}).get('setups', []):
             if (s.get('results') or {}).get('date'): results[s['symbol']] = s['results']['date']
-    ev = newsfeed.upcoming(now, cfg, results); news.update(events=ev, risk_flags=newsfeed.risk_flags(ev), holidays=[h['date'] for h in cfg.get('holidays', [])])
+    ev = newsfeed.upcoming(now, cfg, results); news.update(events=ev, risk_flags=newsfeed.risk_flags(ev), holidays=[h['date'] for h in cfg.get('holidays', [])], calendar=dict(cfg.get('calendar') or {}, status=dict(zip(('level', 'text'), __import__('market_calendar').check(now)))))
     write_json(args.out, 'news.json', news); return news
 
 def minutes_since(path, now):
@@ -1032,7 +1032,10 @@ def write_health(args, now, sections, t0):
         health = dict(mode=args.mode, started_at=now.isoformat(timespec='seconds'), finished_at=pd.Timestamp.now(tz=IST).isoformat(timespec='seconds'), seconds=round(time.time() - t0, 1),
                       ok=all(x['ok'] for x in sections.values()), sections=sections, data=datasource.report(), run_url=run_url())
         write_json(os.path.join(args.out, 'health'), args.mode + '.json', health)
-        import alerts                                   # item 28: tell the phone when a scan or a data source breaks (ALERTS_STATE=pub/state/alerts.json)
+        try:                                            # audit 18 Nov 2026: independent re-check of what was just published (System health > Validation checks)
+            import validation; validation.write(args.out, now, health)
+        except Exception as ex_v: print(f'validation not written: {ex_v}', file=sys.stderr)
+        import alerts                                  # item 28: tell the phone when a scan or a data source breaks (ALERTS_STATE=pub/state/alerts.json)
         alerts.process(health, ((read_json(args.out, 'options.json') or {}).get('snapshot')), os.environ.get('ALERTS_STATE'))
     except Exception as ex: print(f'health not written: {ex}', file=sys.stderr)
 

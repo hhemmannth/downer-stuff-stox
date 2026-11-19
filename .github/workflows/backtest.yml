@@ -72,7 +72,8 @@ jobs:
           BACKTEST_FROM: ${{ vars.BACKTEST_FROM }}
           MIN_SCORE: ${{ vars.MIN_SCORE }}
           APLUS_OVERFLOW: ${{ vars.APLUS_OVERFLOW }}
-          GOLD_SYMBOL: ${{ vars.GOLD_SYMBOL }}
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}      # XAUUSD spot (gold_feed.py); no key = no gold, never a futures fallback
+          GOLD_VOLUME_RULE: ${{ vars.GOLD_VOLUME_RULE }}
           GOLD_COST: ${{ vars.GOLD_COST }}
           STOP_AFTER_LOSSES: ${{ vars.STOP_AFTER_LOSSES }}
           RISK_PCT: ${{ vars.RISK_PCT }}

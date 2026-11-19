@@ -8,12 +8,13 @@
 Only A+ setups (score 8 to 10) are listed and taken. A setup that TRIGGERS becomes a tracked signal (signals.py: the same trade rules as
 the backtest), at most GOLD_MAX_OPEN open at once (2 = your 2% open-risk cap at 0.75% a trade), and past 2 trades a day only A+ (always
 true here, since only A+ is taken). It NEVER places orders: you get an alert with entry, stop, targets and lots, and you decide.
-Data: Yahoo GC=F (COMEX gold futures), the closest free intraday feed; it can lag the live market by a few minutes.
+Data: XAUUSD SPOT only (gold_feed.py: Twelve Data XAU/USD, verified on every download). Never COMEX futures, never MCX. If the spot feed is
+missing, fails its checks or is stale, gold shows 'XAUUSD SPOT DATA UNAVAILABLE: NO GOLD RECOMMENDATION' and nothing is opened.
 
   python gold_live.py --out pub/data --state pub/state [--styles intraday,swing,positional]"""
 import argparse, datetime as dt, json, math, os, sys
 import numpy as np, pandas as pd
-import backtest as bt, backtest_tf as tf, holdbacks, signals, strategy_scanner as sc
+import backtest as bt, backtest_tf as tf, gold_feed, holdbacks, signals, strategy_scanner as sc
 
 IST = 'Asia/Kolkata'; GOLD_TZ = tf.GOLD_TZ; LABEL = tf.GOLD_LABEL; STYLES = ('intraday', 'swing', 'positional')
 SECTION = {k: 'gold_' + k for k in STYLES}
@@ -51,7 +52,10 @@ def why_of(r, min_score, tf_name='5m'):
     if r is None: return f'No {tf_name} structure yet (needs a sweep, CHoCH and BOS)'
     if 'zone_bot' not in r: return WHY_STATE.get(r.get('state'), 'No structure at the moment')
     st, sc_ = str(r.get('status') or ''), int(r.get('score') or 0)
-    if 'low volume' in st: rv = r.get('rvol'); return 'Trigger seen, but volume is ' + (f'{rv:.1f}x' if isinstance(rv, (int, float)) and not math.isnan(rv) else 'too low') + ' and your rule needs 1.5x' + (f' (score {sc_}/10)' if sc_ < min_score else '')
+    if 'low volume' in st:
+        rv = r.get('rvol')
+        if not (isinstance(rv, (int, float)) and not math.isnan(rv)): return 'Trigger seen, but XAUUSD spot has no exchange volume, so your 1.5x volume rule cannot be met: no trade (GOLD_VOLUME_RULE=off is your call)'
+        return f'Trigger seen, but volume is {rv:.1f}x and your rule needs 1.5x' + (f' (score {sc_}/10)' if sc_ < min_score else '')
     if sc_ < min_score: return f'In play, but score {sc_}/10 and A+ needs {min_score}+'
     if st.startswith('TRIGGER'): return 'Triggered'
     return 'In the zone: waiting for a close back over the 9 EMA on 1.5x volume' if 'in zone' in st else 'Approaching the zone: set an alert'
@@ -59,7 +63,7 @@ def why_of(r, min_score, tf_name='5m'):
 def item(style, side, r, entry, sl, t1, t2, t3, status, extra=None):
     """One setup in the shape the page, the tracker and the alerts read."""
     risk = abs(entry - sl)
-    it = dict(symbol=LABEL, section=SECTION[style], style=style, direction=side, label=side.upper(), grade=r['grade'], score=int(r['score']), status=status,
+    it = dict(symbol=LABEL, instrument=gold_feed.INSTRUMENT['instrument'], data_source=gold_feed.SOURCE_ID, section=SECTION[style], style=style, direction=side, label=side.upper(), grade=r['grade'], score=int(r['score']), status=status,
               entry=_lv(entry), sl=_lv(sl), t1=_lv(t1), t2=_lv(t2), t3=_lv(t3), risk_usd=round(risk, 2), zone_bot=_lv(r.get('zone_bot')), zone_top=_lv(r.get('zone_top')),
               structure=int(r.get('structure') or 0), zone_q=int(r.get('zone_q') or 0), confirm=int(r.get('confirm') or 0), context=int(r.get('context') or 0),
               bos_date=str(r.get('bos_date') or '')[:16], stage=r.get('stage'))
@@ -67,7 +71,7 @@ def item(style, side, r, entry, sl, t1, t2, t3, status, extra=None):
     return it
 
 # ------------------------------------------------------------------ the three styles
-def scan_intraday(f5, f15, now, min_score, why=None):
+def scan_intraday(f5, f15, now, min_score, why=None, vol_on=True):
     """f5, f15: 5m and 15m gold candles (closed bars only). Returns (items, states). `why` (a dict, optional) gets one sentence per side."""
     S = tf.gold_session(); a5, a15 = tf._aware(f5, S['tz']), tf._aware(f15, S['tz']); items, states = [], {}; why = {} if why is None else why
     if len(a5) < sc.CFG_I['min_bars'] or len(a15) < 3:
@@ -75,7 +79,7 @@ def scan_intraday(f5, f15, now, min_score, why=None):
         return items, states
     w5, w15 = a5.tail(375), a15.tail(250); lv = sc.prev_day_levels(w5)
     for side in ('long', 'short'):
-        try: r = sc.scan_intraday(w5, w15, side, sc.CFG_I, lv, section='intraday')
+        try: r = sc.scan_intraday(w5, w15, side, sc.CFG_I if vol_on else dict(sc.CFG_I, use_volume=False), lv, section='intraday')
         except Exception as ex: print(f'  intraday {side}: {ex}', file=sys.stderr); why[side] = 'Scan error: ' + str(ex)[:80]; continue
         states[(LABEL, side)] = sc.state_of(r, min_score); why[side] = why_of(r, min_score, '5m')
         if not r or 'zone_bot' not in r or 'entry' not in r or r['score'] < min_score: continue
@@ -94,10 +98,10 @@ def swing_why(rr, min_score):
     sc_ = int(rr.get('score') or 0)
     return f'{name} (score {sc_}/10, A+ needs {min_score}+)' if sc_ < min_score or stg < 4 else name
 
-def _swing_one(daily, h1, side, K, min_score, why=None):
+def _swing_one(daily, h1, side, K, min_score, why=None, vol_on=True):
     import swing
     d, h = (daily, h1) if side == 'long' else (sc.invert(daily, K), sc.invert(h1, K))
-    rr = swing.analyse(d.tail(250), h, cfg=dict(swing.CFG, **swing.GOLD_HB))      # gold swing profile: zone 2/2 and 1H volume 2x (18 Nov 2026)
+    rr = swing.analyse(d.tail(250), h, cfg=dict(swing.CFG, **swing.GOLD_HB, **({} if vol_on else tf.GOLD_NO_VOLUME)))      # gold swing profile: zone 2/2 and 1H volume 2x (18 Nov 2026)
     if why is not None: why[side] = swing_why(rr, min_score)
     if not rr or rr.get('stage', 0) < 2 or rr['score'] < min_score or rr.get('sl') is None: return None, (None if not rr else rr.get('stage'))
     entry = float(h.Close.iloc[-1]); sl = float(rr['sl']); risk = entry - sl
@@ -113,7 +117,7 @@ def _swing_one(daily, h1, side, K, min_score, why=None):
     return item('swing', side, r, m(entry), m(sl), m(entry + risk), m(entry + 2 * risk), m(entry + 3 * risk), status,
                 dict(tf_structure='1D', held=held, weekly=('down' if side == 'short' else 'up') if rr['weekly'].get('up') else 'against', room_r=_lv(rr.get('room_r')))), rr.get('stage')
 
-def scan_swing(daily, h1, min_score, why=None):
+def scan_swing(daily, h1, min_score, why=None, vol_on=True):
     """daily: gold daily candles (finished sessions), h1: 1H candles (closed). Long and short."""
     items, states = [], {}; why = {} if why is None else why
     if daily is None or h1 is None or len(daily) < sc.CFG['min_bars'] + 5 or len(h1) < 20:
@@ -121,15 +125,15 @@ def scan_swing(daily, h1, min_score, why=None):
         return items, states
     h1 = h1[h1.index >= h1.index[-1] - pd.Timedelta(days=92)]; K = tf.mirror_k(daily, h1)
     for side in ('long', 'short'):
-        try: it, stage = _swing_one(daily, h1, side, K, min_score, why)
+        try: it, stage = _swing_one(daily, h1, side, K, min_score, why, vol_on)
         except Exception as ex: print(f'  swing {side}: {ex}', file=sys.stderr); why[side] = 'Scan error: ' + str(ex)[:80]; continue
         states[(LABEL, side)] = None if it is None else 'IN_ZONE'
         if it: items.append(it)
     return items, states
 
-def scan_positional(daily, min_score, why=None):
+def scan_positional(daily, min_score, why=None, vol_on=True):
     """Weekly structure, daily trigger (the positional backtest's engine), long and short."""
-    items, states = [], {}; cfg = tf.CFG_GP; why = {} if why is None else why
+    items, states = [], {}; cfg = tf.CFG_GP if vol_on else dict(tf.CFG_GP, use_volume=False); why = {} if why is None else why
     if daily is None or len(daily) < cfg['min_bars'] * 5 + 30:
         for sd in ('long', 'short'): why[sd] = 'Not enough daily candles from the feed yet'
         return items, states
@@ -205,19 +209,28 @@ def alerts(out, state_path, now):
                 if ev['kind'] == 'trigger':
                     title = f"{TITLE[style]}: {sig['label']} XAUUSD, A+ {sig['score']}/10"
                     body = '\n'.join([f"Entry {sig['entry']}   Stop {sig['sl']}   (stop ${it.get('risk_usd', abs(sig['entry'] - sig['sl'])):.2f} an ounce)", f"T1 {sig['t1']}   T2 {sig['t2']}   T3 {sig['t3']}",
-                                      lots_text(float(it.get('risk_usd') or abs(sig['entry'] - sig['sl']))), 'Prices are COMEX gold futures (GC=F): check them against your XAUUSD chart. You place the order.'])
+                                      lots_text(float(it.get('risk_usd') or abs(sig['entry'] - sig['sl']))), f"XAUUSD spot, USD per troy ounce ({gold_feed.PROVIDER} {gold_feed.SYMBOL}). Your broker's XAUUSD quote can differ by its spread. You place the order."])
                 else: title, body = f"{TITLE[style]}: XAUUSD {sig['label']} {ev['kind'].upper()}", ev['text']
                 send(title, body, icon.get(ev['kind'], 'bell'), link, sent); seen[k] = ev['t'][:10]
     cut = (pd.Timestamp(now) - pd.Timedelta(days=10)).strftime('%Y-%m-%d'); st['sent'] = {k: v for k, v in seen.items() if v >= cut}
     os.makedirs(os.path.dirname(state_path) or '.', exist_ok=True); json.dump(st, open(state_path, 'w')); return sent
 
 # ------------------------------------------------------------------ one run
-def fetch_frames(styles, now, sym, fetch=None):
-    fr = {}
-    if 'intraday' in styles: fr['f5'], fr['f15'] = tf.gold_intraday(sym, '5d', '5m', now, fetch), tf.gold_intraday(sym, '30d', '15m', now, fetch)
-    if 'swing' in styles: fr['h1'] = tf.gold_intraday(sym, '180d', '1h', now, fetch)
-    if 'swing' in styles or 'positional' in styles: fr['daily'] = tf.gold_daily(sym, '5y', now, fetch)
-    return fr
+def fetch_frames(styles, now, sym=None, fetch=None, state_dir=None):
+    """XAUUSD spot frames and the feed status. fetch: injectable get(url) for tests. Returns (frames, info); info['ok'] False = no gold scan."""
+    return gold_feed.frames(styles, now, state_dir, get=fetch)
+
+def migrate_futures(led, now):
+    """Trades opened before 18 Nov 2026 were read from COMEX futures (GC=F). They are kept (nothing deleted) but marked historical
+    futures-based, excluded from XAUUSD statistics, and an open one is ARCHIVED instead of being followed on spot prices (never mix the two)."""
+    n = 0
+    for s in led.get('signals', []):
+        if s.get('data_source') or s.get('futures_based'): continue
+        s.update(data_source='historical: COMEX GC=F futures', futures_based=True, excluded_from_stats=True); n += 1
+        if s.get('status') == 'ACTIVE':
+            s['status'] = 'ARCHIVED'; s.setdefault('events', []).append(dict(t=pd.Timestamp(now).isoformat(timespec='minutes'), kind='archived', text='Archived: read from COMEX futures (GC=F) levels, not followed on XAUUSD spot prices.'))
+    if n: led['watch'] = {}                                                       # watched levels were futures levels: rebuilt from spot on this run
+    return n
 
 def feed_info(fr, now):
     """How fresh the candles are: when the last 5-minute candle CLOSED and how many minutes ago that was. A feed that runs 10+ minutes late shows every
@@ -229,33 +242,46 @@ def feed_info(fr, now):
 
 def run(out, state_dir, styles=STYLES, now=None, fetch=None):
     now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz=IST); now = now.tz_localize(IST) if now.tzinfo is None else now.tz_convert(IST)
-    os.makedirs(out, exist_ok=True); rules = bt.rules_from_env(); ms = rules['min_score']; sym = tf.gold_symbol()
+    os.makedirs(out, exist_ok=True); rules = bt.rules_from_env(); ms = rules['min_score']; sym = gold_feed.SYMBOL
     max_open, max_day = env_int('GOLD_MAX_OPEN', 2), env_int('MAX_TRADES_PER_DAY', 2)
-    fr = fetch_frames(styles, now, sym, fetch); prev = sc.read_json(out, 'gold.json', {}) or {}; doc = dict(prev); doc['styles'] = dict(prev.get('styles') or {})
-    is_open = market_open(now); tracked = 0
+    fr, info = fetch_frames(styles, now, sym, fetch, state_dir); prev = sc.read_json(out, 'gold.json', {}) or {}; doc = dict(prev); doc['styles'] = {}
+    is_open = market_open(now); tracked = 0; vol_on = gold_feed.volume_rule() == 'on'
+    lag5 = gold_feed.lag_minutes(fr.get('f5'), now, 5) if info['ok'] else None
+    if info['ok'] and is_open and 'intraday' in styles and (lag5 is None or lag5 > 25): info.update(ok=False, reason=f'the last 5-minute XAUUSD spot candle closed {lag5} min ago (limit 25): stale')
+    off = None if info['ok'] else f"XAUUSD SPOT DATA UNAVAILABLE: NO GOLD RECOMMENDATION ({info['reason']})"
     for style in styles:
         why = {}
+        led = signals.load(ledger_path(out, style))
+        if migrate_futures(led, now): signals.save(ledger_path(out, style), led, now)
+        if off:                                                                       # no verified spot data: nothing is scanned or opened; open trades still get their square-off
+            signals.update(led, SECTION[style], [], {}, {}, now, False); signals.save(ledger_path(out, style), led, now)
+            tracked += sum(1 for s_ in led['signals'] if s_['status'] == 'ACTIVE')
+            doc['styles'][style] = dict(setups=[], scanned_at=now.isoformat(timespec='seconds'), why=dict(long=off, short=off), feed_ok=False); continue
         try:
             if style == 'intraday':
-                if fr.get('f5') is not None and fr.get('f15') is not None: items, states = scan_intraday(fr.get('f5'), fr.get('f15'), now, ms, why)
-                else: items, states = [], {}; why.update(long='The feed returned no 5-minute gold candles this run', short='The feed returned no 5-minute gold candles this run')
-            elif style == 'swing': items, states = scan_swing(fr.get('daily'), fr.get('h1'), ms, why)
-            else: items, states = scan_positional(fr.get('daily'), ms, why)
+                if fr.get('f5') is not None and fr.get('f15') is not None: items, states = scan_intraday(fr.get('f5'), fr.get('f15'), now, ms, why, vol_on)
+                else: items, states = [], {}; why.update(long='The feed returned no 5-minute XAUUSD spot candles this run', short='The feed returned no 5-minute XAUUSD spot candles this run')
+            elif style == 'swing': items, states = scan_swing(fr.get('daily'), fr.get('h1'), ms, why, vol_on)
+            else: items, states = scan_positional(fr.get('daily'), ms, why, vol_on)
         except Exception as ex: print(f'gold {style} failed: {ex}', file=sys.stderr); doc['styles'][style] = dict(error=str(ex)[:200], scanned_at=now.isoformat(timespec='seconds')); continue
         if style in ('intraday', 'positional'): holdbacks.hold_items(items, SECTION[style])            # your hold-backs by segment (holdbacks.py): zone below 2/2 is WATCH
         items = apply_rules(items, out, now, max_open, max_day)
         bars = {LABEL: fr.get('f5') if style == 'intraday' else fr.get('h1') if style == 'swing' and fr.get('h1') is not None else fr.get('daily')}
         if style == 'positional' and bars[LABEL] is not None:
             b = bars[LABEL].copy(); b.index = pd.DatetimeIndex(b.index).tz_localize(IST) + pd.Timedelta(hours=15, minutes=30); bars[LABEL] = b      # daily candles, followed at their close
-        led = signals.load(ledger_path(out, style)); signals.update(led, SECTION[style], items, states, bars, now, is_open); signals.save(ledger_path(out, style), led, now)
+        signals.update(led, SECTION[style], items, states, bars, now, is_open); signals.save(ledger_path(out, style), led, now)
         tracked += sum(1 for s in led['signals'] if s['status'] == 'ACTIVE')
         doc['styles'][style] = dict(setups=items, scanned_at=now.isoformat(timespec='seconds'), why=why)
     last = None
     for k in ('f5', 'h1', 'daily'):
         f = fr.get(k)
         if f is not None and len(f): last = float(f.Close.iloc[-1]); break
-    n_day, n_open = today_count(out, now); doc['feed'] = feed_info(fr, now)
-    doc.update(generated_at=now.isoformat(timespec='seconds'), source=sym, price=last if last is not None else prev.get('price'), market_open=is_open, session=session_name(now) if is_open else 'closed',
+    n_day, n_open = today_count(out, now); doc['feed'] = dict(feed_info(fr, now), ok=info['ok'], reason=info['reason'], requests=info.get('requests'), provider=gold_feed.PROVIDER)
+    doc['instrument'] = gold_feed.INSTRUMENT
+    doc['volume'] = dict(available=bool(info.get('volume_available')), rule=gold_feed.volume_rule(),
+                         note=('the spot feed sends volume' if info.get('volume_available') else 'XAUUSD spot has no exchange volume: ' + ('your volume rule cannot be met, so no gold trigger is taken' if vol_on else 'GOLD_VOLUME_RULE=off: gold runs without the volume conditions (your choice)')))
+    if not info['ok']: last = None
+    doc.update(generated_at=now.isoformat(timespec='seconds'), source=gold_feed.SOURCE_ID, price=last, market_open=is_open, session=session_name(now) if is_open else 'closed',
                entry_window=entry_window(now), trades_today=n_day, open_now=n_open, max_open=max_open, max_day=max_day, min_score=ms, sessions=os.environ.get('GOLD_SESSIONS', 'all') or 'all')
     sc.write_json(out, 'gold.json', doc)
     sent = alerts(out, os.path.join(state_dir, 'gold_notified.json'), now)
