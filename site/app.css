@@ -849,3 +849,12 @@ body{background:radial-gradient(1200px 760px at 82% -14%,var(--lux-glow1),transp
 .gwhy b{font-weight:500;text-align:left;font-size:13.5px;line-height:1.35}
 .gwhy span{white-space:nowrap}
 @media(max-width:600px){.gwhy{grid-template-columns:1fr;gap:2px 0}.gwhy span{margin-top:8px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;opacity:.7}}
+
+/* hide-alert controls on the risk banner */
+.stale.risk .rk-list{list-style:none;padding-left:0}
+.stale.risk .rk-list li{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin:6px 0}
+.stale.risk .rk-acts{display:flex;gap:6px;flex-wrap:wrap}
+.stale.risk .rk-b{font:inherit;font-size:12px;font-weight:600;padding:3px 9px;border-radius:7px;border:1px solid currentColor;background:transparent;color:var(--ink);cursor:pointer;opacity:.85}
+.stale.risk .rk-b:hover{opacity:1}
+.stale.risk .rk-foot{opacity:.85}
+.stale.rk-quiet{padding:6px 12px;border-style:solid}
