@@ -1,0 +1,137 @@
+{
+  "_about": "The ONE place for NSE trading holidays (equity and F&O). Every module reads this file through market_calendar.py: the loop and watchdog, the scans, Nifty expiry dates, the backtests, the digest, the readiness check and the app (via news.json). Only entries with status 'official' are applied. To add a year: copy the dates from the NSE circular 'Trading holidays for the calendar year YYYY', set status to 'official', fill source, and run python test_calendar.py.",
+  "exchange": "NSE (Capital Market and Futures & Options segments)",
+  "years": {
+    "2026": {
+      "status": "official",
+      "source": "NSE circular NSE/CMTR/71775 dated December 12, 2025 (Capital Market) and NSE/FAOP/71777 (F&O), 'Trading holidays for the calendar year 2026'",
+      "source_url": "https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf",
+      "verified": "2026-11-18: dates read from the circular PDF; 2026-11-19: 15 Jan 2026 amendment added (it was missing)",
+      "holidays": [
+        {
+          "date": "2026-01-15",
+          "name": "Municipal Corporation Election in Maharashtra",
+          "added_by": "NSE/CMTR/72260 (Capital Market) and NSE/FAOP/72262 (F&O), both dated January 12, 2026, partially modifying NSE/CMTR/71775 and NSE/FAOP/71777"
+        },
+        {
+          "date": "2026-01-26",
+          "name": "Republic Day"
+        },
+        {
+          "date": "2026-03-03",
+          "name": "Holi"
+        },
+        {
+          "date": "2026-03-26",
+          "name": "Shri Ram Navami"
+        },
+        {
+          "date": "2026-03-31",
+          "name": "Shri Mahavir Jayanti"
+        },
+        {
+          "date": "2026-04-03",
+          "name": "Good Friday"
+        },
+        {
+          "date": "2026-04-14",
+          "name": "Dr. Baba Saheb Ambedkar Jayanti"
+        },
+        {
+          "date": "2026-05-01",
+          "name": "Maharashtra Day"
+        },
+        {
+          "date": "2026-05-28",
+          "name": "Bakri Id"
+        },
+        {
+          "date": "2026-06-26",
+          "name": "Muharram"
+        },
+        {
+          "date": "2026-09-14",
+          "name": "Ganesh Chaturthi"
+        },
+        {
+          "date": "2026-10-02",
+          "name": "Mahatma Gandhi Jayanti"
+        },
+        {
+          "date": "2026-10-20",
+          "name": "Dussehra"
+        },
+        {
+          "date": "2026-11-10",
+          "name": "Diwali-Balipratipada"
+        },
+        {
+          "date": "2026-11-24",
+          "name": "Prakash Gurpurb Sri Guru Nanak Dev"
+        },
+        {
+          "date": "2026-12-25",
+          "name": "Christmas"
+        }
+      ],
+      "weekend_holidays": [
+        {
+          "date": "2026-02-15",
+          "name": "Mahashivratri"
+        },
+        {
+          "date": "2026-03-21",
+          "name": "Id-Ul-Fitr (Ramadan Eid)"
+        },
+        {
+          "date": "2026-08-15",
+          "name": "Independence Day"
+        },
+        {
+          "date": "2026-11-08",
+          "name": "Diwali Laxmi Pujan (Muhurat Trading)"
+        }
+      ],
+      "special_sessions": [
+        {
+          "date": "2026-11-08",
+          "name": "Diwali Muhurat Trading (Sunday, about one hour; timings by a separate NSE circular)",
+          "kind": "muhurat",
+          "source": "same circular",
+          "scanned": false
+        }
+      ],
+      "settlement_holidays": {
+        "status": "not_loaded",
+        "note": "NSE Clearing settlement (bank) holidays are published separately. The app does not use settlement dates."
+      },
+      "amendments": [
+        {
+          "date": "2026-01-12",
+          "circulars": [
+            "NSE/CMTR/72260",
+            "NSE/FAOP/72262"
+          ],
+          "effect": "added 2026-01-15 as a trading holiday (CM and F&O)",
+          "verified": "2026-11-19: circular text read"
+        }
+      ]
+    },
+    "2027": {
+      "status": "awaiting_official",
+      "note": "NSE had not published the 2027 list on 18 Nov 2026: its own 2026-27 Trade-for-Trade review calendar marks January 2027 dates 'Subject to change as per Holiday calendar for 2027'. The circular usually comes out in mid-December (2026's: 12 Dec 2025; 2024's: 12 Dec 2023). Third-party '2027 lists' disagree with each other (Holi 22 or 23 March, Muharram 15 or 16 June, Good Friday 26 March or 16 April), so none is used.",
+      "expected": "mid-December 2026",
+      "holidays": [],
+      "provisional": [
+        {
+          "date": "2027-01-26",
+          "name": "Republic Day",
+          "why": "fixed-date national holiday; NSE has closed on it every year. NOT applied until the circular confirms it",
+          "applied": false
+        }
+      ],
+      "weekend_holidays": [],
+      "special_sessions": []
+    }
+  }
+}

@@ -1,7 +1,7 @@
 """Trade lifecycle ledger. A setup that TRIGGERS becomes a signal and stays on the page until it closes: target, stop,
 trailing stop or expiry, with every step time-stamped. Setups that disappear before triggering are listed as invalidated
 with the reason, so nothing you were watching or trading silently vanishes after a refresh."""
-import json, os
+import hashlib, json, os
 import datetime as dt
 import pandas as pd
 import holdbacks
@@ -66,7 +66,7 @@ def key(section, it): return f"{section}|{it['symbol']}|{it['direction']}|{it['b
 def load(path):
     try: led = json.load(open(path))
     except Exception: led = {}
-    led.setdefault('signals', []); led.setdefault('dropped', []); led.setdefault('watch', {}); return led
+    led.setdefault('signals', []); led.setdefault('dropped', []); led.setdefault('watch', {}); led.setdefault('paper', []); return led
 
 def save(path, led, now):
     led['updated'] = now.isoformat(timespec='seconds'); tmp = path + '.tmp'
@@ -87,12 +87,50 @@ def _close(sig, ts, price, outcome, text):
     rest = 1.0 - sum(f for f, _ in booked); sig['r_final'] = round(sum(f * _r(sig, p) for f, p in booked) + rest * _r(sig, price), 2)
     return _event(sig, ts, outcome.lower(), text + f" Result {sig['r_final']:+.2f}R (half at the first target, a quarter at the second, the rest at exit).")
 
+def seal(snap):
+    """SHA-256 of a signal snapshot (canonical JSON): System health recomputes it, so a rewritten original signal is caught."""
+    return hashlib.sha256(json.dumps(snap, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
+
+def _stamp():
+    try: import strategy_config; return strategy_config.stamp()
+    except Exception as ex: return ('unknown', f'error: {str(ex)[:60]}', False)
+
+COST_MODEL = dict(swing=('pct', 0.30), positional=('pct', 0.30), intraday=('pct', 0.08), gold_intraday=('usd', 0.35), gold_swing=('usd', 0.35), gold_positional=('usd', 0.35), options=('none', None))
+def paper_costs(section, sig):
+    """Costs and slippage assumed for a paper trade, in R, with the assumption written out (the same allowances as the backtests)."""
+    kind, v = COST_MODEL.get(section, ('none', None)); risk = abs((sig.get('entry') or 0) - (sig.get('sl') or 0))
+    if kind == 'pct' and risk > 0: return round(v / 100.0 * sig['entry'] / risk, 3), f'{v}% of the entry price per round trip (brokerage, STT, stamp duty, exchange charges, GST and slippage)'
+    if kind == 'usd' and risk > 0:
+        try: import backtest_tf as tf; v = tf.gold_cost()
+        except Exception: pass
+        return round(v / risk, 3), f'{v} dollars an ounce per round trip (spread and commission, slippage included); swap not modelled'
+    return None, 'not modelled: options are tracked on index levels, and premium costs need your actual option fill'
+
+def paper_record(sig):
+    """The permanent paper-trading record of a closed signal: the sealed original signal plus what actually happened. Written once, never edited."""
+    cost_r, how = paper_costs(sig['section'], sig); r = sig.get('r_final')
+    return dict(id=sig['id'], section=sig['section'], symbol=sig['symbol'], instrument=sig.get('instrument') or sig['symbol'], direction=sig['direction'],
+                strategy_version=sig.get('strategy_version'), config_hash=sig.get('config_hash'), rules_frozen=sig.get('rules_frozen'),
+                signal=sig.get('signal'), signal_hash=sig.get('signal_hash'), signal_time=sig['created'], entry=sig['entry'], sl=sig['sl'], t1=sig['t1'], t2=sig['t2'], t3=sig['t3'],
+                exit=sig.get('exit'), exit_time=sig.get('closed'), outcome=sig.get('outcome'), booked=sig.get('booked'), r_gross=r,
+                costs_r=cost_r, cost_assumption=how,
+                slippage_assumption='no separate slippage: entry at the trigger candle close, stop and targets at their exact levels, a gap through the stop at the open; any slippage must come out of the cost allowance above',
+                slippage_r=0.0,
+                r_net=(round(r - cost_r, 2) if r is not None and cost_r is not None else None),
+                observed=dict(best=sig.get('best'), worst=sig.get('worst'), last=sig.get('last'), data_source=sig.get('data_source') or ('XAUUSD spot' if str(sig['section']).startswith('gold') else 'NSE candles (Angel One / Yahoo)')),
+                evidence='paper', futures_based=bool(sig.get('futures_based')), recorded=pd.Timestamp.now(tz='Asia/Kolkata').isoformat(timespec='seconds'))
+
 def new_signal(section, it, ts):
     lvl = lambda k: it.get(k)
     sig = dict(id=key(section, it), section=section, symbol=it['symbol'], direction=it['direction'], label=it.get('label', it['direction'].upper()), grade=it['grade'], score=it['score'],
                instrument=(it.get('options_trade') or {}).get('instrument'), created=pd.Timestamp(ts).isoformat(timespec='minutes'), entry=lvl('entry'), sl=lvl('sl'), t1=lvl('t1'), t2=lvl('t2'), t3=lvl('t3'),
-               stage=it.get('stage'), checklist=it.get('checklist'), stop=lvl('sl'), hits={}, booked=[], status='ACTIVE', outcome=None, last=lvl('entry'), best=lvl('entry'), worst=lvl('entry'), r_now=0.0, events=[], checked_to=pd.Timestamp(ts).isoformat(), item=it)
+               stage=it.get('stage'), checklist=it.get('checklist'), data_source=it.get('data_source'), stop=lvl('sl'), hits={}, booked=[], status='ACTIVE', outcome=None, last=lvl('entry'), best=lvl('entry'), worst=lvl('entry'), r_now=0.0, events=[], checked_to=pd.Timestamp(ts).isoformat(), item=it)
     _event(sig, ts, 'trigger', f"Triggered at {it['entry']}. Stop {it['sl']}, T1 {it['t1']}, T2 {it['t2']}, T3 {it['t3']}.")
+    ver, h, ok = _stamp(); sig.update(strategy_version=ver, config_hash=h, rules_frozen=ok)
+    sig['signal'] = dict(time=sig['created'], section=section, symbol=it['symbol'], direction=it['direction'], entry=lvl('entry'), sl=lvl('sl'), t1=lvl('t1'), t2=lvl('t2'), t3=lvl('t3'),
+                         score=it.get('score'), grade=it.get('grade'), stage=it.get('stage'), status=it.get('status'), ticks=it.get('ticks'), bos_date=it.get('bos_date'),
+                         data_source=it.get('data_source'), strategy_version=ver, config_hash=h)
+    sig['signal_hash'] = seal(sig['signal'])           # the original signal is sealed: later candles move 'stop', 'hits', 'last' but never this
     return sig
 
 def daily_swings(bars, idx):
@@ -133,7 +171,13 @@ def walk(sig, bars, now):
             hi, lo = float(row.High), float(row.Low)
             sig['best'] = max(sig['best'], hi) if long else min(sig['best'], lo); sig['worst'] = min(sig['worst'], lo) if long else max(sig['worst'], hi)
             if (long and lo <= sig['stop']) or (not long and hi >= sig['stop']):
-                trail = bool(sig['hits']); out.append(_close(sig, ts, sig['stop'], 'TRAIL' if trail else 'SL', ('Trailing stop' if trail else 'Stop-loss') + f" {sig['stop']} hit.")); break
+                trail = bool(sig['hits']); fill, gap = sig['stop'], ''
+                op = getattr(row, 'Open', None)
+                try: op = float(op)
+                except (TypeError, ValueError): op = None
+                if op is not None and op == op and ((long and op < sig['stop']) or (not long and op > sig['stop'])):
+                    fill = round(op, 2); gap = f" The candle opened through it at {fill}, so the stop fills at the open (a gap), not at {sig['stop']}."   # audit 18 Nov 2026: a gap was booked at the stop price
+                out.append(_close(sig, ts, fill, 'TRAIL' if trail else 'SL', ('Trailing stop' if trail else 'Stop-loss') + f" {sig['stop']} hit." + gap)); break
             for name, lvl in ladder:
                 if name in sig['hits']: continue
                 if (long and hi >= lvl) or (not long and lo <= lvl):
@@ -162,6 +206,36 @@ def walk(sig, bars, now):
                 out.append(_close(sig, now, sig['last'], 'EXPIRED', f'Closed after {life} days without reaching T3.'))
     return out
 
+BAR_MIN = dict(options=5, intraday=5, gold_intraday=5, swing=60, gold_swing=60)       # the candle each section's tracker follows (positional: daily, not checked)
+
+def stale_reason(section, frame, now):
+    """The fail-safe 'DATA UNAVAILABLE / STALE: NO TRADE' (audit 18 Nov 2026). A trigger may become a tracked trade only when the candles it was
+    read from are current: the last candle must have closed no more than max(25, 2 x bar + 15) minutes before now (5m: 25 minutes, 1H: 135).
+    Before, a feed that stopped updating (or an overnight scan reading yesterday's 15:00 entry) could open a trade at an old price.
+    None = fresh, or no candles to judge by (nothing is assumed)."""
+    m = BAR_MIN.get(section)
+    if str(os.environ.get('STALE_CHECK', '') or '').strip().lower() in ('off', 'false', 'no', '0'): return None      # replay tests on old fixtures only
+    if m is None or frame is None or not len(frame): return None
+    try:
+        end = pd.Timestamp(frame.index[-1]) + pd.Timedelta(minutes=m); nw = pd.Timestamp(now)
+        if end.tzinfo is None: end = end.tz_localize('Asia/Kolkata')
+        if nw.tzinfo is None: nw = nw.tz_localize('Asia/Kolkata')
+        lag = (nw - end).total_seconds() / 60.0
+    except Exception: return None
+    lim = max(25, 2 * m + 15)
+    if lag <= lim: return None
+    when = end.tz_convert('Asia/Kolkata')
+    return f"data stale: the last candle closed {when:%d %b %H:%M} IST, {lag / 60:.1f} h ago" if lag >= 90 else f"data stale: the last candle closed {lag:.0f} min ago"
+
+def gate_stale(items, section, bars, now, known=()):
+    """Mark every new TRIGGERED setup read from stale candles as 'TRIGGERED (not taken: data stale ...)'; it stays listed, it is never opened."""
+    n = 0
+    for it in items:
+        if it.get('status') != 'TRIGGERED' or key(section, it) in known: continue
+        why = stale_reason(section, (bars or {}).get(it['symbol']), now)
+        if why: it['status'] = f'TRIGGERED (not taken: {why}: no trade on old data)'; it['data_stale'] = True; n += 1
+    return n
+
 def update(led, section, items, states, bars, now, can_open=True, limit=True, others=()):
     """items: setups from this run. states: {(symbol, direction): state or None} for everything scanned.
     bars: {symbol: closed candles to follow open trades}. Returns the new lifecycle events (for phone alerts)."""
@@ -173,7 +247,11 @@ def update(led, section, items, states, bars, now, can_open=True, limit=True, ot
     led['dropped'] = [d for d in reversed(led['dropped']) if d.get('id') not in known and not (d.get('id') in seen_ids or seen_ids.add(d.get('id')))][::-1]    # one entry per setup, the latest
     for sig in led['signals']:
         if sig['status'] == 'ACTIVE': events += walk(sig, bars.get(sig['symbol']), now)
+    paper = led.setdefault('paper', []); have = {p['id'] for p in paper}                                   # append-only paper-trading records (never pruned)
+    for sig in led['signals']:
+        if sig['status'] == 'CLOSED' and sig['id'] not in have and sig.get('signal_hash'): paper.append(paper_record(sig)); have.add(sig['id'])
     holding = {(s['symbol'], s['direction']) for s in led['signals'] if s['status'] == 'ACTIVE'}       # one open tracked trade per stock and side
+    gate_stale(items, section, bars, now, {s['id'] for s in led['signals']})                           # stale candles: no new trade (before the daily limit counts it)
     if limit: limit_items(items, list(led['signals']) + list(others), section, now, holding)      # others: the signals of the other segments that share the daily limit                                  # your daily rule: 2 a day, A+ only
     current = {key(section, it): it for it in items}
     for k, it in current.items():
@@ -199,6 +277,6 @@ def update(led, section, items, states, bars, now, can_open=True, limit=True, ot
         w.update(dropped=now.isoformat(timespec='minutes'), reason=REASONS.get(st, REASONS[None]), state=st)
         led['dropped'] = [d for d in led['dropped'] if d.get('id') != k] + [w]                             # one dropped entry per setup, the latest
     cut = now - pd.Timedelta(days=KEEP_DAYS.get(section, 30))
-    led['signals'] = [s for s in led['signals'] if s['status'] == 'ACTIVE' or pd.Timestamp(s.get('closed') or s['created']) >= (cut if pd.Timestamp(s.get('closed') or s['created']).tzinfo is not None else cut.tz_localize(None))]
+    led['signals'] = [s for s in led['signals'] if s['status'] == 'ACTIVE' or s.get('futures_based') or pd.Timestamp(s.get('closed') or s['created']) >= (cut if pd.Timestamp(s.get('closed') or s['created']).tzinfo is not None else cut.tz_localize(None))]
     led['dropped'] = [d for d in led['dropped'] if pd.Timestamp(d['dropped']) >= cut][-200:]
     return events

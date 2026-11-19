@@ -11,7 +11,7 @@ stop, intraday and options squared off at 15:15. Nothing here looks at a bar tha
   python backtest.py --segment positional|intraday|options --out pub/data [--top N] [--workers N] [--deep DAYS]"""
 import bisect, datetime as dt, json, math, os, sys, time
 import numpy as np, pandas as pd
-import backtest as bt, greeks, holdbacks, signals, strategy_scanner as sc
+import backtest as bt, dataquality, gold_feed, greeks, holdbacks, signals, strategy_scanner as sc
 
 IST = 'Asia/Kolkata'; LOT = greeks.LOT_SIZE
 COST_INTRADAY_PCT, COST_POSITIONAL_PCT = bt.SEGMENTS['intraday']['cost_pct'], bt.SEGMENTS['positional']['cost_pct']
@@ -117,8 +117,8 @@ def _day_bounds(f5):
         if b == len(f5) or d[b] != d[a]: out.append((a, b)); a = b
     return out
 
-# Trading sessions, in minutes after midnight on the session's own clock. NSE stocks run on IST; gold runs on a UTC+2 clock, so its trading
-# day (COMEX: 23:00 UTC to 22:00 UTC, an hour later in US summer) never splits across two dates and the daily candle ends at midnight.
+# Trading sessions, in minutes after midnight on the session's own clock. NSE stocks run on IST; XAUUSD spot gold (traded over the counter,
+# about 23:00 UTC Sunday to 22:00 UTC Friday with a daily pause near 22:00 UTC) runs its session rules on a UTC+2 clock, so a session never splits across two dates and the daily candle ends at midnight.
 NSE_SESSION = dict(tz=IST, first=9 * 60 + 30, last=15 * 60, square=15 * 60 + 15)
 GOLD_TZ = 'Etc/GMT-2'                                                 # = UTC+2 (the sign is reversed in these zone names)
 GOLD_ALL = dict(tz=GOLD_TZ, first=30, last=21 * 60, square=22 * 60 + 30)              # every session: entries 22:30-19:00 UTC (04:00-00:30 IST), all closed 20:30 UTC (02:00 IST)
@@ -131,14 +131,15 @@ def gold_session(env=None):
     return GOLD_LNY if v in ('london_ny', 'london-ny', 'lny') else GOLD_ALL
 
 def replay_intraday(sym, f5, f15, cfg=None, min_score=4, hist_bars=375, bias_bars=250, regimes=None, prefilter=True, cost_pct=None, first_day=None,
-                    session=None, bar_min=5, bias_min=15, cost_abs=None, stock=True):
+                    session=None, bar_min=5, bias_min=15, cost_abs=None, stock=True, use_volume=True):
     """All the intraday trades (long and short) the live engine would have opened on one instrument. f5: 5m OHLCV (the trigger frame),
     f15: 15m OHLCV (the bias frame); any timezone. session: the entry window and square-off (NSE by default, GOLD_SESSION for gold)."""
     cfg = cfg or sc.CFG_I; cost_pct = COST_INTRADAY_PCT if cost_pct is None else cost_pct; trades = []; S = session or NSE_SESSION
+    if not use_volume: cfg = dict(cfg, use_volume=False)                                  # gold spot with GOLD_VOLUME_RULE=off (no exchange volume exists)
     if f15 is None or len(f5) < cfg['min_bars']: return trades
     f5, f15 = _aware(f5, S['tz']), _aware(f15, S['tz'])
-    if not sc.has_volume(f5): return trades
-    q_long, q_short = _qualifiers(f5, cfg, True) if prefilter else (np.ones(len(f5), bool), np.ones(len(f5), bool)); get_regime = _regime_lookup(regimes)
+    if use_volume and not sc.has_volume(f5): return trades
+    q_long, q_short = _qualifiers(f5, cfg, use_volume) if prefilter else (np.ones(len(f5), bool), np.ones(len(f5), bool)); get_regime = _regime_lookup(regimes)
     e15 = f15.index + pd.Timedelta(minutes=bias_min); ts5 = f5.index; seen = set(); busy = {'long': None, 'short': None}      # when each bias bar ENDS (compared as timestamps, never as raw integers: pandas 3 stores microseconds)
     if first_day is not None: first_day = pd.Timestamp(first_day).tz_localize(S['tz']) if pd.Timestamp(first_day).tzinfo is None else pd.Timestamp(first_day).tz_convert(S['tz'])
     for a, b in _day_bounds(f5):
@@ -279,8 +280,11 @@ def _job_intra(job): sym, f5, f15, regimes, fd, ms = job; return replay_intraday
 
 # ------------------------------------------------------------------ gold (XAUUSD) data
 CFG_GP = dict(CFG_P, min_price=0.0, min_turnover_cr=0.0)              # gold positional: no NSE liquidity floor
-GOLD_LABEL = 'XAUUSD'
-def gold_symbol(env=None): return str((env if env is not None else os.environ).get('GOLD_SYMBOL', '') or 'GC=F').strip()
+GOLD_LABEL = gold_feed.LABEL
+GOLD_NO_VOLUME = dict(require_volume=False, min_hold_rvol=0)                   # gold swing with GOLD_VOLUME_RULE=off: confirmation by rejection + 9 EMA reclaim only
+def gold_symbol(env=None):
+    """Always XAU/USD spot (18 Nov 2026). The old GOLD_SYMBOL variable (GC=F futures) is ignored on purpose: there is no other gold instrument."""
+    return gold_feed.SYMBOL
 def gold_cost(env=None):
     try: return max(0.0, float((env if env is not None else os.environ).get('GOLD_COST', '') or 0.35))
     except ValueError: return 0.35
@@ -291,20 +295,23 @@ def _bar_open(df, minutes, now):
     return df
 
 def gold_intraday(sym, period, interval, now, fetch=None):
-    """Gold candles (5m, 15m or 1h), tz-aware IST, the unfinished last candle removed."""
-    raw, _ = (fetch or sc.yahoo_many)([sym], period, interval); f = raw.get(sym)
+    """XAUUSD spot candles (5m, 15m or 1h), tz-aware IST, the unfinished last candle removed. Default source: gold_feed (Twelve Data XAU/USD spot)."""
+    raw, _ = (fetch or (lambda s_, p_, i_: gold_feed.fetch_like(s_, p_, i_, now=now)))([sym], period, interval); f = raw.get(sym)
     if f is None or not len(f): return None
     f = f.dropna(subset=['Open', 'High', 'Low', 'Close']).copy(); idx = pd.DatetimeIndex(f.index)
     f.index = (idx.tz_localize('UTC') if idx.tz is None else idx).tz_convert(IST); f = f[~f.index.duplicated(keep='last')].sort_index()
-    return _bar_open(f, {'1m': 1, '5m': 5, '15m': 15, '1h': 60}[interval], now)
+    src = (raw.get(sym).attrs or {}).copy() if raw.get(sym) is not None else {}
+    f, _ = dataquality.sanitize(f); f.attrs.update(src)                                 # audit 18 Nov 2026: impossible candles never reach the gold rules
+    out = _bar_open(f, {'1m': 1, '5m': 5, '15m': 15, '1h': 60}[interval], now); out.attrs.update(src); return out
 
 def gold_daily(sym, period, now, fetch=None):
-    """Daily gold candles, one per session (dated by the day the session ends), without today's unfinished session."""
-    raw, _ = (fetch or sc.yahoo_many)([sym], period, '1d'); f = raw.get(sym)
+    """Daily XAUUSD spot candles (one per UTC day), without today's unfinished one."""
+    raw, _ = (fetch or (lambda s_, p_, i_: gold_feed.fetch_like(s_, p_, i_, now=now)))([sym], period, '1d'); f = raw.get(sym)
     if f is None or not len(f): return None
     f = f.dropna(subset=['Open', 'High', 'Low', 'Close']).copy(); idx = pd.DatetimeIndex(f.index)
     f.index = (idx.tz_convert(None) if idx.tz is not None else idx).normalize(); f = f[~f.index.duplicated(keep='last')].sort_index()
-    today = pd.Timestamp(now).tz_convert(GOLD_TZ).tz_localize(None).normalize()           # the session still trading now
+    src = (raw.get(sym).attrs or {}).copy(); f, _ = dataquality.sanitize(f); f.attrs.update(src)
+    today = pd.Timestamp(now).tz_convert(gold_feed.DAY_TZ).tz_localize(None).normalize()  # the spot day still trading now (UTC day)
     return f[f.index < today]
 
 def mirror_k(*frames):
@@ -352,6 +359,22 @@ def _load_prev(out_dir, seg):
         print(f'backtest: saved {seg} trades were made with the {was} rule, this run uses the {RULE} rule, so starting fresh', flush=True); return {}
     return prev
 
+def archive_futures(out_dir, seg):
+    """Gold results saved before 18 Nov 2026 came from COMEX futures (GC=F). They are moved, unchanged, to *.futures-archive.json, labelled as
+    historical futures-based analysis, so they can never be merged with or shown as XAUUSD spot results. Nothing is deleted."""
+    moved = []
+    for fn in bt.SEGMENTS[seg]['files']:
+        p = os.path.join(out_dir, fn)
+        try: d = json.load(open(p))
+        except Exception: continue
+        if gold_feed.is_spot((d.get('params') or {}).get('source')): continue
+        d['archived'] = dict(reason='historical futures-based analysis (COMEX GC=F): excluded from XAUUSD spot statistics', at=pd.Timestamp.now(tz=IST).isoformat(timespec='seconds'))
+        ap = p.replace('.json', '.futures-archive.json')
+        with open(ap, 'w') as f: json.dump(d, f, separators=(',', ':'), default=str)
+        os.remove(p); moved.append(os.path.basename(ap))
+    if moved: print(f'backtest: archived futures-based gold results: {", ".join(moved)}', flush=True)
+    return moved
+
 def _save(out_dir, seg, rep, trades, window, universe, params):
     rf, tf = bt.SEGMENTS[seg]['files']
     with open(os.path.join(out_dir, rf), 'w') as f: json.dump(rep, f, separators=(',', ':'), default=str)
@@ -388,7 +411,7 @@ def _warm(frames, now, days):
 
 def main_segment(a):
     seg = a.segment; t0 = time.time(); now = pd.Timestamp.now(tz=IST); os.makedirs(a.out, exist_ok=True); acct = bt.account_from_env(segment=seg); workers = a.workers
-    rules = bt.rules_from_env(); ms = rules['min_score']; start = bt.start_stamp(rules)
+    rules = bt.rules_from_env(); ms = rules['min_score']; start = bt.replay_start(rules)          # includes the validation window (evaluation.py); headline still counts your window only
     print(f'backtest {seg}: starting, {bt.rules_text(rules)}', flush=True)
     if seg == 'positional':
         syms, note, industries = sc.load_nifty500('nifty500.csv', 'watchlist.txt'); print(f'backtest: {note}', flush=True)
@@ -406,28 +429,33 @@ def main_segment(a):
         trades = bt.merge_trades(prev.get('trades', []), new); first = min([str(fd)[:10]] + ([prev['window']['from']] if prev.get('window', {}).get('from') else []))
         window = {'from': first, 'to': str(max((f.index[-1] for f in fa.values()), default=now))[:10], 'note': 'grows every week'}; params = dict(top=len(pick), days=a.deep or 60, seconds=round(time.time() - t0)); universe = len(fa)
     elif seg.startswith('gold_'):
-        sym = gold_symbol(); cost = gold_cost(); style = seg[5:]; prev = _load_prev(a.out, seg) if style == 'intraday' else {}
-        gd = gold_daily(sym, '10y' if style == 'positional' else '3y', now)
+        sym = gold_symbol(); cost = gold_cost(); style = seg[5:]
+        if not gold_feed.api_key(): print('XAUUSD spot feed not configured (TWELVEDATA_API_KEY secret missing): no gold backtest. There is no futures fallback.', file=sys.stderr); return 2
+        vol_on = gold_feed.volume_rule() == 'on'
+        archive_futures(a.out, seg); prev = _load_prev(a.out, seg) if style == 'intraday' else {}
+        if prev and not gold_feed.is_spot((prev.get('params') or {}).get('source')): prev = {}          # never merge futures trades with spot trades
+        try: gd = gold_daily(sym, '10y' if style == 'positional' else '3y', now)
+        except gold_feed.FeedError as ex: print(f'XAUUSD spot data unavailable: {ex}. No gold backtest.', file=sys.stderr); return 2
         if gd is None or len(gd) < 300: print(f'No gold daily data downloaded for {sym}.', file=sys.stderr); return 2
         regimes = bt.regime_map(gd); print(f'backtest: gold from {sym}, {len(gd)} daily candles, cost {cost} dollars per ounce', flush=True)
         if style == 'intraday':
             fa = gold_intraday(sym, '60d', '5m', now); fb = gold_intraday(sym, '60d', '15m', now)
             if fa is None or fb is None or not len(fa): print('No gold intraday data downloaded.', file=sys.stderr); return 2
             fd = _from(_warm([fa], now, 3), rules); print(f'backtest: replaying gold intraday from {str(fd)[:10]}', flush=True)
-            new = replay_intraday(GOLD_LABEL, fa, fb, regimes=regimes, first_day=fd, min_score=ms, cost_abs=cost, stock=False, session=gold_session())
+            new = replay_intraday(GOLD_LABEL, fa, fb, regimes=regimes, first_day=fd, min_score=ms, cost_abs=cost, stock=False, session=gold_session(), use_volume=vol_on)
             trades = bt.merge_trades(prev.get('trades', []), new); first = min([str(fd)[:10]] + ([prev['window']['from']] if prev.get('window', {}).get('from') else []))
             window = {'from': first, 'to': str(fa.index[-1])[:10], 'note': 'grows every week'}
         elif style == 'swing':
             h1 = gold_intraday(sym, '730d', '1h', now)
             if h1 is None or len(h1) < 100: print('No gold hourly data downloaded.', file=sys.stderr); return 2
-            run = lambda dd, hh: bt.replay_symbol(GOLD_LABEL, dd, hh, 'Gold', regimes, min_score=ms, start_at=start, day_tz=GOLD_TZ, stock=False, cost_abs=cost)
+            run = lambda dd, hh: bt.replay_symbol(GOLD_LABEL, dd, hh, 'Gold', regimes, min_score=ms, start_at=start, day_tz=gold_feed.DAY_TZ, stock=False, cost_abs=cost, cfg_extra=None if vol_on else GOLD_NO_VOLUME)
             K = mirror_k(gd, h1); trades = both_sides(run(gd, h1), run(sc.invert(gd, K), sc.invert(h1, K)), K)
             window = {'from': str(h1.index[0])[:10], 'to': str(gd.index[-1])[:10]}
         else:
-            run = lambda dd: replay_positional(GOLD_LABEL, dd, 'Gold', regimes, None, CFG_GP, min_score=ms, start_at=start, stock=False, cost_abs=cost)
+            run = lambda dd: replay_positional(GOLD_LABEL, dd, 'Gold', regimes, None, CFG_GP if vol_on else dict(CFG_GP, use_volume=False), min_score=ms, start_at=start, stock=False, cost_abs=cost)
             K = mirror_k(gd); trades = both_sides(run(gd), run(sc.invert(gd, K)), K)
             window = {'from': str(gd.index[0])[:10], 'to': str(gd.index[-1])[:10]}
-        params = dict(source=sym, cost_usd=cost, seconds=round(time.time() - t0)); universe = 1
+        params = dict(source=gold_feed.SOURCE_ID, instrument=gold_feed.INSTRUMENT, cost_usd=cost, volume_rule=gold_feed.volume_rule(), volume_available=bool(gd.attrs.get('volume_available')), seconds=round(time.time() - t0)); universe = 1
     else:                                                                           # options
         prev = _load_prev(a.out, seg); raw5, _ = sc.yahoo_many(['^NSEI'], '60d', '5m'); raw15, _ = sc.yahoo_many(['^NSEI'], '60d', '15m'); raw1h, _ = sc.yahoo_many(['^NSEI'], '730d', '1h'); rawv, _ = sc.yahoo_many(['^INDIAVIX'], '2y', '1d')
         if '^NSEI' not in raw5 or '^NSEI' not in raw15: print('No Nifty data downloaded.', file=sys.stderr); return 2

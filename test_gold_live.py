@@ -28,13 +28,19 @@ check('GOLD_SESSIONS=london_ny: no Asia entries (08:00 IST closed), London still
 os.environ.pop('GOLD_SESSIONS')
 
 # ---- 2. one live intraday run on the engineered setup, placed in the London afternoon
+import gold_feed; os.environ['GOLD_FEED_GAP_S'] = '0'
+def td_json(f, interval, symbol='XAU/USD', quote='US Dollar'):
+    """A frame served the way Twelve Data answers (UTC datetimes, strings), so every test goes through gold_feed's real validation."""
+    if f is None: return {'status': 'error', 'code': 400, 'message': 'No data is available on the specified dates'}
+    idx = pd.DatetimeIndex(f.index); idx = idx.tz_convert('UTC') if idx.tz is not None else idx
+    fmt = '%Y-%m-%d' if interval == '1d' else '%Y-%m-%d %H:%M:%S'
+    vals = [dict(datetime=t.strftime(fmt), open=str(r.Open), high=str(r.High), low=str(r.Low), close=str(r.Close), **({'volume': str(r.Volume)} if 'Volume' in f else {})) for t, r in zip(idx, f.itertuples())]
+    return dict(meta=dict(symbol=symbol, interval=interval, currency_base='Gold Spot', currency_quote=quote, type='Physical Currency'), values=vals, status='ok')
 def stand_in(f5, f15, daily=None, h1=None):
-    def u(df):
-        x = df.copy(); x.index = pd.DatetimeIndex(x.index).tz_convert('UTC'); return x
-    def fetch(syms, period, interval):
-        f = {'5m': f5, '15m': f15, '1h': h1, '1d': daily}[interval]
-        return ({syms[0]: u(f) if interval != '1d' else f} if f is not None else {}), []
-    return fetch
+    def get(url):
+        iv = {'5min': '5m', '15min': '15m', '1h': '1h', '1day': '1d'}[url.split('interval=')[1].split('&')[0]]
+        return td_json({'5m': f5, '15m': f15, '1h': h1, '1d': daily}[iv], iv)
+    return get
 f5, f15 = fx.engineered('2026-11-11 15:00')
 now = f5.index[-1] + pd.Timedelta(minutes=5, seconds=40)
 out, st = tempfile.mkdtemp(), tempfile.mkdtemp()
@@ -127,6 +133,29 @@ fd = doc.get('feed') or {}
 check('feed freshness: the last 5-minute candle close and its lag are published (about 0.7 min after the close here)', fd.get('last_5m') and 0 <= fd['lag_min'] < 2 and fd['bars_5m'] > 50, str(fd))
 d4 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now + pd.Timedelta(minutes=30), stand_in(f5, f15))
 check('a feed that stops updating shows as lag (30+ minutes behind) instead of looking fine', d4['feed']['lag_min'] > 25, str(d4['feed']))
-d5 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now, lambda syms, period, interval: ({}, []))
-check('no candles from the feed at all: the page is told so (not a blank "no setup")', 'no 5-minute gold candles' in (d5['styles']['intraday']['why'] or {}).get('long', ''), str(d5['styles']['intraday']))
+d5 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now, lambda url: td_json(None, '5m'))
+check('no candles from the feed at all: the page says XAUUSD SPOT DATA UNAVAILABLE: NO GOLD RECOMMENDATION (not a blank "no setup")', 'XAUUSD SPOT DATA UNAVAILABLE' in (d5['styles']['intraday']['why'] or {}).get('long', '') and d5['feed']['ok'] is False and d5['price'] is None, str(d5['styles']['intraday']))
+
+# ---- 8. XAUUSD SPOT only (18 Nov 2026)
+check('gold.json names the instrument: XAUUSD Spot, USD, USD per troy ounce, spot gold, verified spot source', doc['instrument'] == dict(gold_feed.INSTRUMENT) and doc['instrument']['instrument'] == 'XAUUSD Spot' and doc['instrument']['unit'] == 'USD per troy ounce' and doc['instrument']['market_type'] == 'Spot Gold' and doc['source'] == gold_feed.SOURCE_ID)
+check('every gold setup and tracked trade carries the spot source', all(x.get('data_source') == gold_feed.SOURCE_ID and x.get('instrument') == 'XAUUSD Spot' for x in S) and led['signals'][0]['data_source'] == gold_feed.SOURCE_ID)
+fut = lambda url: td_json({'5min': f5, '15min': f15}.get(url.split('interval=')[1].split('&')[0]), '5m', symbol='GC=F')
+d6 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now, fut)
+check('a feed that answers for GC=F (futures) is REFUSED: no setups, no trades, no price, the reason shown', d6['styles']['intraday']['setups'] == [] and d6['feed']['ok'] is False and 'GC=F' in d6['feed']['reason'] and d6['price'] is None, d6['feed']['reason'])
+eur = lambda url: td_json({'5min': f5, '15min': f15}.get(url.split('interval=')[1].split('&')[0]), '5m', quote='Euro')
+d7 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now, eur)
+check('a feed quoting gold in another currency is refused (USD only)', d7['feed']['ok'] is False and 'USD' in d7['feed']['reason'], d7['feed']['reason'])
+f5nv, f15nv = f5.copy(), f15.copy(); f5nv['Volume'] = 0; f15nv['Volume'] = 0
+d8 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now, stand_in(f5nv, f15nv))
+t8 = [x for x in d8['styles']['intraday']['setups'] if x['status'] == 'TRIGGERED']
+check('spot data without volume: your 1.5x volume rule cannot be met, so NO gold trigger is taken, and the page says why', not t8 and d8['volume']['available'] is False and 'no exchange volume' in d8['volume']['note'] and 'no exchange volume' in d8['styles']['intraday']['why']['long'], str(d8['styles']['intraday']['why']))
+os.environ['GOLD_VOLUME_RULE'] = 'off'; d9 = gl.run(tempfile.mkdtemp(), tempfile.mkdtemp(), ('intraday',), now, stand_in(f5nv, f15nv)); os.environ.pop('GOLD_VOLUME_RULE')
+check('GOLD_VOLUME_RULE=off (your decision) runs gold without the volume condition: the same setup triggers on spot data with no volume', any(x['status'] == 'TRIGGERED' for x in d9['styles']['intraday']['setups']) and d9['volume']['rule'] == 'off', str([(x['status'], x['score']) for x in d9['styles']['intraday']['setups']]))
+o10 = tempfile.mkdtemp(); led10 = signals.load(os.path.join(o10, 'signals_gold_intraday.json')); old = signals.new_signal('gold_intraday', dict(its[0], bos_date='old', data_source=None), now - pd.Timedelta(hours=3)); old.pop('data_source', None); led10['signals'].append(old); signals.save(os.path.join(o10, 'signals_gold_intraday.json'), led10, now)
+gl.run(o10, tempfile.mkdtemp(), ('intraday',), now, stand_in(f5, f15)); L10 = json.load(open(os.path.join(o10, 'signals_gold_intraday.json')))['signals']; o_ = [x for x in L10 if x['id'].endswith('|old')][0]
+check('an open trade from the futures era is kept, marked historical futures-based, excluded from stats, ARCHIVED (not followed on spot)', o_['status'] == 'ARCHIVED' and o_['futures_based'] and o_['excluded_from_stats'] and 'GC=F' in o_['data_source'], str({k: o_.get(k) for k in ('status', 'data_source')}))
+check('no hidden futures fallback: even with the old GOLD_SYMBOL=GC=F variable set, the gold symbol is XAU/USD spot', tf.gold_symbol({'GOLD_SYMBOL': 'GC=F'}) == 'XAU/USD')
+try: gold_feed.fetch_like(['GC=F'], '5d', '5m', get=stand_in(f5, f15)); refused = False
+except gold_feed.FeedError: refused = True
+check('fetch_like refuses GC=F outright', refused)
 os.environ.pop('NTFY_TOPIC'); print('ALL PASSED' if not fails else f'{len(fails)} FAILED'); raise SystemExit(1 if fails else 0)

@@ -89,6 +89,9 @@ def merge_ledger(mine, theirs):
         if k in trades or k in out['watch']: continue
         if cur is None or str(d.get('dropped') or '') >= str(cur.get('dropped') or ''): dd[k] = d
     out['dropped'] = sorted(dd.values(), key=lambda d: str(d.get('dropped') or ''))[-200:]
+    pp = {}                                                                     # paper-trading records are immutable: the copy already on the branch wins
+    for p_ in (mine.get('paper') or []) + (theirs.get('paper') or []): pp[p_.get('id')] = p_
+    if pp: out['paper'] = sorted(pp.values(), key=lambda p_: str(p_.get('exit_time') or ''))
     out['updated'] = max(str(mine.get('updated') or ''), str(theirs.get('updated') or '')) or mine.get('updated')
     return out
 

@@ -21,7 +21,8 @@ check('headlines are de-duplicated across sources and feeds', len([h for h in ne
 check('per-symbol news is attached', set(news['by_symbol']) == {'BHEL', 'CUPID'} and news['ok'])
 def boom(url): raise OSError('blocked')
 nb = nf.build_news(now, ['BHEL'], fetch=boom); check('every feed failing gives an empty but valid result (no crash)', nb['headlines'] == [] and nb['by_symbol'] == {} and nb['ok'] is False)
-cfg = json.load(open('events.json')); ev = nf.upcoming(now, cfg, results={'BHEL': '2026-10-23'}, horizon=24)
+cfg = nf.load_events('events.json')          # holidays now come from market_calendar.json (the one calendar)
+ev = nf.upcoming(now, cfg, results={'BHEL': '2026-10-23'}, horizon=24)
 titles = [e['title'] for e in ev]
 check('weekly expiry on Tue 27 Oct and US Fed on 28 Oct are listed', any(e['date'] == '2026-10-27' and 'weekly expiry' in e['title'] for e in ev) and any(e['date'] == '2026-10-28' and 'Fed' in e['title'] for e in ev), str(titles[:6]))
 check('expiry moves to Monday 9 Nov because Tuesday 10 Nov is a holiday', any(e['date'] == '2026-11-09' and 'weekly expiry' in e['title'] for e in ev) and not any(e['date'] == '2026-11-10' and 'expiry' in e['title'] for e in ev))

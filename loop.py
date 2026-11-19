@@ -21,11 +21,10 @@ def next_tick(now, every=5, offset=40):
     if t - dt.timedelta(minutes=every) > now: t -= dt.timedelta(minutes=every)
     return t
 
-def trading_day(day, events='events.json'):
-    if day.weekday() >= 5: return False
-    try: hol = {h['date'] for h in json.load(open(events)).get('holidays', [])}
-    except Exception: hol = set()
-    return day.isoformat() not in hol
+def trading_day(day, events=None):
+    """Weekday and not an official NSE holiday (market_calendar.json: the one calendar every module reads). `events` is ignored (kept for old callers)."""
+    import market_calendar
+    return market_calendar.is_trading_day(day)
 
 def swing_slot(t, minute=15):
     """Which 1H candle has just closed. NSE 1H candles close at :15 (09:15-10:15 ... 14:15-15:15) and the day's last one (15:15-15:30) at 15:30,

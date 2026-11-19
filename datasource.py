@@ -46,7 +46,8 @@ def report():
     """What the System health page shows under 'Data sources'."""
     a = STATS['angel']
     return dict(primary='Angel One' if a.get('ok') else 'Yahoo Finance', angel=a, by_interval=STATS['by_interval'], xcheck=STATS['xcheck'][:12],
-                option_quotes=STATS['option_quotes'], notes=STATS.get('notes', []))
+                option_quotes=STATS['option_quotes'], notes=STATS.get('notes', []),
+                quality={iv: dict(list(m.items())[:30]) for iv, m in (STATS.get('quality') or {}).items()})
 
 def period_days(period):
     if period in PERIOD_DAYS: return PERIOD_DAYS[period]
@@ -245,14 +246,30 @@ def angel():
 
 def reset():                                     # tests
     _A.update(obj=None, init=False); STATE['deadline'] = None; STATE['budget_s'] = None
-    STATS.update(angel=dict(configured=False, ok=None, error=None), by_interval={}, xcheck=[], option_quotes=None, source={}, notes=[])
+    STATS.update(angel=dict(configured=False, ok=None, error=None), by_interval={}, xcheck=[], option_quotes=None, source={}, notes=[], quality={})
 
 # ------------------------------------------------------------------ fetching
 def fetch(symbols, period, interval, yahoo, source='auto'):
-    """Same answer as the old Yahoo-only download: ({symbol: OHLCV frame}, [failed symbols]). source='yahoo' skips Angel One."""
+    """Same answer as the old Yahoo-only download: ({symbol: OHLCV frame}, [failed symbols]). source='yahoo' skips Angel One.
+    Every frame passes dataquality.sanitize before it is returned (duplicates, order, impossible candles), whichever source served it."""
     symbols = list(dict.fromkeys(symbols))
-    if interval == '1d' and period in ('1y', '2y') and len(symbols) >= 30: return daily_cached(symbols, period, yahoo)
-    return _fetch(symbols, period, interval, yahoo, source)
+    if interval == '1d' and period in ('1y', '2y') and len(symbols) >= 30: out, failed = daily_cached(symbols, period, yahoo)
+    else: out, failed = _fetch(symbols, period, interval, yahoo, source)
+    return clean(out, interval), failed
+
+def clean(frames, interval):
+    """Run the candle checks on every frame; frames left empty count as failed downloads by their callers (they never reach a rule)."""
+    import dataquality
+    q = STATS.setdefault('quality', {}); out = {}
+    for s, f in frames.items():
+        try: g, n = dataquality.sanitize(f)
+        except Exception as ex: g, n = f, dict(error=str(ex)[:80])
+        if any(v for v in n.values()):
+            row = q.setdefault(interval, {}).setdefault(s, dict(dupes=0, unsorted=0, dropped=0, repaired=0, neg_volume=0))
+            for k, v in n.items():
+                if isinstance(v, int): row[k] = row.get(k, 0) + v
+        if g is not None and len(g): out[s] = g
+    return out
 
 def _fetch(symbols, period, interval, yahoo, source='auto'):
     out, rest, a = {}, [], (angel() if source != 'yahoo' else None)

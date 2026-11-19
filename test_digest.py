@@ -49,11 +49,12 @@ import loop; check('main: nothing on a weekend (trading-day check)', not loop.tr
 
 # ---------- readiness
 RN = dt.datetime(2026, 11, 11, 8, 50, tzinfo=IST); is_td = lambda x: x.weekday() < 5 and x != dt.date(2026, 11, 10)
-ENV = dict(ANGEL_API_KEY='k', ANGEL_CLIENT_CODE='c', ANGEL_MPIN='1', ANGEL_TOTP_SECRET='s', NTFY_TOPIC='t', TELEGRAM_BOT_TOKEN='1:a', TELEGRAM_CHAT_ID='5', CRON_TOKEN_EXPIRES='2027-01-20')
-P = dict(angel=lambda: (True, 'login works'), yahoo=lambda: (True, 'Nifty up to 10 Nov'), universe=lambda: (True, 'Nifty 500 (live list, 501 symbols)'))
+ENV = dict(ANGEL_API_KEY='k', ANGEL_CLIENT_CODE='c', ANGEL_MPIN='1', ANGEL_TOTP_SECRET='s', NTFY_TOPIC='t', TELEGRAM_BOT_TOKEN='1:a', TELEGRAM_CHAT_ID='5', CRON_TOKEN_EXPIRES='2027-01-20', TWELVEDATA_API_KEY='k')
+P = dict(angel=lambda: (True, 'login works'), yahoo=lambda: (True, 'Nifty up to 10 Nov'), universe=lambda: (True, 'Nifty 500 (live list, 501 symbols)'), gold=lambda: (True, 'XAU/USD spot answered and passed the checks'))
 runs = [dict(created_at='2026-11-09T09:34:00Z')]                       # a workflow_dispatch run on Mon 9 Nov (IST)
 R = readiness.run_checks(ENV, RN, is_td, P, lambda: runs, '2026-11-10T16:20:00+05:30'); lv, title, body = readiness.summarize(R)
-check('readiness: everything fine -> "Ready for the session"', lv == 'ok' and title == 'Ready for the session' and body.count('✅') == 7, str([(s, n) for s, n, _ in R if s != 'ok']))
+check('readiness: everything fine -> "Ready for the session"', lv == 'ok' and title == 'Ready for the session' and body.count('✅') == 9,      # 7 before + NSE holiday calendar + XAUUSD spot feed (19 Nov 2026)
+      str([(s, n) for s, n, _ in R if s != 'ok']))
 check('readiness: the previous trading day skips the holiday and the weekend (Wed -> Mon, since Tue 10 Nov is a holiday)', readiness.prev_trading_day(dt.date(2026, 11, 11), is_td) == dt.date(2026, 11, 9) and readiness.prev_trading_day(dt.date(2026, 11, 16), is_td) == dt.date(2026, 11, 13))
 R = readiness.run_checks(ENV, RN, is_td, dict(P, angel=lambda: (False, 'login failed: Invalid totp')), lambda: runs, '2026-11-10T16:20:00+05:30')
 check('readiness: Angel One down is a warning, not a failure (Yahoo covers it)', readiness.summarize(R)[0] == 'warn' and any(s == 'warn' and n == 'Angel One' for s, n, _ in R))
