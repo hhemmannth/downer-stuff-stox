@@ -44,7 +44,8 @@ jobs:
           MIN_SCORE: ${{ vars.MIN_SCORE }}
           MAX_TRADES_PER_DAY: ${{ vars.MAX_TRADES_PER_DAY }}
           APLUS_OVERFLOW: ${{ vars.APLUS_OVERFLOW }}
-          GOLD_SYMBOL: ${{ vars.GOLD_SYMBOL }}
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}      # XAUUSD spot (gold_feed.py); no key = no gold, never a futures fallback
+          GOLD_VOLUME_RULE: ${{ vars.GOLD_VOLUME_RULE }}
           GOLD_SESSIONS: ${{ vars.GOLD_SESSIONS }}
           GOLD_MAX_OPEN: ${{ vars.GOLD_MAX_OPEN }}
           GOLD_ACCOUNT: ${{ vars.GOLD_ACCOUNT }}
