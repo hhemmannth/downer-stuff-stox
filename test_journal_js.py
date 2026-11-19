@@ -134,6 +134,44 @@ if o4 is None: check('pnl.js runs on its own (no App, no page)', False, err4)
 else:
     check('Trade Insight consistency: pnl.js runs on its own with no App and no page, so it can be dropped into Trade Insight unchanged', o4['standalone'] is True)
     check('Trade Insight consistency: the standalone engine and the journal give the identical result (+450 for the partial-exit trade)', o4['same'] is True and o4['journalNet'] == o4['engineNet'] == 450, json.dumps(o4))
+# ---------------------------------------------------------------- part 5 (19 Nov 2026): hiding alerts
+o5, err5 = run(r"""
+const old = n => Array.from({ length: n }, (_, i) => T({ id: 'o' + i, inst: 'OLD' + i, d: '2026-11-10', qty: 10, entry: 100, sl: 95, exit: 90 }));      // closed, no exit date
+const seen = x => ({ shown: x.shown.map(m => m[2]), level: x.level, levelShown: x.levelShown, hidden: x.hiddenN, ack: x.ackN, day: x.day, unknown: x.unknownExit, use: x.use.day.pnlRs });
+const out = {};
+let J = { id: 'j1', name: 't', schema: 2, set: { ...JR.SET0, capital: 200000 }, trades: old(3).concat([T({ id: 'big', inst: 'BIG', d: '2026-11-18', qty: 100, entry: 500, sl: 480, exit: 470, xd: '2026-11-18' })]) };
+JR.E.list = [J]; JR.E.cur = 'j1'; JR.persist = () => {}; ctx.App.render = () => {};
+out.base = seen(JR.riskStatus());
+JR.ignoreAlert('xd'); out.afterXd = seen(JR.riskStatus());                                   // old trades accepted: day alert stays
+JR.ignoreAlert('hide', 'day'); out.afterHide = seen(JR.riskStatus());                         // hard stop hidden for today
+JR.ignoreAlert('mute', 'day'); out.muteHard = JR.J().ign.mute.day === true;                  // a hard stop can never be muted for good
+out.nextDay = null;
+J.trades.push(T({ id: 'new', inst: 'NEWONE', d: '2026-11-18', qty: 1, entry: 10, sl: 9, exit: 11 })); out.newUnknown = seen(JR.riskStatus());   // a NEW trade with no exit date still alerts
+JR.ignoreAlert('restore'); out.restored = seen(JR.riskStatus());
+JR.ignoreAlert('all'); out.allHidden = seen(JR.riskStatus());
+console.log(JSON.stringify(out));
+""")
+if o5 is None: check('hide-alert harness runs', False, err5)
+else:
+    check('hide alerts: before hiding, the no-exit-date alert and the day-loss alert both show', 'noexit' in o5['base']['shown'] and 'day' in o5['base']['shown'], json.dumps(o5['base']['shown']))
+    check('ignore old trades: the no-exit-date alert goes, the loss-limit alert stays (hiding one kind never hides another)', 'noexit' not in o5['afterXd']['shown'] and 'day' in o5['afterXd']['shown'] and o5['afterXd']['ack'] == 3)
+    check('ignored trades are NOT given a date: they still count as unknown and still stay out of the day limit', o5['afterXd']['unknown'] == 3 and o5['afterXd']['use'] == o5['base']['use'])
+    check('hide today: a reached loss limit can be hidden for today, the banner level drops, but the true level and the maths do not change', 'day' not in o5['afterHide']['shown'] and o5['afterHide']['level'] == 'bad' and o5['afterHide']['hidden'] == 1 and o5['afterHide']['day'] == o5['base']['day'])
+    check('a hard stop (loss limit) can only be hidden for today, never muted for good', o5['muteHard'] is False)
+    check('a NEW closed trade without an exit date still alerts after old ones were ignored', 'noexit' in o5['newUnknown']['shown'])
+    check('show again restores every hidden alert and clears the accepted trades', o5['restored']['hidden'] == 0 and o5['restored']['ack'] == 0 and 'day' in o5['restored']['shown'])
+    check('hide all today hides everything currently shown', o5['allHidden']['shown'] == [] and o5['allHidden']['hidden'] >= 2)
+# hidden for today only: the next day the alert is back
+o6, err6 = run(r"""
+let J = { id: 'j1', name: 't', schema: 2, set: { ...JR.SET0, capital: 200000 }, trades: [T({ id: 'big', inst: 'BIG', d: '2026-11-18', qty: 100, entry: 500, sl: 480, exit: 470, xd: '2026-11-18' })] };
+JR.E.list = [J]; JR.E.cur = 'j1'; JR.persist = () => {}; ctx.App.render = () => {};
+JR.ignoreAlert('hide', 'day'); const a = JR.riskStatus().shown.some(m => m[2] === 'day'); J.ign.snooze.day = '2026-11-17'; const b = JR.riskStatus().shown.some(m => m[2] === 'day');
+console.log(JSON.stringify({ a, b }));
+""")
+if o6 is None: check('snooze-expiry harness runs', False, err6)
+else: check('hidden for today only: an alert hidden yesterday is shown again today', o6['a'] is False and o6['b'] is True, json.dumps(o6))
+core_src = open(os.path.join(JS, 'core.js')).read()
+check('banner has the hide buttons and a "show them again" link, and the pop-up only fires for alerts that are shown', 'App.riskAct' in core_src and 'Show them again' in core_src and 'notifyRisk(alerts)' in core_src)
 pnl_src = open(os.path.join(JS, 'pnl.js')).read(); jr_src = open(os.path.join(JS, 'journal.js')).read(); idx = open(os.path.join(HERE, 'site', 'index.html')).read()
 check('one source of truth: journal.js uses PnL for net, day, week and month and no longer sums P&L by the entry date', 'PnL.totals(' in jr_src and 'PnL.realized(T, d => d === td)' in jr_src and 'closed.filter(t => t.d === td)' not in jr_src)
 check('index.html loads pnl.js before journal.js', 0 <= idx.find('js/pnl.js') < idx.find('js/journal.js'))
