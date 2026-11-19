@@ -136,11 +136,19 @@ App.askNotify = () => { if (window.Notification) Notification.requestPermission(
 App.riskBanner = () => {
   const J = App.journal; if (!J || !J.riskStatus) return '';
   let rs; try { rs = J.riskStatus(); } catch (e) { return ''; }
-  if (!rs || rs.level === 'ok' || !rs.msgs.length) return '';
-  notifyRisk(rs); const bad = rs.level === 'bad', can = window.Notification && Notification.permission === 'default';
-  return `<div class="stale risk${bad ? '' : ' warn'}" role="alert"><span class="ic">${bad ? '!' : 'i'}</span><div><b>${bad ? 'Risk limit reached' : 'Risk check'}</b><ul>${rs.msgs.map(([l, m]) => `<li>${esc(m)}</li>`).join('')}</ul>
-    ${can ? '<small><a href="#" onclick="return App.askNotify()">Turn on pop-up alerts on this device</a></small>' : ''}</div></div>`;
+  if (!rs) return '';
+  const shown = rs.shown || rs.msgs, hid = rs.hiddenN || 0, ack = rs.ackN || 0;
+  if (!rs.msgs.length && !ack) return '';
+  const restore = (hid || ack) ? `<small class="rk-foot">${hid ? hid + ' alert' + (hid > 1 ? 's' : '') + ' hidden' : ''}${hid && ack ? ' · ' : ''}${ack ? ack + ' old trade' + (ack > 1 ? 's' : '') + ' accepted without an exit date' : ''} · <a href="#" onclick="return App.riskAct('restore')">Show them again</a> (they are always listed in Risk status on the Dashboard)</small>` : '';
+  if (!shown.length) return restore ? `<div class="stale risk warn rk-quiet" role="note"><span class="ic">i</span><div>${restore}</div></div>` : '';
+  const alerts = { msgs: shown }; notifyRisk(alerts); const bad = shown.some(x => x[0] === 'bad'), can = window.Notification && Notification.permission === 'default';
+  const btn = (op, k, t) => `<button type="button" class="rk-b" onclick="return App.riskAct('${op}','${k || ''}')">${t}</button>`;
+  const li = ([l, m, k]) => `<li><span>${esc(m)}</span><span class="rk-acts">${k === 'noexit' ? btn('xd', k, 'Ignore these old trades') : ''}${btn('hide', k, 'Hide today')}${l === 'warn' && k !== 'noexit' ? btn('mute', k, 'Always ignore') : ''}</span></li>`;
+  return `<div class="stale risk${bad ? '' : ' warn'}" role="alert"><span class="ic">${bad ? '!' : 'i'}</span><div><b>${bad ? 'Risk limit reached' : 'Risk check'}</b><ul class="rk-list">${shown.map(li).join('')}</ul>
+    ${shown.length > 1 ? `<small>${btn('all', '', 'Hide all today')}</small>` : ''}
+    ${can ? '<small><a href="#" onclick="return App.askNotify()">Turn on pop-up alerts on this device</a></small>' : ''}${restore}</div></div>`;
 };
+App.riskAct = (op, key) => { if (op === 'restore' && !confirm('Show every hidden risk alert again?')) return false; if (op === 'xd' && !confirm('Stop alerting about the closed trades that have no exit date?\nTheir P&L still stays out of the day and week limits, and nothing is deleted. A new trade without an exit date will still alert.')) return false; App.journal.ignoreAlert(op, key); return false; };
 App.LED = k => App.data['signals_' + k] || { signals: [], dropped: [], watch: {} };
 App.actionsUrl = () => actionsUrl();
 function actionsUrl() { const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/').filter(Boolean)[0]; return m && repo ? `https://github.com/${m[1]}/${repo}/actions` : 'https://github.com'; }

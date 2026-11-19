@@ -111,21 +111,38 @@ JR.riskStatus = () => {
   const D = PnL.realized(T, d => d === td), W = PnL.realized(T, d => weekStart(d) === wk), M = PnL.realized(T, d => d.slice(0, 7) === mo);
   const day = D.net / cap, week = W.net / cap, month = M.net / cap, closed = T.filter(t => t.closed && t.net != null);
   const use = { day: PnL.limitUse(D.net, cap, S.dayLim), week: PnL.limitUse(W.net, cap, S.weekReview), month: PnL.limitUse(M.net, cap, S.monthStop) };
-  const unknownT = T.filter(t => t.xdUnknown), recentUnknown = unknownT.filter(t => t.d >= new Date(Date.now() - 31 * 864e5).toISOString().slice(0, 10));
+  const ign = J.ign || {}, ackX = new Set(ign.xd || []), unknownT = T.filter(t => t.xdUnknown), recentUnknown = unknownT.filter(t => !ackX.has(t.id) && t.d >= new Date(Date.now() - 31 * 864e5).toISOString().slice(0, 10));
   const unreal = T.filter(t => t.open).reduce((a, t) => { let lp = null; try { lp = livePrice(t); } catch (e) { } const u = PnL.unrealized(t, t.q, lp); return u == null ? a : a + u; }, 0);   // separate: never in realized day/week P&L
   const openRisk = T.filter(t => t.open && t.risk).reduce((x, t) => x + t.risk, 0) / cap, intra = T.filter(t => t.d === td && t.cat === 'Intraday').length;
   const todayT = T.filter(t => t.d === td), trades = todayT.length, over = todayT.filter(t => t.didx > S.maxIntra);
   const fullLoss = closed.filter(t => t.xkey === td && t.r != null && t.r <= -0.9).length; const msgs = []; let level = 'ok';
-  const bump = (l, m) => { msgs.push([l, m]); if (l === 'bad' || (l === 'warn' && level === 'ok')) level = l; };
-  if (day <= -S.dayLim) bump('bad', `Day is over: down ${pct(-day)} (limit ${pct(S.dayLim)}). No recovery trade.`); else if (day <= -S.dayStop) bump('bad', `Stop new trades today: down ${pct(-day)}.`); else if (day <= -S.dayCaution) bump('warn', `Caution: down ${pct(-day)} today.`);
-  if (week <= -S.weekReview) bump('bad', `Weekly review mode: down ${pct(-week)} this week. Never increase risk to recover.`); else if (week <= -S.weekAlert) bump('warn', `Reduce size: down ${pct(-week)} this week.`);
-  if (month <= -S.monthStop) bump('bad', `Monthly stop: down ${pct(-month)}. Review the last 30 to 50 trades.`); else if (month <= -S.monthHalf) bump('warn', `Half size: down ${pct(-month)} this month.`);
-  if (openRisk > S.openMax) bump('warn', `Open risk ${pct(openRisk)} is above your ${pct(S.openMax)} cap.`);
-  if (over.length) bump('bad', `Trade ${over.map(t => '#' + t.didx + ' (' + (t.inst || '?') + ', ' + (t.grade || 'ungraded') + ')').join(', ')} today is past your ${S.maxIntra} a day: strict, even an A+ waits for tomorrow.`);
-  else if (trades >= S.maxIntra) bump('warn', `${trades} trades today: your limit. No more today, even an A+ waits for tomorrow.`);
-  if (fullLoss >= 2) bump('bad', 'Two full-risk losses today: trading stops for the day.'); else if (fullLoss === 1) bump('warn', 'One full-risk loss today: take a 20 to 30 minute reset before the next idea.');
-  if (recentUnknown.length) bump('warn', `${recentUnknown.length} closed trade${recentUnknown.length > 1 ? 's have' : ' has'} no exit date (${recentUnknown.slice(0, 3).map(t => t.inst || '?').join(', ')}${recentUnknown.length > 3 ? '…' : ''}): ${inr(Math.abs(recentUnknown.reduce((a, t) => a + (t.net || 0), 0)))} of P&L is NOT in today's or this week's limits. Open the trade and add the exit date.`);
-  return { level, msgs, day, week, month, use, realizedRs: { day: D.net, week: W.net, month: M.net }, unrealized: unreal, unknownExit: unknownT.length, unknownRecent: recentUnknown.length, openRisk, intra, trades, over: over.length, fullLoss, cap, S };
+  const bump = (l, m, k) => { msgs.push([l, m, k]); if (l === 'bad' || (l === 'warn' && level === 'ok')) level = l; };
+  if (day <= -S.dayLim) bump('bad', `Day is over: down ${pct(-day)} (limit ${pct(S.dayLim)}). No recovery trade.`, 'day'); else if (day <= -S.dayStop) bump('bad', `Stop new trades today: down ${pct(-day)}.`, 'day'); else if (day <= -S.dayCaution) bump('warn', `Caution: down ${pct(-day)} today.`, 'day');
+  if (week <= -S.weekReview) bump('bad', `Weekly review mode: down ${pct(-week)} this week. Never increase risk to recover.`, 'week'); else if (week <= -S.weekAlert) bump('warn', `Reduce size: down ${pct(-week)} this week.`, 'week');
+  if (month <= -S.monthStop) bump('bad', `Monthly stop: down ${pct(-month)}. Review the last 30 to 50 trades.`, 'month'); else if (month <= -S.monthHalf) bump('warn', `Half size: down ${pct(-month)} this month.`, 'month');
+  if (openRisk > S.openMax) bump('warn', `Open risk ${pct(openRisk)} is above your ${pct(S.openMax)} cap.`, 'openrisk');
+  if (over.length) bump('bad', `Trade ${over.map(t => '#' + t.didx + ' (' + (t.inst || '?') + ', ' + (t.grade || 'ungraded') + ')').join(', ')} today is past your ${S.maxIntra} a day: strict, even an A+ waits for tomorrow.`, 'count');
+  else if (trades >= S.maxIntra) bump('warn', `${trades} trades today: your limit. No more today, even an A+ waits for tomorrow.`, 'count');
+  if (fullLoss >= 2) bump('bad', 'Two full-risk losses today: trading stops for the day.', 'fullloss'); else if (fullLoss === 1) bump('warn', 'One full-risk loss today: take a 20 to 30 minute reset before the next idea.', 'fullloss');
+  if (recentUnknown.length) bump('warn', `${recentUnknown.length} closed trade${recentUnknown.length > 1 ? 's have' : ' has'} no exit date (${recentUnknown.slice(0, 3).map(t => t.inst || '?').join(', ')}${recentUnknown.length > 3 ? '…' : ''}): ${inr(Math.abs(recentUnknown.reduce((a, t) => a + (t.net || 0), 0)))} of P&L is NOT in today's or this week's limits. Open the trade and add the exit date.`, 'noexit');
+  /* alerts you chose to hide: the Risk status card (Dashboard) still lists every one, and the P&L maths is never changed by hiding */
+  const snz = ign.snooze || {}, mute = ign.mute || {}, shown = msgs.filter(([l, m, k]) => !(snz[k] === td || (l === 'warn' && mute[k]))), lvlShown = shown.some(x => x[0] === 'bad') ? 'bad' : shown.length ? 'warn' : 'ok';
+  return { level, shown, levelShown: lvlShown, hiddenN: msgs.length - shown.length, ackN: ackX.size, msgs, day, week, month, use, realizedRs: { day: D.net, week: W.net, month: M.net }, unrealized: unreal, unknownExit: unknownT.length, unknownRecent: recentUnknown.length, openRisk, intra, trades, over: over.length, fullLoss, cap, S };
+};
+/* Hide alerts (19 Nov 2026). Stored in the journal (so it syncs), never changes any P&L or limit maths:
+   hide  = this kind of alert is hidden for today only, and returns tomorrow (works for every alert, including a reached loss limit)
+   mute  = a soft warning (caution, reduce size, open risk, reset) is hidden until you restore it; a hard stop is never muted
+   xd    = these particular closed trades are accepted as having no exit date; a NEW trade without one still alerts
+   all   = hide everything shown right now for today   restore = undo all of the above */
+JR.ignoreAlert = (op, key) => {
+  const J = JR.J(); if (!J) return; const ign = J.ign = J.ign || {}; ign.snooze = ign.snooze || {}; ign.mute = ign.mute || {}; if (!Array.isArray(ign.xd)) ign.xd = []; const td = todayIST();
+  const rs = JR.riskStatus();
+  if (op === 'hide') ign.snooze[key] = td;
+  else if (op === 'all') rs.shown.forEach(([l, m, k]) => { ign.snooze[k] = td; });
+  else if (op === 'mute') { const m = rs.msgs.find(x => x[2] === key); if (m && m[0] === 'warn') ign.mute[key] = true; else ign.snooze[key] = td; }
+  else if (op === 'xd') { const ids = JR.enrich().filter(t => t.xdUnknown).map(t => t.id); ign.xd = Array.from(new Set(ign.xd.concat(ids))); }
+  else if (op === 'restore') { J.ign = { snooze: {}, mute: {}, xd: [] }; }
+  JR.touch(); JR.persist(); App.render();
 };
 JR.sizeFor = (entry, sl, grade) => { const S = JR.J().set, rp = grade === 'A+' ? S.riskA : S.riskN, risk = S.capital * rp, per = Math.abs(entry - sl); return { rp, risk, qty: per > 0 ? Math.floor(risk / per) : 0, ceiling: S.capital * S.riskC, capital: S.capital }; };
 JR.findByTag = tag => JR.enrich().find(t => (t.note || '').includes('DS:' + tag));
