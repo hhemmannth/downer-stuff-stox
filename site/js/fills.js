@@ -52,7 +52,7 @@
     return { pending, done };
   }
   function prefill(p) {
-    return { d: p.d, tm: p.tm, inst: p.inst, cat: p.cat, dir: p.dir, qty: p.qty, entry: p.entry, exit: p.exit, tf: p.cat === 'Swing' ? 'Daily' : '5 MINS', note: 'BR:' + p.key + ' | from Angel One fills: add your stop-loss, grade and charges' };
+    return { d: p.d, tm: p.tm, inst: p.inst, cat: p.cat, dir: p.dir, qty: p.qty, entry: p.entry, exit: p.exit, xd: p.xd || '', xtm: p.xtm || '', tf: p.cat === 'Swing' ? 'Daily' : '5 MINS', note: 'BR:' + p.key + ' | from Angel One fills: add your stop-loss, grade and charges' };
   }
   const api = { propose, split, prefill, ist, clean, catOf };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Fills = api;
