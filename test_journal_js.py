@@ -170,6 +170,22 @@ console.log(JSON.stringify({ a, b }));
 """)
 if o6 is None: check('snooze-expiry harness runs', False, err6)
 else: check('hidden for today only: an alert hidden yesterday is shown again today', o6['a'] is False and o6['b'] is True, json.dumps(o6))
+o7, err7 = run(r"""
+const T0 = id => T({ id, inst: id, d: '2026-11-10', qty: 10, entry: 100, sl: 95, exit: 90 });
+let J = { id: 'j1', name: 't', schema: 2, set: { ...JR.SET0, capital: 200000 }, trades: [T0('a'), T0('b')] };
+JR.E.list = [J]; JR.E.cur = 'j1'; JR.persist = () => {}; ctx.App.render = () => {};
+const out = {}; out.base = JR.riskStatus().shown.map(m => m[2]);
+JR.ignoreAlert('mute', 'noexit'); J.trades.push(T0('c')); out.mutedFuture = JR.riskStatus().shown.map(m => m[2]);      // always ignore covers trades added later too
+JR.ignoreAlert('restore'); out.restored = JR.riskStatus().shown.map(m => m[2]);
+JR.ignoreAlert('off'); const off = JR.riskStatus(); out.off = { bannerOff: off.bannerOff, still: off.msgs.length };       // banner off: alerts still computed for the Dashboard card
+JR.ignoreAlert('on'); out.on = JR.riskStatus().bannerOff;
+console.log(JSON.stringify(out));
+""")
+if o7 is None: check('banner-off harness runs', False, err7)
+else:
+    check('"Always ignore" on the no-exit-date alert also covers closed trades added later', 'noexit' in o7['base'] and 'noexit' not in o7['mutedFuture'])
+    check('restore brings the no-exit-date alert back', 'noexit' in o7['restored'])
+    check('banner off: the page banner is switched off but the Dashboard still has every alert computed; on reverses it', o7['off']['bannerOff'] is True and o7['off']['still'] >= 1 and o7['on'] is False, json.dumps(o7['off']))
 core_src = open(os.path.join(JS, 'core.js')).read()
 check('banner has the hide buttons and a "show them again" link, and the pop-up only fires for alerts that are shown', 'App.riskAct' in core_src and 'Show them again' in core_src and 'notifyRisk(alerts)' in core_src)
 pnl_src = open(os.path.join(JS, 'pnl.js')).read(); jr_src = open(os.path.join(JS, 'journal.js')).read(); idx = open(os.path.join(HERE, 'site', 'index.html')).read()
