@@ -186,6 +186,15 @@ else:
     check('"Always ignore" on the no-exit-date alert also covers closed trades added later', 'noexit' in o7['base'] and 'noexit' not in o7['mutedFuture'])
     check('restore brings the no-exit-date alert back', 'noexit' in o7['restored'])
     check('banner off: the page banner is switched off but the Dashboard still has every alert computed; on reverses it', o7['off']['bannerOff'] is True and o7['off']['still'] >= 1 and o7['on'] is False, json.dumps(o7['off']))
+# a "//" comment must never swallow code that follows it on the same line (this broke the Analytics page once: "mx is not defined")
+import re as _re
+swallowed = []
+for fn in sorted(os.listdir(JS)):
+    if not fn.endswith('.js'): continue
+    for i, line in enumerate(open(os.path.join(JS, fn), encoding='utf-8').read().split('\n'), 1):
+        m = _re.search(r'(?<![:"\'`\\])//\s.*?\b(const|let|var)\s+[A-Za-z_$][\w$]*\s*=', line)
+        if m and not _re.search(r'https?://', line[:m.start() + 2]): swallowed.append(f'{fn}:{i}')
+check('no JS comment swallows code on its own line', not swallowed, ', '.join(swallowed[:6]))
 core_src = open(os.path.join(JS, 'core.js')).read()
 check('banner has the hide buttons and a "show them again" link, and the pop-up only fires for alerts that are shown', 'App.riskAct' in core_src and 'Show them again' in core_src and 'notifyRisk(alerts)' in core_src)
 pnl_src = open(os.path.join(JS, 'pnl.js')).read(); jr_src = open(os.path.join(JS, 'journal.js')).read(); idx = open(os.path.join(HERE, 'site', 'index.html')).read()
