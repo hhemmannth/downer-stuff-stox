@@ -88,7 +88,8 @@ function calNav(C, u) { const ms = [...new Set(C.map(t => t.xmkey).filter(Boolea
   return `<button class="btn sm" data-cal="${ms[i - 1] || ''}" ${i > 0 ? '' : 'disabled'} aria-label="Previous month">‹</button><b style="min-width:80px;text-align:center">${MON[+u.calM.slice(5) - 1]} ${u.calM.slice(0, 4)}</b><button class="btn sm" data-cal="${ms[i + 1] || ''}" ${i < ms.length - 1 ? '' : 'disabled'} aria-label="Next month">›</button>`; }
 function calendar(C, u) {
   const m = u.calM, y = +m.slice(0, 4), mo = +m.slice(5) - 1, first = new Date(Date.UTC(y, mo, 1)), days = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate(), lead = (first.getUTCDay() + 6) % 7, by = {};
-  C.forEach(t => (t._legs || []).forEach(l => { if (!l.known || l.net == null || l.d.slice(0, 7) !== m) return; by[l.d] = by[l.d] || { net: 0, n: 0 }; by[l.d].net += l.net; by[l.d].n++; }));     // realized on its exit date (pnl.js) const mx = Math.max(...Object.values(by).map(x => Math.abs(x.net)), 1);
+  C.forEach(t => (t._legs || []).forEach(l => { if (!l.known || l.net == null || l.d.slice(0, 7) !== m) return; by[l.d] = by[l.d] || { net: 0, n: 0 }; by[l.d].net += l.net; by[l.d].n++; }));
+  const mx = Math.max(...Object.values(by).map(x => Math.abs(x.net)), 1);      // calendar counts each leg on its exit date (pnl.js)
   let h = WD.map(d => `<div class="dh">${d}</div>`).join('') + '<div class="d x"></div>'.repeat(lead);
   for (let d = 1; d <= days; d++) { const k = `${m}-${String(d).padStart(2, '0')}`, x = by[k], a = x ? .15 + .6 * Math.abs(x.net) / mx : 0;
     h += `<div class="d" style="${x ? `background:color-mix(in srgb,${x.net >= 0 ? 'var(--good)' : 'var(--bad)'} ${Math.round(a * 100)}%,var(--panel-2))` : ''}" title="${k}${x ? ': ' + inrS(x.net) + ', ' + x.n + ' trades' : ''}"><span class="muted">${d}</span>${x ? `<b>${Math.abs(x.net) >= 1000 ? (x.net / 1000).toFixed(1) + 'k' : Math.round(x.net)}</b>` : ''}</div>`; }
