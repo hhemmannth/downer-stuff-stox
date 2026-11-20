@@ -127,7 +127,7 @@ JR.riskStatus = () => {
   if (recentUnknown.length) bump('warn', `${recentUnknown.length} closed trade${recentUnknown.length > 1 ? 's have' : ' has'} no exit date (${recentUnknown.slice(0, 3).map(t => t.inst || '?').join(', ')}${recentUnknown.length > 3 ? '…' : ''}): ${inr(Math.abs(recentUnknown.reduce((a, t) => a + (t.net || 0), 0)))} of P&L is NOT in today's or this week's limits. Open the trade and add the exit date.`, 'noexit');
   /* alerts you chose to hide: the Risk status card (Dashboard) still lists every one, and the P&L maths is never changed by hiding */
   const snz = ign.snooze || {}, mute = ign.mute || {}, shown = msgs.filter(([l, m, k]) => !(snz[k] === td || (l === 'warn' && mute[k]))), lvlShown = shown.some(x => x[0] === 'bad') ? 'bad' : shown.length ? 'warn' : 'ok';
-  return { level, shown, levelShown: lvlShown, hiddenN: msgs.length - shown.length, ackN: ackX.size, msgs, day, week, month, use, realizedRs: { day: D.net, week: W.net, month: M.net }, unrealized: unreal, unknownExit: unknownT.length, unknownRecent: recentUnknown.length, openRisk, intra, trades, over: over.length, fullLoss, cap, S };
+  return { level, shown, levelShown: lvlShown, bannerOff: !!ign.off, hiddenN: msgs.length - shown.length, ackN: ackX.size, msgs, day, week, month, use, realizedRs: { day: D.net, week: W.net, month: M.net }, unrealized: unreal, unknownExit: unknownT.length, unknownRecent: recentUnknown.length, openRisk, intra, trades, over: over.length, fullLoss, cap, S };
 };
 /* Hide alerts (19 Nov 2026). Stored in the journal (so it syncs), never changes any P&L or limit maths:
    hide  = this kind of alert is hidden for today only, and returns tomorrow (works for every alert, including a reached loss limit)
@@ -141,7 +141,9 @@ JR.ignoreAlert = (op, key) => {
   else if (op === 'all') rs.shown.forEach(([l, m, k]) => { ign.snooze[k] = td; });
   else if (op === 'mute') { const m = rs.msgs.find(x => x[2] === key); if (m && m[0] === 'warn') ign.mute[key] = true; else ign.snooze[key] = td; }
   else if (op === 'xd') { const ids = JR.enrich().filter(t => t.xdUnknown).map(t => t.id); ign.xd = Array.from(new Set(ign.xd.concat(ids))); }
-  else if (op === 'restore') { J.ign = { snooze: {}, mute: {}, xd: [] }; }
+  else if (op === 'off') ign.off = true;
+  else if (op === 'on') ign.off = false;
+  else if (op === 'restore') { J.ign = { snooze: {}, mute: {}, xd: [], off: false }; }
   JR.touch(); JR.persist(); App.render();
 };
 JR.sizeFor = (entry, sl, grade) => { const S = JR.J().set, rp = grade === 'A+' ? S.riskA : S.riskN, risk = S.capital * rp, per = Math.abs(entry - sl); return { rp, risk, qty: per > 0 ? Math.floor(risk / per) : 0, ceiling: S.capital * S.riskC, capital: S.capital }; };
