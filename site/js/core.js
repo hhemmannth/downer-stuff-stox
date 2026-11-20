@@ -138,9 +138,9 @@ App.riskBanner = () => {
   let rs; try { rs = J.riskStatus(); } catch (e) { return ''; }
   if (!rs) return '';
   const shown = rs.shown || rs.msgs, hid = rs.hiddenN || 0, ack = rs.ackN || 0;
-  if (!rs.msgs.length && !ack) return '';
+
   const restore = (hid || ack) ? `<small class="rk-foot">${hid ? hid + ' alert' + (hid > 1 ? 's' : '') + ' hidden' : ''}${hid && ack ? ' · ' : ''}${ack ? ack + ' old trade' + (ack > 1 ? 's' : '') + ' accepted without an exit date' : ''} · <a href="#" onclick="return App.riskAct('restore')">Show them again</a> (they are always listed in Risk status on the Dashboard)</small>` : '';
-  if (!shown.length) return restore ? `<div class="stale risk warn rk-quiet" role="note"><span class="ic">i</span><div>${restore}</div></div>` : '';
+  if (!shown.length) return hid && restore ? `<div class="stale risk warn rk-quiet" role="note"><span class="ic">i</span><div>${restore}</div></div>` : '';
   const alerts = { msgs: shown }; notifyRisk(alerts); const bad = shown.some(x => x[0] === 'bad'), can = window.Notification && Notification.permission === 'default';
   const btn = (op, k, t) => `<button type="button" class="rk-b" onclick="return App.riskAct('${op}','${k || ''}')">${t}</button>`;
   const li = ([l, m, k]) => `<li><span>${esc(m)}</span><span class="rk-acts">${k === 'noexit' ? btn('xd', k, 'Ignore these old trades') : ''}${btn('hide', k, 'Hide today')}${l === 'warn' && k !== 'noexit' ? btn('mute', k, 'Always ignore') : ''}</span></li>`;
