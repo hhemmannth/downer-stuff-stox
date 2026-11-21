@@ -195,6 +195,8 @@ for fn in sorted(os.listdir(JS)):
         m = _re.search(r'(?<![:"\'`\\])//\s.*?\b(const|let|var)\s+[A-Za-z_$][\w$]*\s*=', line)
         if m and not _re.search(r'https?://', line[:m.start() + 2]): swallowed.append(f'{fn}:{i}')
 check('no JS comment swallows code on its own line', not swallowed, ', '.join(swallowed[:6]))
+an_src = open(os.path.join(JS, 'analytics.js')).read()
+check('analytics calendar: with no exit-dated closed trade in the view (e.g. This month) it falls back to the current month instead of crashing (reading slice)', 'ms.length ? ms[ms.length - 1] :' in an_src)
 core_src = open(os.path.join(JS, 'core.js')).read()
 check('banner has the hide buttons and a "show them again" link, and the pop-up only fires for alerts that are shown', 'App.riskAct' in core_src and 'Show them again' in core_src and 'notifyRisk(alerts)' in core_src)
 pnl_src = open(os.path.join(JS, 'pnl.js')).read(); jr_src = open(os.path.join(JS, 'journal.js')).read(); idx = open(os.path.join(HERE, 'site', 'index.html')).read()
