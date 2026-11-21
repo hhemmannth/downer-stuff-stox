@@ -84,7 +84,7 @@ App.pages.analytics = () => {
   h += systemCard(C);
   return h;
 };
-function calNav(C, u) { const ms = [...new Set(C.map(t => t.xmkey).filter(Boolean))].sort(); if (!u.calM || !ms.includes(u.calM)) u.calM = ms[ms.length - 1]; const i = ms.indexOf(u.calM);
+function calNav(C, u) { const ms = [...new Set(C.map(t => t.xmkey).filter(Boolean))].sort(); if (!u.calM || !ms.includes(u.calM)) u.calM = ms.length ? ms[ms.length - 1] : (new Date(Date.now() + 19800000).toISOString().slice(0, 7)); const i = ms.indexOf(u.calM);      /* no closed trade with an exit date in this filter (e.g. This month): show the current month, empty */
   return `<button class="btn sm" data-cal="${ms[i - 1] || ''}" ${i > 0 ? '' : 'disabled'} aria-label="Previous month">‹</button><b style="min-width:80px;text-align:center">${MON[+u.calM.slice(5) - 1]} ${u.calM.slice(0, 4)}</b><button class="btn sm" data-cal="${ms[i + 1] || ''}" ${i < ms.length - 1 ? '' : 'disabled'} aria-label="Next month">›</button>`; }
 function calendar(C, u) {
   const m = u.calM, y = +m.slice(0, 4), mo = +m.slice(5) - 1, first = new Date(Date.UTC(y, mo, 1)), days = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate(), lead = (first.getUTCDay() + 6) % 7, by = {};
