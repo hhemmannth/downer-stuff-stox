@@ -136,7 +136,7 @@ def action_alerts(base, topic, click, data_dir, state, today, min_score):
             if falling and a_plus: done = push(f'{wid}|sector', f'Swing: {sym} on hold, sector index falling', f"{it['index_check'].get('sector_index', 'The sector index')} has turned down. Your rule: wait for it to stabilise before taking the setup.", 'warning', sym)
             if done: last[wid + '|sector'] = falling
     for d in (led.get('dropped') or []):
-        if str(d.get('dropped', ''))[:10] != today or (d.get('score') or 0) < bar or not str(d.get('status', '')).upper().startswith(('IN ZONE', '1H CONFIRMED')): continue   # only A+ setups you were actively waiting on
+        if str(d.get('dropped', ''))[:10] != today or (d.get('score') or 0) < bar or d.get('state') == 'MOVED' or not str(d.get('status', '')).upper().startswith(('IN ZONE', '1H CONFIRMED')): continue   # only A+ setups you were actively waiting on
         push(f"{d.get('id')}|dropped", f"Swing: {d['symbol']} setup is off", f"{d.get('reason') or 'The setup is no longer valid.'} Remove any price alert or pending order for it.", 'x', d['symbol'])
     for k in [k for k in last if k.split('|sector')[0] not in now_ids]: del last[k]           # forget setups that left the watch list
     return n

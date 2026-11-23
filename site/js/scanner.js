@@ -25,9 +25,11 @@ function card(sec, it) {
   const sub = sec === 'options' ? (ot ? `${esc(ot.instrument)} · Δ ${fmt(ot.delta)} · ₹${fmt(ot.premium)}` : 'Nifty 50 index') : [it.sector, it.rs_rank != null ? 'RS ' + it.rs_rank : ''].filter(Boolean).map(esc).join(' · ');
   const sp = it.spark || (it.candles ? it.candles.slice(-60).map(c => c[3]) : null), spark = sp && sp.length ? App.charts.spark(sp, { lo: it.zone_bot, hi: it.zone_top, sl: it.sl }) : '';
   const lv = it.entry != null ? [['e', hot || stage >= 5 ? 'Entry' : 'Plan', it.entry], ['s', 'Stop', it.sl], ['t', 'T1', it.t1]] : [['', 'CHoCH', it.choch_level], ['', 'Price', it.price]];
+  const tr = ((App.LED(sec).watch || {})[key(sec, it)] || {}).trail || [], prev = tr.length > 1 ? tr[tr.length - 2] : null, back = prev && prev.stage != null && it.stage != null && prev.stage > it.stage && (Date.now() - new Date(tr[tr.length - 1].at).getTime()) < 36e5 * 36;
+  const moved = back ? `<span class="cau" title="Moved back on the ${esc(toLbl(String(tr[tr.length - 1].at).replace('T', ' ')))} scan: was ${esc(prev.status)}${prev.held ? ' (held back)' : ''}">↓ was ${esc((STG[prev.stage] || [prev.stage])[0])}${prev.held ? ' · held' : ''}</span>` : '';
   const ticks = (it.ticks || []).length, foot = [ticks ? `<span class="cf" title="${esc((it.ticks || []).join(', '))}">${'●'.repeat(ticks)}${'○'.repeat(Math.max(0, 3 - ticks))}<em>context</em></span>` : '',
     it.risk_pct != null ? `<span>risk ${fmt(it.risk_pct, 1)}%</span>` : '', tracked ? '<span class="trk">tracked</span>' : '', App.journal.findByTag(key(sec, it)) ? '<span class="trk">in journal</span>' : '',
-    cautions.length ? `<span class="cau" title="${esc(cautions.join(' · '))}">⚠ ${cautions.length}</span>` : ''].filter(Boolean).join('');
+    cautions.length ? `<span class="cau" title="${esc(cautions.join(' · '))}">⚠ ${cautions.length}</span>` : '', moved].filter(Boolean).join('');
   const full = String(it.status || ''), held_ = sec === 'swing' && (it.holds || []).length;      // the card shows the stage; the full status is on hover and on the trade page
   const label = held_ ? 'HELD · ' + (it.holds || [])[0] : full.startsWith('WATCH') ? full.replace(/ \(/, ' · ').replace(/\)$/, '') : full.split(' (')[0];
   return `<a class="sc${hot ? ' hot' : ''}" href="${href}"><div class="sc-h"><div class="nm"><b>${esc(it.symbol)}${sec !== 'swing' ? ` <span class="tag ${it.direction}">${esc(it.label)}</span>` : ''}</b><small>${sub || '&nbsp;'}</small></div>
@@ -38,17 +40,30 @@ function card(sec, it) {
 }
 
 /* ---------- tracked trades (signals) ---------- */
+/* Your own open journal trades for this section that the scanner is NOT following (taken from a held-back or planned setup, or logged by hand). A trade the scanner tracks is
+   already in the table above it, so it is left out here. */
+function mineOpen(sec) {
+  const L = App.LED(sec), ids = L.signals.filter(s => s.status === 'ACTIVE').map(s => s.id);
+  return ((App.journal && App.journal.openFor) ? App.journal.openFor(sec) : []).filter(t => !ids.some(id => (t.note || '').includes('DS:' + id)));
+}
+function mineCard(sec) {
+  const M = mineOpen(sec); if (!M.length) return '';
+  const d = sec === 'options' ? 1 : 2;
+  return `<div class="card" style="margin-top:14px"><div class="hd"><h2>Your open trades in the journal</h2><span class="cap">${M.length} · not tracked by the scanner</span></div><div class="bd"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Trade</th><th class="n">Entry</th><th class="n">Stop</th><th class="n">Target</th><th class="n">Last · R now</th></tr></thead><tbody>${M.map(t => { const lp = App.journal.livePx(t);
+    return `<tr class="click" data-jopen="${esc(t.id)}"><td><b>${esc(t.inst)}</b> <span class="tag ${t.dir === 'Short' ? 'short' : 'long'}">${t.dir === 'Short' ? 'SHORT' : 'LONG'}</span><br><small class="muted">opened ${esc(t.d.slice(5))}${t.grade ? ' · ' + esc(t.grade) : ''} · from your journal</small></td><td class="n">${fmt(t.entry, d)}</td><td class="n">${fmt(t.sl, d)}</td><td class="n">${fmt(t.tgt, d)}</td><td class="n">${lp.txt}</td></tr>`; }).join('')}</tbody></table></div>
+    <p class="help" style="margin-top:10px">These are trades you logged yourself, for example one you took from a held-back or planned setup. The scanner only follows a setup once it is TRIGGERED, so it does not follow these; your journal does. Tap a row to edit or close it.</p></div></div>`;
+}
 function ledgerView(sec, view) {
   const L = App.LED(sec), act = L.signals.filter(s => s.status === 'ACTIVE'), clo = L.signals.filter(s => s.status === 'CLOSED').sort((a, b) => (b.closed || '').localeCompare(a.closed || '')), drop = (L.dropped || []).slice().reverse();
   const row = s => { const closed = s.status === 'CLOSED', r = closed ? s.r_final : s.r_now, nt = nextT(s), d = sec === 'options' ? 1 : 2;
     return `<tr class="click" data-href="#/trade?s=${sec}&sig=${encodeURIComponent(s.id)}"><td><b>${esc(s.instrument || s.symbol)}</b> ${sec !== 'swing' ? `<span class="tag ${s.direction}">${esc(s.label)}</span>` : ''}<br><small class="muted">${closed ? 'closed ' + esc((s.closed || '').replace('T', ' ').slice(5, 16)) : 'since ' + esc((s.created || '').replace('T', ' ').slice(5, 16))} · ${esc(s.grade)} ${s.score}/10</small></td>
       <td><span class="st ${closed ? (r > 0 ? 's4' : 'closed') : 's3'}">${esc(sigStatus(s))}</span></td><td class="n">${fmt(s.entry, d)}</td><td class="n">${fmt(closed ? s.sl : s.stop, d)}</td><td class="n">${closed ? fmt(s.exit, d) : fmt(nt[1], d) + ' <small class="muted">' + nt[0] + '</small>'}</td><td class="n">${fmt(closed ? s.exit : s.last, d)}</td><td class="n ${cls(r)}"><b>${rr(r)}</b></td></tr>`; };
   const tbl = (rows, head) => `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head.map((h, i) => `<th class="${i >= 2 ? 'n' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
-  if (view === 'active') return `<div class="card"><div class="bd">${act.length ? tbl(act.map(row).join(''), ['Trade', 'Status', 'Entry', 'Stop now', 'Next target', 'Last', 'R now']) + `<p class="help" style="margin-top:10px">Every triggered setup is followed on closed candles until the final target, the stop or the trailing stop${sec === 'swing' ? ' (swing: no breakeven at T1, stop to entry at T2)' : ', or 15:15'}. Tap a row for its timeline.</p>` : App.ui.empty('No open trades', 'Triggered setups are followed here until they close.')}</div></div>`;
+  if (view === 'active') return (act.length || !mineOpen(sec).length ? `<div class="card"><div class="bd">${act.length ? tbl(act.map(row).join(''), ['Trade', 'Status', 'Entry', 'Stop now', 'Next target', 'Last', 'R now']) + `<p class="help" style="margin-top:10px">Every triggered setup is followed on closed candles until the final target, the stop or the trailing stop${sec === 'swing' ? ' (swing: no breakeven at T1, stop to entry at T2)' : ', or 15:15'}. Tap a row for its timeline.</p>` : App.ui.empty('No open trades', 'Triggered setups are followed here until they close.')}</div></div>` : '') + mineCard(sec);
   return `<div class="card"><div class="hd"><h2>Closed trades</h2></div><div class="bd">${clo.length ? tbl(clo.map(row).join(''), ['Trade', 'Outcome', 'Entry', 'Stop', 'Exit', 'Exit', 'Result']) : App.ui.empty('Nothing closed yet', '')}</div></div>
     <div class="card" style="margin-top:14px"><div class="hd"><h2>Invalidated before triggering</h2></div><div class="bd">${drop.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Setup</th><th>Reason</th><th class="n">Zone</th><th class="n">Plan entry</th><th class="n">When</th></tr></thead><tbody>${drop.map(w => `<tr class="click" data-href="#/trade?s=${sec}&id=${encodeURIComponent(w.symbol + '|' + w.direction)}"><td><b>${esc(w.symbol)}</b> <small class="muted">was ${esc(w.status || '')} · ${esc(w.grade || '')}</small></td><td style="white-space:normal;min-width:220px">${esc(w.reason || '')}</td><td class="n">${fmt(w.zone_bot)}–${fmt(w.zone_top)}</td><td class="n">${fmt(w.entry)}</td><td class="n">${esc((w.dropped || '').replace('T', ' ').slice(5, 16))}</td></tr>`).join('')}</tbody></table></div>` : App.ui.empty('None', 'Setups cancelled before triggering show here.')}</div></div>`;
 }
-const viewSeg = (sec, view) => { const L = App.LED(sec), a = L.signals.filter(s => s.status === 'ACTIVE').length, c = L.signals.filter(s => s.status === 'CLOSED').length + (L.dropped || []).length;
+const viewSeg = (sec, view) => { const L = App.LED(sec), a = L.signals.filter(s => s.status === 'ACTIVE').length + mineOpen(sec).length, c = L.signals.filter(s => s.status === 'CLOSED').length + (L.dropped || []).length;
   return App.ui.seg('view_' + sec, [['setups', 'Setups'], ['active', `Open trades ${a}`], ['closed', `Closed / invalidated ${c}`]], view); };
 const meta = d => d ? `<span class="pill info">${esc(dateIST(d.generated_at))} ${esc(hmIST(d.generated_at))} · ${esc(ago(d.generated_at))}</span>${d.fast_at ? `<span class="pill" title="Between the hourly scans the 1H-confirmed setups are re-checked for a 15m entry every 15 minutes">15m entries checked ${esc(hmIST(d.fast_at))}</span>` : ''}` : '';
 
@@ -108,7 +123,7 @@ App.binds.swing = () => {
   $$('[data-seg="swgrade"]').forEach(b => b.onclick = () => { u.grade = b.dataset.v; App.render(); });
   const q = $('#swQ'); if (q) { let t; q.oninput = () => { clearTimeout(t); t = setTimeout(() => { u.q = q.value; App.render(); const z = $('#swQ'); if (z) { z.focus(); z.setSelectionRange(z.value.length, z.value.length); } }, 250); }; }
 };
-function bindView(sec, u) { $$(`[data-seg="view_${sec}"]`).forEach(b => b.onclick = () => { u.view = b.dataset.v; App.render(); }); $$('tr[data-href]').forEach(tr => tr.onclick = () => location.hash = tr.dataset.href); }
+function bindView(sec, u) { $$(`[data-seg="view_${sec}"]`).forEach(b => b.onclick = () => { u.view = b.dataset.v; App.render(); }); $$('tr[data-href]').forEach(tr => tr.onclick = () => location.hash = tr.dataset.href); $$('tr[data-jopen]').forEach(tr => tr.onclick = () => App.journal.openForm(tr.dataset.jopen)); }
 
 /* ---------- options ---------- */
 const OU = () => App.ui.op || (App.ui.op = { view: 'setups' });
@@ -155,7 +170,7 @@ function resolve(q) {
 }
 function chartSpec(it, tf, sig) {
   const z = [], lv = [], mk = [];
-  const plan = [['Entry', it.entry, 'brand', 0, 3], ['SL', it.sl, 'bad', 0, 3], ['T1', it.t1, 'good', 1, 2], ['T2', it.t2, 'good', 1, 2], ['T3', it.t3, 'good', 1, 1]];
+  const planned = !sig && it.status !== 'TRIGGERED', plan = [['Entry', it.entry, 'brand', 0, 3], ['SL', it.sl, 'bad', 0, 3], ['T1', it.t1, 'good', 1, 2], ['T2', it.t2, 'good', 1, 2], ['T3', it.t3, 'good', 1, 1]];
   if (sig && isNum(sig.stop) && sig.stop !== it.sl) plan.push(['Stop now', sig.stop, 'warn', 0, 3]);
   const hit = t => sig && sig.hits && sig.hits[t];
   if (tf === '1D' || tf === '5m') {
@@ -175,7 +190,7 @@ function chartSpec(it, tf, sig) {
     if (m.choch) lv.push({ p: m.choch.level, c: 'ink3', dash: 1, label: '15m CHoCH', k: 1 }); if (m.bos) lv.push({ p: m.bos.level, c: 'good', dash: 1, label: '15m BOS', k: 1 });
     if (m.trigger) mk.push({ t: toLbl(m.trigger), p: m.entry, label: 'Entry', c: 'brand' }); if (m.retest) mk.push({ t: toLbl(m.retest), p: m.fvg && m.fvg.high, label: 'Retest', c: 'good', below: true });
   }
-  plan.forEach(([l, p, c, dash, k]) => { if (isNum(p) && (tf !== '15m' || l === 'Entry' || l === 'SL')) lv.push({ p, c, dash, label: (hit(l) ? '✓ ' : '') + l, k, w: l === 'Entry' || l === 'SL' ? 1.6 : 1.1, scale: tf === '15m' ? l === 'Entry' : l !== 'T3' && l !== 'T2' }); });
+  plan.forEach(([l, p, c, dash, k]) => { if (isNum(p) && (tf !== '15m' || l === 'Entry' || l === 'SL')) lv.push({ p, c, dash, label: (hit(l) ? '✓ ' : '') + (l === 'Entry' && planned ? 'Planned entry' : l), k, w: l === 'Entry' || l === 'SL' ? 1.6 : 1.1, scale: tf === '15m' ? l === 'Entry' : l !== 'T3' && l !== 'T2' }); });
   return { zones: z, levels: lv, marks: mk };
 }
 function chartsOf(it) {
@@ -203,9 +218,10 @@ function scoreCard(it) {
 }
 function planCard(it) {
   const d = dec(it), risk = isNum(it.entry) && isNum(it.sl) ? Math.abs(it.entry - it.sl) : null, R = p => risk ? Math.abs(p - it.entry) / risk : null, p = it.plan || {};
-  const lvls = [['Entry', it.entry, 'brand'], ['Stop-loss', it.sl, 'bad'], ['T1', it.t1, 'good'], ['T2', it.t2, 'good'], ['T3', it.t3, 'good']].filter(x => isNum(x[1]));
+  const planned = it.status !== 'TRIGGERED', lvls = [[planned ? 'Planned entry' : 'Entry', it.entry, 'brand'], ['Stop-loss', it.sl, 'bad'], ['T1', it.t1, 'good'], ['T2', it.t2, 'good'], ['T3', it.t3, 'good']].filter(x => isNum(x[1]));
   const trail = (p.trail || []).map(t => typeof t === 'string' ? t : `<b>${esc(t.when)}:</b> ${esc(t.action)}`);
   return `<div class="card"><div class="hd"><h2>Trade plan</h2>${it.risk_pct != null ? `<span class="cap">risk ${it.risk_pct.toFixed(2)}% of price</span>` : ''}</div><div class="bd">
+    ${planned ? `<p class="help" style="margin:0 0 10px"><b>Planned entry, not a signal.</b> This is where the plan puts the entry inside the zone, so the stop and targets can be sized. It is not a trigger and price does not have to reach it. The trade only starts when the status turns <b>TRIGGERED</b> (${it.section === 'swing' ? 'a 1H close above the 9 EMA on volume, then the 15m entry' : 'the 5m trigger candle closing above the 9 EMA on volume'}).</p>` : ''}
     <table class="tbl"><tbody>${lvls.map(([l, v, c], i) => `<tr><td><b class="${c === 'bad' ? 'bad' : c === 'good' ? 'good' : 'brand'}">${l}</b></td><td class="n"><b>${fmt(v, d)}</b></td><td class="n muted">${i === 0 ? '' : i === 1 ? '−1R · ' + fmt(risk, d) + ' pts' : (R(v) || 0).toFixed(1) + 'R'}</td></tr>`).join('')}</tbody></table>
     ${(p.execution || []).length ? `<div class="fsec" style="margin-top:14px">Execution</div><ol class="steps">${p.execution.map(x => `<li>${typeof x === 'string' ? esc(x) : esc(x.action || '')}</li>`).join('')}</ol>` : ''}
     ${trail.length ? `<div class="fsec">Managing it</div><ol class="steps">${trail.map(x => `<li>${typeof x === 'string' && !x.startsWith('<b>') ? esc(x) : x}</li>`).join('')}</ol>` : ''}</div></div>`;
@@ -290,6 +306,12 @@ function optionCard(it) {
     ${(o.candidates || []).length ? `<hr class="sep"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Strike</th><th class="n">Delta</th><th class="n">Model</th>${liveAny ? '<th class="n">Live</th><th class="n">Bid / Ask</th>' : ''}<th class="n">Theta/day</th></tr></thead><tbody>${o.candidates.map(c => `<tr${c.strike === o.strike ? ' style="font-weight:700"' : ''}><td>${c.strike}</td><td class="n">${fmt(c.delta)}</td><td class="n">${fmt(c.premium)}</td>${liveAny ? `<td class="n">${c.live ? fmt(c.live.ltp) : '-'}</td><td class="n">${c.live && c.live.bid ? fmt(c.live.bid) + ' / ' + fmt(c.live.ask) : '-'}</td>` : ''}<td class="n">${fmt(c.theta_day)}</td></tr>`).join('')}</tbody></table></div>` : ''}
     <p class="help" style="margin-top:8px">${L ? 'Volatility comes from the live option price (Angel One). Stop and target premiums are model estimates around it: place the order on the live price.' : 'Black-Scholes with India VIX: a model price, check the live premium before you buy.'}</p></div></div>`;
 }
+/* Where a setup has been: its stage and status on each scan it changed on (so a setup that moves from 1H confirmed / held back to In zone is not just 'gone'). */
+function trailCard(sec, it, w) {
+  const tr = ((w && w.trail) || (it ? ((App.LED(sec).watch || {})[key(sec, it)] || {}).trail : null) || []).slice(-8).reverse(); if (tr.length < 2 && !(w && w.reason)) return '';
+  return `<div class="card"><div class="hd"><h2>Where this setup has been</h2><span class="cap">newest first</span></div><div class="bd"><ul class="ins">${tr.map(x => `<li><i></i><span><b>${esc(toLbl(String(x.at || '').replace('T', ' ')))}</b> · ${x.stage != null && STG[x.stage] ? 'stage ' + x.stage + ' ' + esc(STG[x.stage][0]) + ': ' : ''}${esc(x.status || '')}${x.held ? ' <small class="muted">(held back)</small>' : ''}</span></li>`).join('')}</ul>
+    ${w && w.reason ? `<p class="help" style="margin-top:8px"><b>Then:</b> ${esc(w.reason)}</p>` : ''}</div></div>`;
+}
 function trackCard(sig, it) {
   const d = dec(it), closed = sig.status === 'CLOSED', r = closed ? sig.r_final : sig.r_now;
   return `<div class="card"><div class="hd"><h2>Trade tracking</h2><span class="sp"></span><span class="pill ${closed ? (r > 0 ? 'ok' : 'bad') : 'info'}">${esc(sigStatus(sig))}</span></div><div class="bd">
@@ -300,7 +322,7 @@ function trackCard(sig, it) {
 App.pages.trade = q => {
   const R = resolve(q), sec = R.sec, back = `<a class="back" href="#/${sec}">${ic('back')} ${sec === 'options' ? 'Nifty options' : sec[0].toUpperCase() + sec.slice(1)}</a>`;
   if (!R.it) { const w = R.drop; return back + (w ? `<div class="thead"><h1>${esc(w.symbol)}</h1><span class="pill bad">invalidated</span></div><div style="height:12px"></div>${App.ui.callout('bad', `<b>This setup was cancelled before it triggered</b> (${esc((w.dropped || '').replace('T', ' ').slice(0, 16))}).<br>${esc(w.reason || '')}`)}
-      <div class="card" style="margin-top:14px"><div class="bd"><div class="kv"><span>Last status</span><b>${esc(w.status || '')}</b><span>Grade / score</span><b>${esc(w.grade || '')} ${w.score || ''}/10</b><span>Zone</span><b>${fmt(w.zone_bot)} – ${fmt(w.zone_top)}</b><span>Plan entry / SL / T1</span><b>${fmt(w.entry)} / ${fmt(w.sl)} / ${fmt(w.t1)}</b></div><p class="help" style="margin-top:8px">If you entered anyway, manage it with the original stop and log it as a rule break ("No confirmation").</p></div></div>` : App.ui.empty('Setup not found', 'It is no longer in the scan and never triggered.')); }
+      <div class="card" style="margin-top:14px"><div class="bd"><div class="kv"><span>Last status</span><b>${esc(w.status || '')}</b><span>Grade / score</span><b>${esc(w.grade || '')} ${w.score || ''}/10</b><span>Zone</span><b>${fmt(w.zone_bot)} – ${fmt(w.zone_top)}</b><span>Plan entry / SL / T1</span><b>${fmt(w.entry)} / ${fmt(w.sl)} / ${fmt(w.t1)}</b></div><p class="help" style="margin-top:8px">If you entered anyway, manage it with the original stop and log it as a rule break ("No confirmation").</p></div></div>${trailCard(sec, null, w)}` : App.ui.empty('Setup not found', 'It is no longer in the scan and never triggered.')); }
   const it = R.it, sig = R.sig, d = dec(it), inJ = App.journal.findByTag(sig ? sig.id : key(sec, it)), tfs = it.charts ? Object.keys(it.charts) : it.tfs && it.tfs.length ? it.tfs : [it.tf_structure || '5m'];
   const tf = App.ui.tf && tfs.includes(App.ui.tf) ? App.ui.tf : (tfs.includes('15m') && it.stage >= 5 ? '15m' : tfs[0]); App.ui.tfCur = tf;
   const role = { '1D': 'Structure and zone', '1H': 'Confirmation', '15m': 'Precision entry', '5m': 'Setup and trigger' };
@@ -313,7 +335,7 @@ App.pages.trade = q => {
     <div class="bd" id="chBox">${chartFor(it, tf, sig, 700)}</div><div class="bd legend" style="padding-top:0"><span><i style="background:var(--c6)"></i>9 EMA</span><span><i style="background:var(--good)"></i>FVG</span><span><i style="background:var(--c1)"></i>OB</span><span><i style="background:var(--sun)"></i>Fib</span><span><i style="background:var(--brand)"></i>Entry / zone</span><span><i style="background:var(--bad)"></i>Stop</span></div></div>
     ${it.checklist ? checklistCard(it) : `<div class="card"><div class="hd"><h2>Why this setup</h2></div><div class="bd"><ul class="checks">${(it.logic || []).map(l => `<li><span class="mk ${l.ok === false ? 'n' : 'y'}">${l.ok === false ? '✗' : '✓'}</span><span class="tf"></span><div><b>${esc(l.title)}</b><p>${esc(l.text)}</p></div></li>`).join('')}</ul></div></div>`}
     ${news.length ? `<div class="card"><div class="hd"><h2>News for ${esc(it.symbol)}</h2></div><div class="bd"><ul class="news">${news.slice(0, 6).map(n => `<li><span class="imp ${n.impact || ''}"></span><div><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><br><small>${esc(n.source || '')}${n.published ? ' · ' + esc(ago(n.published)) : ''}</small></div></li>`).join('')}</ul></div></div>` : ''}</div>
-    <div class="stack">${sig ? trackCard(sig, it) : ''}${scoreCard(it)}${planCard(it)}${optionCard(it)}${sizeCard(it)}${ticketCard(it, sec)}
+    <div class="stack">${sig ? trackCard(sig, it) : ''}${sig ? '' : trailCard(sec, it)}${scoreCard(it)}${planCard(it)}${optionCard(it)}${sizeCard(it)}${ticketCard(it, sec)}
       ${(it.notes || []).length ? `<div class="card"><div class="hd"><h2>Cautions</h2></div><div class="bd"><ul class="ins">${it.notes.map(n => `<li class="warn"><i></i><span>${esc(n)}</span></li>`).join('')}</ul></div></div>` : ''}</div></div>`;
   return h;
 };

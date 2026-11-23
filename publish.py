@@ -126,11 +126,14 @@ def publish(pub, since, site_dir='site', message='update', tries=5):
     """Push everything in `pub`. Files we changed (and the site files) are ours; for any other file, the version already on the
     branch wins, because another run may have refreshed it while we were scanning. `since` is only used when there is no record
     of what we last saw (a pub folder made by an older version of this file)."""
-    for item in os.listdir(site_dir):
+    # site_dir=None: this run does NOT own the site files. The 5-hour loops (market-loop, gold-loop) check main out once at the start and then
+    # publish every few minutes, so copying their site folder would put OLD pages back over a newer deploy (found 20 Nov 2026: new pages kept
+    # reverting to the old version). Loops publish data only; the pages come from scan, the backtests, readiness and backup runs.
+    for item in (os.listdir(site_dir) if site_dir else []):
         s, d = os.path.join(site_dir, item), os.path.join(pub, item)
         (shutil.copytree(s, d, dirs_exist_ok=True) if os.path.isdir(s) else shutil.copy2(s, d))
     open(os.path.join(pub, '.nojekyll'), 'w').close()
-    site = set(_files(site_dir)); local = _files(pub); seen = _load_seen(pub)
+    site = set(_files(site_dir)) if site_dir else set(); local = _files(pub); seen = _load_seen(pub)
     if seen is None: mine = {f for f, m in local.items() if m >= since} | site
     else:
         cur = _blobs(pub, local); mine = {f for f in local if cur.get(f) != seen.get(f)} | site
