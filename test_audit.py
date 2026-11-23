@@ -142,6 +142,11 @@ parity = S * math.exp(-greeks.Q_DIV * Tt) - K * math.exp(-greeks.R_FREE * Tt)
 check('Black-Scholes: put-call parity C - P = S e^-qT - K e^-rT', abs((c['price'] - p['price']) - parity) < 1e-6, f"{c['price'] - p['price']:.4f} vs {parity:.4f}")
 check('Black-Scholes: call delta in (0,1), put delta in (-1,0), call delta - put delta = e^-qT', 0 < c['delta'] < 1 and -1 < p['delta'] < 0 and abs(c['delta'] - p['delta'] - math.exp(-greeks.Q_DIV * Tt)) < 1e-9)
 check('Black-Scholes at expiry: intrinsic value only', greeks.bs(24100, 24000, 0, 0.13, 'CE')['price'] == 100 and greeks.bs(24100, 24000, 0, 0.13, 'PE')['price'] == 0)
+# 23 Nov 2026: the three real plans the live health page flagged falsely (3R target 0.15 off only because entry/stop are shown rounded to 0.05)
+_real = dict(section='swing', direction='long', entry=1500.00, sl=1450.00, t1=1550.00, t2=1600.00, t3=1650.15, risk_pct=100 * 50 / 1500)      # 3R = 1650.00, shown 0.15 off
+check('plan check: a 3R target 0.15 away from exact (rounded entry and stop) is not a problem', validation.plan_errors(_real) == [], str(validation.plan_errors(_real)))
+_bad = dict(_real, t3=1640.00)
+check('plan check: a target that is really wrong (2.8R shown as 3R) is still flagged', any('T3' in e[0] for e in validation.plan_errors(_bad)), str(validation.plan_errors(_bad)))
 import datetime as _dt
 check('weekly expiry: Tuesday 24 Nov 2026 is a holiday (Guru Nanak Jayanti), so expiry moves to Monday 23 Nov', greeks.weekly_expiry(_dt.datetime(2026, 11, 19, 10, 0, tzinfo=greeks.IST), ['2026-11-24']) == _dt.date(2026, 11, 23))
 check('weekly expiry: on Tuesday after 15:30 the next one is the following week', greeks.weekly_expiry(_dt.datetime(2026, 11, 17, 15, 45, tzinfo=greeks.IST)) == _dt.date(2026, 11, 24))

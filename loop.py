@@ -107,7 +107,7 @@ def main(argv=None):
     if not a.no_publish and not a.once:
         heartbeat(pub, **hb, next_tick=next_tick(now_ist(), a.every, a.offset).isoformat(timespec='seconds'))
         mark = time.time()
-        try: publish.publish(pub, last_pub, message=f'loop started {start:%H:%M} IST'); last_pub = mark
+        try: publish.publish(pub, last_pub, site_dir=None, message=f'loop started {start:%H:%M} IST'); last_pub = mark
         except Exception as ex: log(f'publish failed: {ex}')
     while True:
         t = next_tick(now_ist(), a.every, a.offset)
@@ -132,7 +132,7 @@ def main(argv=None):
         heartbeat(pub, **hb, next_tick=next_tick(now_ist() + dt.timedelta(seconds=1), a.every, a.offset).isoformat(timespec='seconds'))
         if not a.no_publish:
             mark = time.time()
-            try: publish.publish(pub, last_pub, message=f'scan {tick:%Y-%m-%d %H:%M} IST'); last_pub = mark; hb['publish'] = 'ok'; log('published')
+            try: publish.publish(pub, last_pub, site_dir=None, message=f'scan {tick:%Y-%m-%d %H:%M} IST'); last_pub = mark; hb['publish'] = 'ok'; log('published')
             except Exception as ex: hb['publish'] = f'failed: {str(ex)[:120]}'; log(f'publish failed: {ex}')
             hb['bad_publish'] = hb.get('bad_publish', 0) + 1 if str(hb['publish']).startswith('failed') else 0
         watch_loop(pub, hb)
@@ -148,7 +148,7 @@ def main(argv=None):
     hb.update(state='finished', swing_running=False); heartbeat(pub, **hb, next_tick=None)
     if not a.once and not a.no_publish and trading_day(now_ist().date()) and now_ist() < dt.datetime.combine(now_ist().date(), CLOSE, tzinfo=IST) - dt.timedelta(minutes=10): relay(log)
     if not a.no_publish:
-        try: publish.publish(pub, last_pub, message='final'); log('published final')
+        try: publish.publish(pub, last_pub, site_dir=None, message='final'); log('published final')
         except Exception as ex: log(f'publish failed: {ex}')
     log('Loop finished'); return 0
 

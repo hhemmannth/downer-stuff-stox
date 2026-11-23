@@ -57,7 +57,7 @@ def main(argv=None):
         heartbeat(pub, **hb)
         if not a.no_publish:
             mark = time.time()
-            try: publish.publish(pub, last_pub, message=f'gold {tick:%Y-%m-%d %H:%M} IST'); last_pub = mark; hb['publish'] = 'ok'
+            try: publish.publish(pub, last_pub, site_dir=None, message=f'gold {tick:%Y-%m-%d %H:%M} IST'); last_pub = mark; hb['publish'] = 'ok'
             except Exception as ex: hb['publish'] = f'failed: {str(ex)[:120]}'; log(f'publish failed: {ex}')
         try:
             import alerts
@@ -71,7 +71,7 @@ def main(argv=None):
     hb.update(state='finished', next_tick=None); heartbeat(pub, **hb)
     if not a.once and gold_live.market_open(pd.Timestamp(loop.now_ist() + dt.timedelta(minutes=10))): relay(log)
     if not a.no_publish:
-        try: publish.publish(pub, last_pub, message='gold loop finished')
+        try: publish.publish(pub, last_pub, site_dir=None, message='gold loop finished')
         except Exception as ex: log(f'publish failed: {ex}')
     log('Gold loop finished'); return 0
 

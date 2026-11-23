@@ -23,6 +23,18 @@ check('the branch is always a single commit (no history to grow the repo)', len(
 open(os.path.join(site, 'index.html'), 'w').write('<h1>v2</h1>'); publish.publish(B, time.time(), site, 'ui'); check('new site files are published even with no new data', show('index.html') == '<h1>v2</h1>')
 # ---- 17 Nov 2026: a file another writer refreshed must never be pushed back as our older copy
 C = publish.prepare(os.path.join(root, 'C')); lc = time.time() - 1; G = publish.prepare(os.path.join(root, 'G')); lg = time.time() - 1
+# a long loop started BEFORE a deploy still holds the old site folder: it must never put the old pages back (20 Nov 2026: new pages kept reverting)
+open(os.path.join(site, 'index.html'), 'w').write('<h1>NEW</h1>'); publish.publish(B, time.time(), site, 'scan deploys the new pages')
+OLD = os.path.join(root, 'old_site'); os.makedirs(OLD, exist_ok=True); open(os.path.join(OLD, 'index.html'), 'w').write('<h1>OLD</h1>')
+LP = publish.prepare(os.path.join(root, 'LP')); open(os.path.join(LP, 'data', 'loop.json'), 'w').write('tick'); publish.publish(LP, time.time() - 1, site_dir=None, message='loop tick with a stale checkout')
+check('a loop publishing with site_dir=None leaves the newer deployed pages alone and still publishes its data', show('index.html') == '<h1>NEW</h1>' and show('data/loop.json') == 'tick', show('index.html'))
+LQ = publish.prepare(os.path.join(root, 'LQ')); publish.publish(LQ, time.time() - 1, OLD, 'old behaviour')
+check('control: the old behaviour (stale site folder owned by the loop) really did put the old pages back', show('index.html') == '<h1>OLD</h1>', show('index.html'))
+open(os.path.join(site, 'index.html'), 'w').write('<h1>NEW</h1>'); publish.publish(B, time.time(), site, 'restore new pages for the next checks')
+import re as _re2
+for fn in ('loop.py', 'gold_loop.py'):
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), fn)).read(); calls = _re2.findall(r'publish\.publish\([^\n]*', src)
+    check(f'{fn}: every publish from the long loop leaves the site files to scan/backtest runs (site_dir=None)', calls and all('site_dir=None' in c for c in calls), str(calls)[:200])
 def pub(P, last, f, txt, msg):
     if f: open(os.path.join(P, 'data', f), 'w').write(txt)
     m = time.time(); publish.publish(P, last, site, msg); return m

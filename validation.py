@@ -55,7 +55,7 @@ def plan_errors(it):
     if it.get('section') == 'swing' and all(x is not None for x in t) and abs(e - sl) > 0:
         R = abs(e - sl)
         for k, (x, m) in enumerate(zip(t, (1, 2, 3))):
-            if abs((x - e) - m * R) > TOL_TICK + 1e-9: out.append((f'T{k + 1} is not {m}R from the entry', f'{e + m * R:.2f}', f'{x:.2f}', 'MEDIUM'))
+            if abs((x - e) - m * R) > TOL_TICK + 0.05 * m + 1e-9: out.append((f'T{k + 1} is not {m}R from the entry', f'{e + m * R:.2f}', f'{x:.2f}', 'MEDIUM'))
     return out
 
 def candle_errors(times, candles):

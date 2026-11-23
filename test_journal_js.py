@@ -202,5 +202,22 @@ check('banner has the hide buttons and a "show them again" link, and the pop-up 
 pnl_src = open(os.path.join(JS, 'pnl.js')).read(); jr_src = open(os.path.join(JS, 'journal.js')).read(); idx = open(os.path.join(HERE, 'site', 'index.html')).read()
 check('one source of truth: journal.js uses PnL for net, day, week and month and no longer sums P&L by the entry date', 'PnL.totals(' in jr_src and 'PnL.realized(T, d => d === td)' in jr_src and 'closed.filter(t => t.d === td)' not in jr_src)
 check('index.html loads pnl.js before journal.js', 0 <= idx.find('js/pnl.js') < idx.find('js/journal.js'))
+# ---- 23 Nov 2026: the scanner pages list your own open journal trades; planned entries are labelled; gold shows withheld triggers
+o, err = run(r"""
+const J = { id: 'j1', name: 't', schema: 2, set: { ...JR.SET0, capital: 200000 }, trades: [
+  T({ inst: 'GABRIEL', cat: 'Swing', qty: 10, entry: 100, sl: 95, note: 'DS:swing|GABRIEL|long|2026-11-10 | 8/10 A+' }), T({ inst: 'NIFTYCE', cat: 'Options', qty: 65, entry: 120, sl: 80 }),
+  T({ inst: 'DONE', cat: 'Swing', qty: 10, entry: 100, sl: 95, exit: 110, xd: '2026-11-20' }), T({ inst: 'INTRA', cat: 'Intraday', qty: 5, entry: 50, sl: 48 })] };
+JR.E.list = [J]; JR.E.cur = 'j1';
+console.log(JSON.stringify({ sw: JR.openFor('swing').map(t => t.inst), op: JR.openFor('options').map(t => t.inst), it: JR.openFor('intraday').map(t => t.inst), xx: JR.openFor('gold').length, lp: JR.livePx(JR.openFor('swing')[0]).txt }));
+""")
+check('JR.openFor lists only OPEN trades of that scanner section (closed ones and other styles stay out; GABRIEL is found)', o is not None and o['sw'] == ['GABRIEL'] and o['op'] == ['NIFTYCE'] and o['it'] == ['INTRA'] and o['xx'] == 0, o)
+check('JR.livePx never throws when the scanner has no price for the trade', o is not None and o['lp'] == '-', o)
+sc_src = open(os.path.join(JS, 'scanner.js')).read(); lab_src = open(os.path.join(JS, 'lab.js')).read()
+check('scanner pages: Open trades tab and its count include untracked journal trades, rows open the journal form', 'function mineCard' in sc_src and 'mineOpen(sec).length' in sc_src and "data-jopen" in sc_src and 'App.journal.openForm(tr.dataset.jopen)' in sc_src)
+check('a journal trade the scanner already follows (its DS: tag matches an ACTIVE signal) is not listed twice', "includes('DS:' + id)" in sc_src)
+check('planned entry is labelled "Planned entry, not a signal" on the plan card and the chart until the setup is TRIGGERED', 'Planned entry, not a signal' in sc_src and "'Planned entry'" in sc_src and "it.status !== 'TRIGGERED'" in sc_src)
+check('gold page shows triggers withheld for no volume and says the rule change is the user\'s call', 'Triggers withheld: no volume on spot gold' in lab_src and 'GOLD_VOLUME_RULE=off' in lab_src and 'needs a new frozen strategy version' in lab_src)
+check('swing: a setup that moved back shows a "was ..." chip and the trade page has a "Where this setup has been" history (also for one that left the list)', "↓ was " in sc_src and 'function trailCard' in sc_src and 'trailCard(sec, null, w)' in sc_src and 'trailCard(sec, it)' in sc_src)
+check('asset version bumped to 32', idx.count('?v=32') >= 10 and '?v=31' not in idx)
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: ' + '; '.join(fails))
 sys.exit(1 if fails else 0)

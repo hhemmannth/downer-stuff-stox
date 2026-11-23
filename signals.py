@@ -59,7 +59,13 @@ REASONS = {'BROKEN': 'Zone broken: price closed through the zone, so the setup i
            'NO_BIAS': 'The 15m bias turned against the trade.',
            'SCORE': 'The score fell below the minimum.',
            'WEEKLY': 'The weekly trend is no longer up (your weekly location filter).',
+           'MOVED': 'Left the list on this scan. The structure is still valid, but it fell back (for example to Developing) or ranks below the setups now shown. It comes back by itself if it recovers.',
            None: 'The structure is no longer there: a new swing changed the picture.'}
+
+def trail_add(w, it, now):
+    """Keep a short history of a watched setup's stage and status, so a setup that moves (4 -> 3, held back -> in zone) leaves a trace you can read. Newest last, 12 kept."""
+    tr = w.setdefault('trail', []); row = dict(at=now.isoformat(timespec='minutes'), stage=it.get('stage'), status=str(it.get('status') or '')[:90], held=len(it.get('holds') or []))
+    if not tr or (tr[-1].get('stage'), tr[-1].get('status'), tr[-1].get('held')) != (row['stage'], row['status'], row['held']): tr.append(row); del tr[:-12]
 
 def key(section, it): return f"{section}|{it['symbol']}|{it['direction']}|{it['bos_date']}"
 
@@ -267,13 +273,15 @@ def update(led, section, items, states, bars, now, can_open=True, limit=True, ot
             if k in known: continue                                                                        # already a trade (even if the trigger candle has passed): not a watch item again
             led['dropped'] = [d for d in led['dropped'] if d.get('id') != k]                               # back in play: no longer 'dropped'
             w = led['watch'].get(k) or dict(first_seen=now.isoformat(timespec='minutes'))
+            trail_add(w, it, now)                                                                           # where the setup has been: 'was 1H confirmed, now In zone' (23 Nov 2026)
             w.update(id=k, section=section, symbol=it['symbol'], direction=it['direction'], label=it.get('label'), status=it['status'], grade=it['grade'], score=it['score'], entry=it['entry'], sl=it['sl'], t1=it['t1'],
                      zone_bot=it['zone_bot'], zone_top=it['zone_top'], last_seen=now.isoformat(timespec='minutes')); led['watch'][k] = w
     for k in list(led['watch']):
         if k in current or k in known: continue
         w = led['watch'].pop(k); st = states.get((w['symbol'], w['direction']), 'GONE')
-        if st in ('GONE', 'OK'): continue                           # not scanned this run (data missing), or still a valid setup that was only ranked out or
-                                                                     # filtered after the scan: no 'dropped' entry with a wrong reason (it said 'the structure is no longer there')
+        if st == 'GONE': continue                                   # not scanned this run (data missing): say nothing, it may be back next run
+        if st == 'OK': st = 'MOVED'                                  # still a valid structure but no longer listed (it fell back to Developing, or was ranked out): it used to vanish with no
+                                                                     # trace (23 Nov 2026, GABRIEL). It now gets its own honest reason, not 'the structure is no longer there'.
         w.update(dropped=now.isoformat(timespec='minutes'), reason=REASONS.get(st, REASONS[None]), state=st)
         led['dropped'] = [d for d in led['dropped'] if d.get('id') != k] + [w]                             # one dropped entry per setup, the latest
     cut = now - pd.Timedelta(days=KEEP_DAYS.get(section, 30))
