@@ -103,6 +103,10 @@ JR.period = (T, mode, from, to) => {
 };
 JR.PERIODS = [['all', 'All time'], ['year', 'This year'], ['month', 'This month'], ['lastm', 'Last month'], ['d30', '30 days'], ['d90', '90 days']];
 JR.openCount = () => JR.enrich().filter(t => t.open).length;
+/* Your own open trades for one scanner section (swing, options, intraday), whether or not the scanner follows them: a trade you took from a held-back or planned setup is
+   only in the journal, and the scanner pages used to show it nowhere. */
+JR.openFor = sec => { const cat = { swing: 'Swing', options: 'Options', intraday: 'Intraday' }[sec]; return cat ? JR.enrich().filter(t => t.open && t.cat === cat) : []; };
+JR.livePx = t => { try { return livePrice(t); } catch (e) { return { txt: '-', r: null }; } };
 
 /* ---------- risk status from your rules (daily / weekly / monthly limits, open risk, intraday count) ---------- */
 JR.riskStatus = () => {
