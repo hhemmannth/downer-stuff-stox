@@ -7,7 +7,7 @@ const isNum = v => typeof v === 'number' && isFinite(v);
 const fmt = (v, d = 2) => isNum(v) ? v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }) : '-';
 const fmt0 = v => fmt(v, 0);
 const sg = (v, d = 2) => isNum(v) ? (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }) : '-';
-const inr = (v, d = 0) => isNum(v) ? (v < 0 ? '−₹' : '₹') + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }) : '-';
+const inr = (v, d = 0) => isNum(v) && App.priv ? '₹ •••' : isNum(v) ? (v < 0 ? '−₹' : '₹') + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }) : '-';
 const inrS = v => isNum(v) ? (v > 0 ? '+' : '') + inr(v) : '-';
 const pct = (v, d = 1) => isNum(v) ? (v * 100).toFixed(d) + '%' : '-';
 const rr = (v, d = 2) => isNum(v) ? sg(v, d) + 'R' : '-';
@@ -43,15 +43,15 @@ const ic = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k] || ''}</
 
 /* ---------- navigation ---------- */
 const NAV = [
-  ['Today', [['dashboard', 'Dashboard', 'home']]],
+  ['Today', [['dashboard', 'Dashboard', 'home'], ['premarket', 'Pre-market', 'pulse']]],
   ['Scanner', [['swing', 'Swing', 'swing', 'primary'], ['options', 'Nifty options', 'options'], ['intraday', 'Intraday', 'intraday']]],
   ['Gold', [['gold', 'XAUUSD Gold', 'gold']]],
   ['Journal', [['journal', 'Trades', 'journal'], ['analytics', 'Analytics', 'analytics'], ['review', 'Weekly review', 'playbook']]],
   ['Research', [['backtest', 'Backtest lab', 'analytics']]],
   ['Context', [['market', 'Market', 'market'], ['news', 'News & events', 'news']]],
   ['You', [['playbook', 'Playbook & rules', 'playbook'], ['health', 'System health', 'pulse'], ['settings', 'Settings', 'settings']]]];
-const TABS = [['dashboard', 'Today', 'home'], ['swing', 'Swing', 'swing'], ['journal', 'Journal', 'journal'], ['analytics', 'Stats', 'analytics']];
-const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade', backtest: 'Backtest lab', review: 'Weekly review', gold: 'XAUUSD Gold' };
+const TABS = [['dashboard', 'Today', 'home'], ['swing', 'Swing', 'swing'], ['options', 'Options', 'options'], ['journal', 'Journal', 'journal'], ['analytics', 'Stats', 'analytics']];
+const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade', backtest: 'Backtest lab', review: 'Weekly review', gold: 'XAUUSD Gold', premarket: 'Pre-market', stock: 'Stock', design: 'Design check', yearly: 'Year in review' };
 
 App.route = () => { const h = location.hash.replace(/^#\/?/, ''); const [p, q] = h.split('?'); return { page: p || 'dashboard', q: new URLSearchParams(q || '') }; };
 App.go = (page, q) => { location.hash = '#/' + page + (q ? '?' + new URLSearchParams(q).toString() : ''); };
@@ -89,8 +89,8 @@ App.reload = async (manual) => {
   await Promise.all(FILES.map(async f => {
     try { const r = await fetch(`data/${f}.json?t=${Date.now()}`, { cache: 'no-store' }); if (r.ok) { App.data[f] = await r.json(); got++; } } catch (e) { }
   }));
-  App.loaded.at = Date.now(); App.loaded.live = got > 0 || App.loaded.live; if (got) saveCache();
-  paintChrome(); if (manual !== 'silent') App.render(); if (manual === true) App.toast(got ? 'Data refreshed' : 'Could not reach the data: showing the last copy');
+  App.loaded.at = Date.now(); App._firstLoadDone = true; App.loaded.live = got > 0 || App.loaded.live; if (got) saveCache();
+  paintChrome(); try { if (App.checkPriceAlerts) App.checkPriceAlerts(); } catch (e) { } if (manual !== 'silent') App.render(); if (manual === true) App.toast(got ? 'Data refreshed' : 'Could not reach the data: showing the last copy');
 };
 /* Instant open: the last data is kept on this device and shown at once, then replaced by fresh data a moment later. */
 function saveCache() { const keep = {}; FILES.forEach(f => { if (App.data[f]) keep[f] = App.data[f]; });
@@ -176,12 +176,15 @@ App.paintChrome = paintChrome;
 App._orbs = [];
 App.orbsInit = () => {
   App._orbs.forEach(f => f()); App._orbs = [];
-  const still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const still = (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !!App._calmForever;
   document.querySelectorAll('canvas[data-orb]').forEach(cv => {
     const ctx = cv.getContext && cv.getContext('2d'); if (!ctx) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2), box = cv.getBoundingClientRect(), W = Math.max(60, box.width), H = Math.max(60, box.height);
     cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const ink = (getComputedStyle(document.documentElement).getPropertyValue('--ink') || '#ffffff').trim().toLowerCase(), rgb = ink.startsWith('#f') ? '255,255,255' : '0,0,0';      // dark theme: ink is white
+    const LIT = cv.dataset.lit ? cv.dataset.lit.split(',').map(Number) : null, GOOD = (getComputedStyle(document.documentElement).getPropertyValue('--good') || '#5BC28A').trim();      // swing sphere: points lit by stage (item 143)
+    if (cv.dataset.sectors && !cv._sec) { cv._sec = 1; const secs = (() => { try { return JSON.parse(cv.dataset.sectors); } catch (e) { return []; } })(); const at = e => { const b = cv.getBoundingClientRect(), a = Math.atan2(e.clientY - b.top - b.height / 2, e.clientX - b.left - b.width / 2); return secs.length ? secs[Math.floor(((a + Math.PI) / (2 * Math.PI)) * secs.length) % secs.length] : null; };      // tap a part of the sphere to filter by sector (item 144)
+      cv.style.cursor = secs.length ? 'pointer' : ''; cv.addEventListener('pointermove', e => { const s0 = at(e); if (s0) cv.title = 'Tap to show ' + s0; }); cv.addEventListener('click', e => { const s0 = at(e); if (!s0) return; App.ui.sw = Object.assign(App.ui.sw || { view: 'setups', grade: 'all', stage: 'all' }, { q: s0, stage: 'all', view: 'setups' }); App.toast('Showing ' + s0 + ' (clear the search box to see all)'); App.render(); }); }
     const E = Math.max(0, Math.min(1, +cv.dataset.energy || 0)), N = W < 160 ? 320 : 600, R = Math.min(W, H) * 0.30, cx = W / 2, cy = H / 2, ga = Math.PI * (3 - Math.sqrt(5));
     const P = Array.from({ length: N }, (_, i) => { const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), t = ga * i; return [Math.cos(t) * r, y, Math.sin(t) * r]; });
     const ticks = Array.from({ length: 140 }, (_, i) => 0.35 + 0.65 * Math.abs(Math.sin(i * 0.37) * Math.cos(i * 0.11)));
@@ -199,6 +202,9 @@ App.orbsInit = () => {
         BK[Math.min(7, Math.max(0, Math.floor(d * 8)))].push(cx + x * R * k, cy + y * R * k, sz);
       }
       ctx.fillStyle = `rgb(${rgb})`;
+      if (LIT) { const HB = [], WB = []; for (let i = 0; i < P.length; i++) { const f = (i * 0.6180339887) % 1; if (f >= LIT[0] + LIT[1]) continue; const [x0, y0, z0] = P[i], x = x0 * ca + z0 * sa, z1 = -x0 * sa + z0 * ca, y = y0 * ct - z1 * st, z = y0 * st + z1 * ct; if (z > .2) continue; const k = 2.6 / (2.6 + z); (f < LIT[0] ? HB : WB).push(cx + x * R * k, cy + y * R * k, 1.6 + 1.4 * k); }
+        ctx.globalAlpha = .85; ctx.fillStyle = GOOD; ctx.beginPath(); for (let i = 0; i < HB.length; i += 3) ctx.rect(HB[i] - .5, HB[i + 1] - .5, HB[i + 2], HB[i + 2]); ctx.fill();
+        ctx.globalAlpha = .9; ctx.fillStyle = `rgb(${rgb})`; ctx.beginPath(); for (let i = 0; i < WB.length; i += 3) ctx.rect(WB[i] - .3, WB[i + 1] - .3, WB[i + 2] * .8, WB[i + 2] * .8); ctx.fill(); ctx.fillStyle = `rgb(${rgb})`; }
       BK.forEach((b, n) => { if (!b.length) return; const d = (n + .5) / 8; ctx.globalAlpha = 0.10 + 0.85 * d * d; ctx.beginPath(); for (let i = 0; i < b.length; i += 3) ctx.rect(b[i], b[i + 1], b[i + 2], b[i + 2]); ctx.fill(); });
       ctx.globalAlpha = 0.28; ctx.strokeStyle = `rgb(${rgb})`; ctx.lineWidth = 0.7;
       ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.32, R * 0.36, -0.32 + Math.sin(a * 0.7) * 0.05, 0, Math.PI * 2); ctx.stroke();
@@ -226,7 +232,7 @@ App.render = () => {
   const now0 = performance.now(), moved = App._lastPage !== page, fresh = moved || now0 - (App._movedAt || 0) < 1500, tok = App._rtok = (App._rtok || 0) + 1;   // fresh: a page just opened, or its data arrived right after
   if (moved) App._movedAt = now0;
   App._orbs.forEach(f => f()); App._orbs = [];                                               // stop the old page's orbs now
-  if (moved) { App._calmUntil = performance.now() + 260; try { el.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' }); } catch (e) { } }
+  if (moved) { App._calmUntil = performance.now() + 260; try { el.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: (App.ux && App.ux.reduced && App.ux.reduced()) ? 0 : 180, easing: 'cubic-bezier(.2,.7,.2,1)' }); } catch (e) { } }
   const art = () => { if (tok !== App._rtok) return; App._fadeNew = fresh; try { App.orbsInit(); } catch (e) { console.error(e); } try { if (App.deco3d) App.deco3d(el); } catch (e) { console.error(e); } };
   if (fresh) requestAnimationFrame(() => setTimeout(art, 0)); else art();                    // on a new page the orbs and 3D models start after it has painted, so opening a page never waits for them
   if (App._lastPage !== page) window.scrollTo(0, 0); else window.scrollTo(0, keep);
@@ -234,6 +240,8 @@ App.render = () => {
 };
 
 /* ---------- small shared widgets ---------- */
+App.ui.skel = (n = 3) => `<div class="cards" aria-busy="true" aria-label="Loading">${Array.from({ length: n }, () => '<div class="sc skel-card"><span class="skel"></span><span class="skel"></span><span class="skel"></span></div>').join('')}</div>`;
+App.ui.loadingOr = (t, s) => !App._firstLoadDone ? App.ui.skel(3) : App.ui.empty(t, s);       // a placeholder while the first data load runs, then the honest empty state (items 6, 78)
 App.ui.empty = (t, s) => `<div class="empty"><b>${t}</b>${s || ''}</div>`;
 App.ui.kpi = (l, v, s = '', c = '') => `<div class="kpi"><div class="l">${l}</div><div class="v ${c}">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`;
 App.ui.grade = g => `<span class="grade ${g === 'A+' ? 'ap' : (g || 'skip').toLowerCase()}">${esc(g || '-')}</span>`;

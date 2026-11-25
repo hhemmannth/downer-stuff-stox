@@ -6,7 +6,12 @@
    Options on the canvas: data-m3d (model), data-tone (good, bad, gold), data-fill (0 to 1, for "ring"), data-txt (coin face),
    data-speed (1 = normal), data-tilt (radians). */
 (() => {
-  const TAU = Math.PI * 2, still = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const TAU = Math.PI * 2, still = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !!App._calmForever || !!App._lowBattery;
+  /* 25 Nov 2026 (items 142, 147, 148): the models stand still in calm mode and on a phone in low battery (20% or less, not charging), pause
+     for a few seconds while you touch the screen, and draw fewer frames on phones. Their look is unchanged. */
+  const COARSE = !!(window.matchMedia && matchMedia('(pointer:coarse)').matches);
+  try { navigator.getBattery && navigator.getBattery().then(b => { const f = () => { App._lowBattery = !b.charging && b.level <= .2; }; f(); b.addEventListener('levelchange', f); b.addEventListener('chargingchange', f); }); } catch (e) { }
+  addEventListener('pointerdown', e => { if (e.pointerType === 'touch') { App._touchPauseUntil = performance.now() + 6000; setTimeout(() => { if (typeof kick === 'function') kick(); }, 6100); } }, { passive: true });
 
   /* ---------- geometry: points p [x,y,z], edges e [i,j], faces f [i,j,k,(l)]; hot = indexes drawn in the tone colour ---------- */
   const G = {};
@@ -113,7 +118,8 @@
   }
   function draw(o, t) {
     const { ctx, W, H } = o, ink = o.ink, tone = o.tone || ink;
-    const geo = ANIM.has(o.kind) ? G[o.kind](t) : o.geo;
+    let geo = ANIM.has(o.kind) ? G[o.kind](t * (o.amp > 1 ? o.amp : 1)) : o.geo;
+    if (o.amp && o.amp !== 1 && ANIM.has(o.kind)) geo = Object.assign({}, geo, { p: geo.p.map(([x, y, z]) => [x, y * o.amp, z]) });      // the options surface follows VIX (item 145)
     ctx.clearRect(0, 0, W, H);
     const S = Math.min(W, H) * (o.zoom || .4), cx = W / 2, cy = H / 2;
     const a = o.kind === 'coin' ? o.yaw0 + Math.sin(t * .8 * o.speed) * 1.05 : o.yaw0 + (o.spin ? t * .45 * o.speed : 0), ca = Math.cos(a), sa = Math.sin(a), tl = o.tilt + (o.spin ? Math.sin(t * .5) * .06 : 0), ct = Math.cos(tl), st = Math.sin(tl);
@@ -155,7 +161,7 @@
   let STILL = still(); try { matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => { STILL = still(); }); } catch (e) { }
   function frame(now) {
     L.raf = 0; L.n++;
-    const t = now / 1000, moving = !STILL, calm = now < (App._calmUntil || 0);   // calm: a page was just opened, let it paint first
+    const t = now / 1000, moving = !STILL && !App._calmForever && !App._lowBattery && now > (App._touchPauseUntil || 0), calm = now < (App._calmUntil || 0);   // calm: a page was just opened, let it paint first
     L.list = L.list.filter(o => o.cv.isConnected);
     if (!calm) {
       const vis = L.list.filter(o => o.vis), fresh = vis.filter(o => o.W == null || L.n % 30 === 0);
@@ -163,7 +169,7 @@
       fresh.forEach((o, n) => size(o, boxes[n]));
       vis.forEach((o, n) => {
         if (!moving) { if (o.dirty) { draw(o, 1.2); o.dirty = false; o.cv.classList.add('on'); } return; }
-        if ((L.n + n) % (o.W < 60 ? 3 : 2)) return;                             // 30 frames a second (20 for tiny ones), spread over alternate frames
+        if ((L.n + n) % (COARSE ? (o.W < 60 ? 4 : 3) : (o.W < 60 ? 3 : 2))) return;                             // 30 frames a second (20 for tiny ones), spread over alternate frames
         draw(o, t + o.phase); if (o.fade) { o.fade = false; o.cv.classList.add('on'); }
       });
     }
@@ -179,7 +185,7 @@
       if (cv._m3d) return; const ctx = cv.getContext && cv.getContext('2d'); if (!ctx) return;
       const ds = cv.dataset, kind = G[ds.m3d] ? ds.m3d : 'orb', fill = ds.fill != null && ds.fill !== '' ? Math.max(0, Math.min(1, +ds.fill)) : null;
       const w0 = cv.getBoundingClientRect().width || 80, arg = kind === 'orb' ? Math.round(Math.max(70, Math.min(260, w0 * 1.5))) : fill;   // fewer points on a small orb, so it stays airy
-      const o = { cv, ctx, kind, geo: ANIM.has(kind) ? null : G[kind](arg), ink: ds.ink ? toneRGB(ds.ink) : inkRGB(), tone: toneRGB(ds.tone), txt: ds.txt || (kind === 'coin' ? '₹' : ''), speed: +ds.speed || 1,
+      const o = { cv, ctx, kind, geo: ANIM.has(kind) ? null : G[kind](arg), ink: ds.ink ? toneRGB(ds.ink) : inkRGB(), tone: toneRGB(ds.tone), txt: ds.txt || (kind === 'coin' ? '₹' : ''), speed: +ds.speed || 1, amp: +ds.amp || 1,
         tilt: ds.tilt != null ? +ds.tilt : (kind === 'portal' ? .3 : kind === 'wave' || kind === 'bars' || kind === 'radar' ? .5 : kind === 'coin' ? .08 : .38),
         yaw0: Math.random() * TAU, phase: Math.random() * 20, spin: kind !== 'portal', zoom: +ds.zoom || (kind === 'portal' ? 1.1 : kind === 'ring' ? .44 : kind === 'candles' ? .47 : .4), halo: ds.halo != null ? +ds.halo : 0, vis: !L.io, dirty: true };
       if (kind === 'coin') o.yaw0 = 0;                                       // a coin rocks rather than spins, so its face stays readable
@@ -216,7 +222,11 @@
     root.querySelectorAll('.ph').forEach(ph => {                              // the page title gets its emblem
       if (ph.querySelector('.ph-orb,.ph-3d')) return;
       const gold = ph.classList.contains('gold-head'), k = gold ? 'coin' : PAGE[page]; if (!k) return;
-      const ctl = [...ph.children].slice(1).some(c => c.matches('.seg,.btn,select') || c.querySelector('.btn,select,.seg')), html = `<div class="ph-3d${gold ? ' gold' : ''}">${m(k, '', `${gold ? 'data-ink="gold" data-tone="gold" data-txt="Au"' : ''} data-halo="${gold ? .16 : .07}"`)}</div>`;
+      let ex3 = '';
+      if (page === 'options') { const v = (((App.data.options || {}).snapshot) || {}).vix; if (isNum(v)) ex3 = ` data-amp="${Math.max(.6, Math.min(1.8, v / 15)).toFixed(2)}" title="Moves with India VIX (${v.toFixed(1)})"`; }
+      if (gold) { const G0 = App.lazyNow && App.lazyNow('gold'), c = G0 && G0.chart, mm = istNow().getUTCHours() * 60 + istNow().getUTCMinutes(), on = [[270, 810], [810, 1320], [1110, 1650]].filter(([a, b]) => (mm >= a && mm < b) || (mm + 1440 >= a && mm + 1440 < b)).length;
+        const up = c && c.ema && c.candles && c.candles.length ? c.candles[c.candles.length - 1][3] >= c.ema[c.ema.length - 1] : null; ex3 = ` data-speed="${on >= 2 ? 1.6 : on ? 1 : .45}"${up == null ? '' : ` data-tilt="${up ? .22 : -.12}"`} title="Spins faster when sessions overlap; tilts with the 5-minute trend"`; }
+      const ctl = [...ph.children].slice(1).some(c => c.matches('.seg,.btn,select') || c.querySelector('.btn,select,.seg')), html = `<div class="ph-3d${gold ? ' gold' : ''}">${m(k, '', `${gold ? 'data-ink="gold" data-tone="gold" data-txt="Au"' : ''} data-halo="${gold ? .16 : .07}"${ex3}`)}</div>`;
       if (ctl && ph.firstElementChild) ph.firstElementChild.insertAdjacentHTML('afterend', html.replace('class="ph-3d', 'class="ph-3d inl')); else ph.insertAdjacentHTML('beforeend', html);   // with buttons in the header, it sits beside the title instead of wrapping onto a row of its own
     });
     root.querySelectorAll('.kpi').forEach(el => {                             // each figure gets a small model for what it measures
@@ -234,6 +244,7 @@
       const card = !!h.closest('.gold-card'), k = card ? 'coin' : pick(h.textContent);       // the gold card's flat coin becomes a 3D one
       h.insertAdjacentHTML('afterbegin', m(k, 'h2-3d', (gold ? GZ(h) : '') + (gold && k === 'coin' ? ' data-txt="Au"' : '')));
     });
+    { const P = [...root.querySelectorAll('.pipe')], vals = P.map(p => +((p.querySelector('.v') || {}).textContent || 0) || 0), mx = Math.max(1, ...vals); P.forEach((p, i) => { if (!p.querySelector('.pipe-fill')) p.insertAdjacentHTML('beforeend', `<i class="pipe-fill" style="--f:${(vals[i] / mx).toFixed(2)}" aria-hidden="true"></i>`); else p.querySelector('.pipe-fill').style.setProperty('--f', (vals[i] / mx).toFixed(2)); }); }
     root.querySelectorAll('.pipe').forEach(p => { if (p.querySelector('.m3d')) return; const k = (p.className.match(/\bp([1-5])\b/) || [])[1]; if (k) p.insertAdjacentHTML('beforeend', m(STAGE[k], 'pipe-3d', k === '5' || k === '4' ? 'data-tone="good"' : '')); });
     root.querySelectorAll('.live-row').forEach(r => { if (r.querySelector('.m3d')) return; const t = (r.querySelector('b') || r).textContent; r.insertAdjacentHTML('afterbegin', m(/option/i.test(t) ? 'wave' : /intraday/i.test(t) ? 'candles' : 'stairs', 'row-3d')); });
     root.querySelectorAll('.sc').forEach(c => {                               // setup cards: the model shows how far along the playbook it is
