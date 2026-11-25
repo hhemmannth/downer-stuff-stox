@@ -64,4 +64,22 @@ check('actions: never more than 6 in one scan; the rest follow on the next scans
 sf = os.path.join(tempfile.mkdtemp(), 'n.json'); json.dump({'date': '2026-01-01', 'sent': [], 'updated': {}, 'action_last': {'swing|ZZZ|long|x': 'zone'}}, open(sf, 'w'))
 import sys as _sys; _argv = _sys.argv; _sys.argv = ['notify.py', '--dir', tempfile.mkdtemp(), '--state', sf]; notify.main(); _sys.argv = _argv
 check('actions: the record of where each setup stood carries over to the next day (the daily reset keeps it)', json.load(open(sf)).get('action_last', {}).get('swing|ZZZ|long|x') == 'zone')
+# 23 Nov 2026: 'moved back' alert is opt-in; a setup that left the list but is still valid (state MOVED) sends no 'setup is off' message
+d2 = tempfile.mkdtemp(); mb = dict(W('MBK', 'IN ZONE (wait for 1H)'), trail=[dict(at='2026-11-23T10:15', stage=4, status='1H CONFIRMED (wait)', held=0), dict(at='2026-11-23T11:15', stage=3, status='IN ZONE (wait for 1H)', held=0)])
+put(d2, [mb]); st2 = {}; LOG.clear(); act(d2, st2, '2026-11-23'); LOG.clear(); st2['action_last'] = {mb['id']: 'zone', mb['id'] + '|sector': False}; act(d2, st2, '2026-11-23')
+check('moved-back alert is OFF by default', not any('moved back' in t for t in titles()), titles())
+os.environ['NOTIFY_MOVED_BACK'] = '1'; LOG.clear(); st2['actions'] = {}; act(d2, st2, '2026-11-23'); T2 = titles(); os.environ.pop('NOTIFY_MOVED_BACK')
+check('with NOTIFY_MOVED_BACK=1 an A+ setup that fell from 1H confirmed to In zone sends one message', T2 == ['Swing: MBK moved back'], T2)
+put(d2, [], [dict(W('MVD', 'IN ZONE (wait for 1H)'), dropped='2026-11-23T11:00+05:30', reason='Left the list on this scan.', state='MOVED')]); LOG.clear(); st2['actions'] = {}; act(d2, st2, '2026-11-23')
+check('a MOVED (still valid) setup does not send a "setup is off" message', not any('setup is off' in t for t in titles()), titles())
+# 25 Nov 2026: quiet hours hold back non-urgent messages; results within 2 days on an A+ setup in play sends one message
+import datetime as _dt
+os.environ['NOTIFY_QUIET'] = '22:30-07:00'
+check('quiet window spans midnight', notify.quiet_now(_dt.datetime(2026, 11, 25, 23, 10)) and notify.quiet_now(_dt.datetime(2026, 11, 25, 6, 59)) and not notify.quiet_now(_dt.datetime(2026, 11, 25, 7, 0)))
+check('a stop message is urgent, a zone message is not', notify.urgent('Gold: stop hit') and not notify.urgent('Swing: X is in its zone'))
+os.environ.pop('NOTIFY_QUIET')
+d3 = tempfile.mkdtemp(); wr = W('RES', 'IN ZONE (wait for 1H)'); put(d3, [wr], (), [dict(symbol='RES', direction='long', stage=3, results=dict(date='2026-11-26', days=1))])
+st3 = {}; LOG.clear(); act(d3, st3, '2026-11-25'); LOG.clear(); st3['actions'] = {}; act(d3, st3, '2026-11-25'); T3 = titles()
+check('results within 2 days on an A+ setup in its zone sends one message', T3 == ['Swing: RES results in 1 day'], T3)
+LOG.clear(); act(d3, st3, '2026-11-25'); check('...and only once that day', not titles(), titles())
 srv.shutdown(); print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED'); raise SystemExit(1 if fails else 0)

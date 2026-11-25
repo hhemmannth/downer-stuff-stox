@@ -240,6 +240,14 @@ def feed_info(fr, now):
     close = pd.Timestamp(f.index[-1]) + pd.Timedelta(minutes=5)
     return dict(last_5m=close.tz_convert(IST).isoformat(timespec='minutes'), lag_min=round((pd.Timestamp(now) - close).total_seconds() / 60, 1), bars_5m=int(len(f)))
 
+def chart_payload(f, n=150):
+    """The last n closed 5-minute candles as plain lists (IST times, OHLC, 9 EMA) for the Gold page chart. Display only: nothing reads it back."""
+    if f is None or not len(f): return None
+    ema = f.Close.ewm(span=9, adjust=False).mean(); t = f.tail(n); e = ema.tail(n); idx = pd.DatetimeIndex(t.index)
+    idx = idx.tz_convert(IST) if idx.tz is not None else idx
+    return dict(tf='5m', times=[x.strftime('%Y-%m-%d %H:%M') for x in idx], candles=[[round(float(r.Open), 2), round(float(r.High), 2), round(float(r.Low), 2), round(float(r.Close), 2)] for r in t.itertuples()],
+                ema=[round(float(v), 2) for v in e])
+
 def run(out, state_dir, styles=STYLES, now=None, fetch=None):
     now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz=IST); now = now.tz_localize(IST) if now.tzinfo is None else now.tz_convert(IST)
     os.makedirs(out, exist_ok=True); rules = bt.rules_from_env(); ms = rules['min_score']; sym = gold_feed.SYMBOL
@@ -281,6 +289,7 @@ def run(out, state_dir, styles=STYLES, now=None, fetch=None):
     doc['volume'] = dict(available=bool(info.get('volume_available')), rule=gold_feed.volume_rule(),
                          note=('the spot feed sends volume' if info.get('volume_available') else 'XAUUSD spot has no exchange volume: ' + ('your volume rule cannot be met, so no gold trigger is taken' if vol_on else 'GOLD_VOLUME_RULE=off: gold runs without the volume conditions (your choice)')))
     if not info['ok']: last = None
+    doc['chart'] = chart_payload(fr.get('f5')) if info['ok'] else None                 # last 150 closed 5-minute candles for the Gold page chart (25 Nov 2026, display only)
     doc.update(generated_at=now.isoformat(timespec='seconds'), source=gold_feed.SOURCE_ID, price=last, market_open=is_open, session=session_name(now) if is_open else 'closed',
                entry_window=entry_window(now), trades_today=n_day, open_now=n_open, max_open=max_open, max_day=max_day, min_score=ms, sessions=os.environ.get('GOLD_SESSIONS', 'all') or 'all')
     sc.write_json(out, 'gold.json', doc)

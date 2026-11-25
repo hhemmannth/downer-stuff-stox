@@ -2,7 +2,7 @@
 out by hand. Part 1: per-trade P&L. Part 2 (19 Nov 2026): realized P&L dated by the EXIT, daily/weekly loss limits, partial exits, unknown exit
 dates, the schema-2 migration, and the shared engine giving Trade Insight the same answer. Skipped (not failed) when Node is not installed.
 Run: python test_journal_js.py"""
-import json, os, shutil, subprocess, sys, tempfile
+import re, json, os, shutil, subprocess, sys, tempfile
 fails = []
 def check(name, cond, info=''):
     print(('PASS ' if cond else 'FAIL ') + name + (f'   {info}' if info else ''))
@@ -218,6 +218,6 @@ check('a journal trade the scanner already follows (its DS: tag matches an ACTIV
 check('planned entry is labelled "Planned entry, not a signal" on the plan card and the chart until the setup is TRIGGERED', 'Planned entry, not a signal' in sc_src and "'Planned entry'" in sc_src and "it.status !== 'TRIGGERED'" in sc_src)
 check('gold page shows triggers withheld for no volume and says the rule change is the user\'s call', 'Triggers withheld: no volume on spot gold' in lab_src and 'GOLD_VOLUME_RULE=off' in lab_src and 'needs a new frozen strategy version' in lab_src)
 check('swing: a setup that moved back shows a "was ..." chip and the trade page has a "Where this setup has been" history (also for one that left the list)', "↓ was " in sc_src and 'function trailCard' in sc_src and 'trailCard(sec, null, w)' in sc_src and 'trailCard(sec, it)' in sc_src)
-check('asset version bumped to 32', idx.count('?v=32') >= 10 and '?v=31' not in idx)
+_vs = set(re.findall(r'\?v=(\d+)', idx)); check('every asset carries the same version number (cache busting), at least 34', len(_vs) == 1 and int(next(iter(_vs))) >= 34, _vs)
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: ' + '; '.join(fails))
 sys.exit(1 if fails else 0)

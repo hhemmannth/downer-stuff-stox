@@ -65,8 +65,25 @@ def telegram(title, body, tags, click, photo=None, buttons=None):
         try: urllib.request.urlopen(req, timeout=20).read()
         except urllib.error.HTTPError as ex: raise RuntimeError(f'HTTP {ex.code}: ' + TELEGRAM_HINTS.get(ex.code, ex.reason)) from None
 
+def quiet_now(now=None):
+    """Item 40 (25 Nov 2026): NOTIFY_QUIET="22:30-07:00" (IST) holds back non-urgent messages in that window, for the gold loop that runs all
+    night. Messages about a trade you hold (stop, exit, target, triggered) still go through: NOTIFY_QUIET_ALLOW lists those words."""
+    w = os.environ.get('NOTIFY_QUIET', '').strip()
+    if not w or '-' not in w: return False
+    try:
+        a, b = [int(x.split(':')[0]) * 60 + int(x.split(':')[1]) for x in w.split('-', 1)]
+    except Exception: return False
+    t = now or ist_now(); m = t.hour * 60 + t.minute
+    return (a <= m < b) if a < b else (m >= a or m < b)
+
+def urgent(title, body=''):
+    words = [x.strip().lower() for x in os.environ.get('NOTIFY_QUIET_ALLOW', 'stop,exit,target,triggered,closed').split(',') if x.strip()]
+    t = f'{title} {body}'.lower(); return any(w in t for w in words)
+
 def post(base, topic, title, body, tags, click, photo=None, buttons=None):
     """Send to every configured channel (ntfy and/or Telegram). Fails only if every channel failed."""
+    if quiet_now() and not urgent(title, body):
+        print(f'  quiet hours: held back "{title}"', file=sys.stderr); return []
     ok, errs = 0, []
     if topic:
         headers = {'Title': title.encode('ascii', 'ignore').decode(), 'Tags': tags}
@@ -135,6 +152,12 @@ def action_alerts(base, topic, click, data_dir, state, today, min_score):
             done = True
             if falling and a_plus: done = push(f'{wid}|sector', f'Swing: {sym} on hold, sector index falling', f"{it['index_check'].get('sector_index', 'The sector index')} has turned down. Your rule: wait for it to stabilise before taking the setup.", 'warning', sym)
             if done: last[wid + '|sector'] = falling
+        rs = (it or {}).get('results') or {}                               # item 39: results within 2 days on an A+ setup you are watching (stage 3 or more)
+        if a_plus and it and it.get('stage', 0) >= 3 and isinstance(rs.get('days'), (int, float)) and 0 <= rs['days'] <= 2:
+            push(f"{wid}|results|{rs.get('date')}", f'Swing: {sym} results in {int(rs["days"])} day' + ('' if int(rs['days']) == 1 else 's'), f"{sym} reports results on {rs.get('date')}. A gap can jump your stop: your playbook says avoid a new entry right before results.", 'calendar', sym)
+        tr = w.get('trail') or []                                         # opt-in (NOTIFY_MOVED_BACK=1, off by default): an A+ setup that was 1H confirmed and fell back a stage
+        if a_plus and os.environ.get('NOTIFY_MOVED_BACK', '').strip() == '1' and len(tr) >= 2 and (tr[-2].get('stage') or 0) >= 4 and (tr[-1].get('stage') or 0) < (tr[-2].get('stage') or 0):
+            push(f"{wid}|back|{tr[-1].get('at')}", f'Swing: {sym} moved back', f"It was {tr[-2].get('status', 'confirmed')} and is now {tr[-1].get('status', 'lower')}. If you placed an order for it, check it still makes sense.", 'arrow_down', sym)
     for d in (led.get('dropped') or []):
         if str(d.get('dropped', ''))[:10] != today or (d.get('score') or 0) < bar or d.get('state') == 'MOVED' or not str(d.get('status', '')).upper().startswith(('IN ZONE', '1H CONFIRMED')): continue   # only A+ setups you were actively waiting on
         push(f"{d.get('id')}|dropped", f"Swing: {d['symbol']} setup is off", f"{d.get('reason') or 'The setup is no longer valid.'} Remove any price alert or pending order for it.", 'x', d['symbol'])

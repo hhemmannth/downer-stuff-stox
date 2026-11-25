@@ -70,4 +70,11 @@ os.environ.update(GITHUB_REPOSITORY='a/b', GITHUB_TOKEN='x'); ok = loop.relay(la
 check('relay: queues the next market-loop run through the Actions API', ok and calls and calls[0][0] == 'POST' and calls[0][1].endswith('/workflows/market-loop.yml/dispatches'), str(calls))
 os.environ.pop('GITHUB_REPOSITORY'); check('relay: without a repo/token it does nothing and does not crash', loop.relay(lambda s: None) is False)
 check('weekends and holidays are not trading days', not loop.trading_day(dt.date(2026, 10, 24)) and not loop.trading_day(dt.date(2026, 11, 10)) and loop.trading_day(dt.date(2026, 10, 22)))
+# item 24: each publish leaves data/health/published/<workflow>.json listing the data files it changed
+import tempfile as _tf, json as _js
+_d = _tf.mkdtemp(); os.environ['GITHUB_WORKFLOW'] = 'market-loop'
+_rel = publish._publish_record(_d, {'data/options.json', 'data/intraday.json', 'index.html', 'data/health/published/scan.json'})
+_r = _js.load(open(os.path.join(_d, _rel)))
+check('publish record: one file per workflow, data files only, newest time', _rel == 'data/health/published/market-loop.json' and _r['files'] == ['data/intraday.json', 'data/options.json'] and _r['n'] == 2 and _r['at'])
+os.environ.pop('GITHUB_WORKFLOW')
 print('\nALL PASSED' if not fails else f'\n{len(fails)} FAILED: {fails}'); sys.exit(1 if fails else 0)
