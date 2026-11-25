@@ -15,7 +15,8 @@ def _read(d, name):
 
 def load(d):
     return dict(swing=_read(d, 'swing'), options=_read(d, 'options'), intraday=_read(d, 'intraday'), market=_read(d, 'market'), news=_read(d, 'news'),
-                led={k: _read(d, 'signals_' + k) for k in ('swing', 'options', 'intraday')})
+                led={k: _read(d, 'signals_' + k) for k in ('swing', 'options', 'intraday')},
+                gold={k: _read(d, 'signals_gold_' + k) for k in ('intraday', 'swing', 'positional')})
 
 def _n(x, nd=0): return f'{x:,.{nd}f}' if isinstance(x, (int, float)) else '-'
 def _pct(x): return f'{x:+.2f}%' if isinstance(x, (int, float)) else ''
@@ -101,6 +102,12 @@ def evening_text(D, now):
     L += ['', f"Triggered today: {len(trig)}"] + [f"• {s.get('instrument') or s['symbol']} ({k}) at {e['t'][11:16]}" for k, s, e in trig[:6]]
     L += ['', f"Closed today: {len(closed)}"] + [f"• {s.get('instrument') or s['symbol']} ({k}): {s.get('outcome', '')} {s.get('r_final', 0):+.2f}R" for k, s in closed[:6]]
     if closed: L.append(f"Tracked signals total: {sum(s.get('r_final', 0) for _, s in closed):+.2f}R (half at T1, a quarter at T2, the rest at exit)")
+    held = [s for s in (D['swing'] or {}).get('setups', []) if s.get('stage', 0) >= 4 and s.get('holds')]
+    if held: L += ['', f"Held back (1H confirmed but a hold-back applies): {len(held)}"] + [f"• {s['symbol']}: {', '.join(s['holds'])}" for s in held[:5]]
+    gone = [(k, d) for k, Lg in D['led'].items() for d in (Lg or {}).get('dropped', []) if str(d.get('dropped', ''))[:10] == today]
+    if gone: L += ['', f"Left the list today: {len(gone)}"] + [f"• {d['symbol']} ({k}): {(d.get('reason') or '')[:90]}" for k, d in gone[:5]]
+    wh = [d for Lg in (D.get('gold') or {}).values() for d in (Lg or {}).get('dropped', []) + list(((Lg or {}).get('watch') or {}).values()) if 'low volume' in str(d.get('status', '')) and str(d.get('first_seen', ''))[:10] == today]
+    if wh: L += ['', f"Gold triggers withheld (spot has no volume): {len(wh)}"]
     act = active(D['led'])
     L += ['', f"Still open: {len(act)}"] + [f"• {s.get('instrument') or s['symbol']} ({k}): {s.get('r_now', 0):+.2f}R · stop {_n(s.get('stop'))}" for k, s in act[:6]]
     sl = shortlist(D['swing'], 3)
@@ -110,13 +117,27 @@ def evening_text(D, now):
     L += ['', 'Log your own trades and notes in the journal tonight, while you remember why.']
     return f"Day recap · {now:%a %d %b}", '\n'.join(L).strip(), 'city_sunset'
 
+def weekly_text(D, now):
+    """Item 41 (25 Nov 2026): what the scanner actually did in the last 7 days, so you can see its behaviour, not just its best days."""
+    since = (now - dt.timedelta(days=7)).strftime('%Y-%m-%d'); L = []
+    for k in ('swing', 'options', 'intraday'):
+        Lg = D['led'].get(k) or {}; sig = Lg.get('signals', [])
+        trig = [s for s in sig if str(s.get('created', ''))[:10] >= since]; clo = [s for s in sig if s.get('status') == 'CLOSED' and str(s.get('closed', ''))[:10] >= since]
+        won = [s for s in clo if (s.get('r_final') or 0) > 0]; gone = [d for d in Lg.get('dropped', []) if str(d.get('dropped', ''))[:10] >= since]
+        near = [d for d in Lg.get('dropped', []) + list((Lg.get('watch') or {}).values()) if str(d.get('status', '')).upper().startswith('WATCH') and str(d.get('last_seen') or d.get('dropped') or '')[:10] >= since]
+        L.append(f"{k.capitalize()}: {len(trig)} triggered, {len(clo)} closed ({len(won)} won, {sum(s.get('r_final') or 0 for s in clo):+.1f}R), {len(gone)} left the list, {len(near)} near misses")
+    g = sum(1 for Lg in (D.get('gold') or {}).values() for d in (Lg or {}).get('dropped', []) if 'low volume' in str(d.get('status', '')) and str(d.get('first_seen', ''))[:10] >= since)
+    if g: L.append(f"Gold: {g} A+ triggers withheld because spot has no volume (your decision is pending on the Gold page)")
+    L += ['', 'Tracked results are the scanner following its own signals, not your trades. Your own numbers are in Analytics.']
+    return f"Scanner week · to {now:%d %b}", '\n'.join(L).strip(), 'bar_chart'
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(); ap.add_argument('--dir', default='pub/data'); ap.add_argument('--mode', choices=('morning', 'evening'), required=True)
+    ap = argparse.ArgumentParser(); ap.add_argument('--dir', default='pub/data'); ap.add_argument('--mode', choices=('morning', 'evening', 'weekly'), required=True)
     ap.add_argument('--force', action='store_true'); ap.add_argument('--print', action='store_true', dest='show'); a = ap.parse_args(argv)
     now = dt.datetime.now(IST)
     import loop
-    if not a.force and not loop.trading_day(now.date()): print(f'digest: {now.date()} is not a trading day, nothing sent'); return 0
-    D = load(a.dir); title, body, tags = (morning_text if a.mode == 'morning' else evening_text)(D, now)
+    if not a.force and a.mode != 'weekly' and not loop.trading_day(now.date()): print(f'digest: {now.date()} is not a trading day, nothing sent'); return 0
+    D = load(a.dir); title, body, tags = {'morning': morning_text, 'evening': evening_text, 'weekly': weekly_text}[a.mode](D, now)
     if a.show: print(title + '\n' + body)
     import notify
     topic = os.environ.get('NTFY_TOPIC', '').strip(); click = os.environ.get('PAGE_URL', '').strip(); base = os.environ.get('NTFY_URL', 'https://ntfy.sh').rstrip('/')

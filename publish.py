@@ -8,7 +8,7 @@ held when we last saw it is kept in .git/ds_seen.json (path -> git blob id). Bef
 the other writer's newer one: the market loop reverted the gold loop's files and vice versa, and a once-a-day file (readiness.json) could
 stay stuck on yesterday's copy for good. Trade ledgers (data/signals_*.json) and alert state (state/*.json) written by two runs at once
 are merged by content instead of one copy winning."""
-import json, os, shutil, subprocess, time
+import datetime, json, os, re, shutil, subprocess, sys, time
 
 BRANCH = 'gh-pages'
 SEEN = 'ds_seen.json'
@@ -122,6 +122,19 @@ def _merge_file(pub, path, ref):
     with open(tmp, 'w') as f: json.dump(merged, f, separators=(',', ':'), default=str)
     os.replace(tmp, os.path.join(pub, path)); return True
 
+def _publish_record(pub, mine):
+    """Item 24 (25 Nov 2026): one small file per workflow, data/health/published/<workflow>.json, saying when it last published and which
+    data files it changed. One file per workflow, so two runs never fight over it. Returns its path inside pub, or None."""
+    try:
+        wf = re.sub(r'[^a-z0-9-]+', '-', (os.environ.get('GITHUB_WORKFLOW') or 'local').lower()).strip('-') or 'local'
+        files = sorted(f for f in mine if f.startswith('data/') and not f.startswith('data/health/published/'))
+        rel = f'data/health/published/{wf}.json'; path = os.path.join(pub, rel); os.makedirs(os.path.dirname(path), exist_ok=True)
+        now = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+        json.dump(dict(workflow=wf, at=now.isoformat(timespec='seconds'), run=os.environ.get('GITHUB_RUN_ID'), files=files[:300], n=len(files)), open(path, 'w'))
+        return rel
+    except Exception as ex:
+        print(f'publish record skipped: {ex}', file=sys.stderr); return None
+
 def publish(pub, since, site_dir='site', message='update', tries=5):
     """Push everything in `pub`. Files we changed (and the site files) are ours; for any other file, the version already on the
     branch wins, because another run may have refreshed it while we were scanning. `since` is only used when there is no record
@@ -137,6 +150,8 @@ def publish(pub, since, site_dir='site', message='update', tries=5):
     if seen is None: mine = {f for f, m in local.items() if m >= since} | site
     else:
         cur = _blobs(pub, local); mine = {f for f in local if cur.get(f) != seen.get(f)} | site
+    rec = _publish_record(pub, mine)
+    if rec: mine = mine | {rec}
     r = None
     for attempt in range(tries):                                  # `mine` is fixed before the first try: what we restore from the branch is never ours
         lease = None

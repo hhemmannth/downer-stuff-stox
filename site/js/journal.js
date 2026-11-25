@@ -107,6 +107,17 @@ JR.openCount = () => JR.enrich().filter(t => t.open).length;
    only in the journal, and the scanner pages used to show it nowhere. */
 JR.openFor = sec => { const cat = { swing: 'Swing', options: 'Options', intraday: 'Intraday' }[sec]; return cat ? JR.enrich().filter(t => t.open && t.cat === cat) : []; };
 JR.livePx = t => { try { return livePrice(t); } catch (e) { return { txt: '-', r: null }; } };
+/* Price alerts and notes pinned to a price from a chart (items 166, 167). Kept in the journal, so they sync to your other devices.
+   Alerts are checked each time fresh data arrives while the app is open (a browser page cannot watch prices when it is closed). */
+/* Your daily rule (stated 18 Nov 2026): at most two trades a day, A+ only, every segment; and the options rule "stop after two losses". */
+JR.dayStatus = () => { const d = todayIST(), T = JR.enrich().filter(t => t.d === d), losses = T.filter(t => !t.open && isNum(t.pnl) && t.pnl < 0).length; return { n: T.length, losses, left: Math.max(0, 2 - T.length), blocked: T.length >= 2 || losses >= 2, why: T.length >= 2 ? 'two trades taken today' : losses >= 2 ? 'two losses today' : '' }; };
+JR.lvx = () => { const J = JR.J(); J.lvx = J.lvx || { alerts: [], notes: [] }; J.lvx.alerts = J.lvx.alerts || []; J.lvx.notes = J.lvx.notes || []; return J.lvx; };
+JR.addAlert = (sym, p, last) => { const L = JR.lvx(); L.alerts.push({ id: 'a' + Date.now().toString(36), sym, p, dir: isNum(last) && last > p ? 'below' : 'above', at: new Date().toISOString() }); JR.touch(); JR.persist(); };
+JR.addNote = (sym, p, text) => { const L = JR.lvx(); L.notes.push({ id: 'n' + Date.now().toString(36), sym, p, text: String(text || '').slice(0, 200), at: new Date().toISOString() }); JR.touch(); JR.persist(); };
+JR.delLvx = id => { const L = JR.lvx(); L.alerts = L.alerts.filter(a => a.id !== id); L.notes = L.notes.filter(n => n.id !== id); JR.touch(); JR.persist(); };
+JR.lvxFor = sym => { const L = JR.lvx(); return { alerts: L.alerts.filter(a => a.sym === sym && !a.fired), notes: L.notes.filter(n => n.sym === sym) }; };
+JR.checkAlerts = priceOf => { const L = JR.lvx(), hit = []; L.alerts.forEach(a => { if (a.fired) return; const px = priceOf(a.sym); if (!isNum(px)) return; if ((a.dir === 'above' && px >= a.p) || (a.dir === 'below' && px <= a.p)) { a.fired = new Date().toISOString(); hit.push({ a, px }); } });
+  if (hit.length) { JR.touch(); JR.persist(); } return hit; };
 
 /* ---------- risk status from your rules (daily / weekly / monthly limits, open risk, intraday count) ---------- */
 JR.riskStatus = () => {
@@ -278,20 +289,34 @@ const latestLocal = () => E.list.filter(j => !j.demo).reduce((m, j) => Math.max(
 const payload = () => ({ v: 1, updated_at: Date.now(), journals: E.list.filter(j => !j.demo), cur: (JR.J() && !JR.J().demo ? JR.J().id : (E.list.find(j => !j.demo) || {}).id) || null, deleted: E.deleted || [], ui: { period: (store.get(LSU, {}) || {}).period || { mode: 'all' }, theme: (store.get(LSU, {}) || {}).theme || 'auto' } });
 async function push() {
   if (!sb || !Cloud.userId || Cloud.off || Cloud.busy) return; Cloud.busy = true;
-  try { const p = payload(); const { error } = await sb.from('journal_state').upsert({ user_id: Cloud.userId, payload: p, updated_at: new Date(p.updated_at).toISOString() }, { onConflict: 'user_id' }); if (error) throw error; Cloud.mode = 'cloud'; Cloud.last = Date.now(); }
+  try { const p = payload(); const { error } = await sb.from('journal_state').upsert({ user_id: Cloud.userId, payload: p, updated_at: new Date(p.updated_at).toISOString() }, { onConflict: 'user_id' }); if (error) throw error; Cloud.mode = 'cloud'; Cloud.last = Date.now(); Cloud.pushed = Date.now(); store.set('ds_sync_base', Number(p.updated_at) || 0); }
   catch (e) { fail(e); } finally { Cloud.busy = false; JR.paintSync(); }
 }
 function cloudSchedule() { if (!sb || !Cloud.userId || Cloud.off) return; clearTimeout(Cloud.timer); Cloud.timer = setTimeout(push, 900); }
 function fail(e) { Cloud.off = true; Cloud.mode = 'error'; Cloud.err = (e && (e.message || e.code)) || 'unavailable'; JR.paintSync(); App.toast('Cloud sync paused: your journal is still saved on this device'); }
+/* Item 245: when this device and the cloud both changed since the last sync, ask which to keep instead of overwriting silently.
+   The copy you do not keep is saved on this device (ds_conflict_backup) so nothing is lost. */
+function conflict(p, cu, lu) {
+  const nC = (p.journals || []).reduce((a, j) => a + (j.trades || []).length, 0), nL = E.list.filter(j => !j.demo).reduce((a, j) => a + j.trades.length, 0), when = t => new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  const bg = document.createElement('div'); bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal" role="dialog" aria-label="Choose which journal to keep" style="max-width:560px"><div class="mh"><h2>Two versions of your journal</h2></div><div class="mb"><p class="help" style="margin:10px 0">This device and your cloud both changed since they last synced. Choose which one to keep. The other is saved on this device as a backup.</p>
+    <div class="grid g2"><div class="opt"><b>This device</b><p class="help">${nL} trades · last change ${when(lu)}</p><button class="btn primary sm" type="button" data-keep="local">Keep this device</button></div><div class="opt"><b>Cloud</b><p class="help">${nC} trades · last change ${when(cu)}</p><button class="btn sm" type="button" data-keep="cloud">Use the cloud copy</button></div></div></div></div>`;
+  document.body.appendChild(bg);
+  bg.addEventListener('click', async e => { const k = e.target.closest('[data-keep]'); if (!k) return; bg.remove();
+    if (k.dataset.keep === 'local') { store.set('ds_conflict_backup', { at: new Date().toISOString(), kept: 'device', other: p }); const j = JR.J(); j.updated = Date.now(); persistNow(); Cloud.resolving = false; await push(); App.toast('Kept this device. The cloud copy is saved here as a backup.'); }
+    else { store.set('ds_conflict_backup', { at: new Date().toISOString(), kept: 'cloud', other: { journals: E.list, cur: E.cur, deleted: E.deleted } }); store.set('ds_sync_base', 0); E.list.forEach(j => { if (!j.demo) j.updated = 0; }); Cloud.resolving = false; await pull(true); App.toast('Using the cloud copy. This device\'s version is saved here as a backup.'); } });
+}
 async function pull(initial) {
   if (!sb || !Cloud.userId || Cloud.off) return;
   const { data, error } = await sb.from('journal_state').select('payload,updated_at').eq('user_id', Cloud.userId).maybeSingle(); if (error) throw error;
   if (!data || !data.payload) { await push(); return; }
   const p = data.payload, cu = Number(p.updated_at || new Date(data.updated_at || 0).getTime()) || 0, lu = latestLocal();
+  const base = Number(store.get('ds_sync_base', 0)) || 0;
+  if (cu > lu && lu > 0 && base > 0 && lu > base && cu > base && !Cloud.resolving) { Cloud.resolving = true; conflict(p, cu, lu); return; }   // both sides changed since the last sync (item 245)
   if (cu > lu || (initial && lu === 0)) {
     const journals = Array.isArray(p.journals) ? p.journals.map(fillJ) : []; E.list = [...journals, ...E.list.filter(j => j.demo)]; if (!E.list.length) E.list = [mainJournal()];
     E.deleted = Array.isArray(p.deleted) ? p.deleted : []; E.cur = E.list.some(j => j.id === p.cur) ? p.cur : (E.list.find(j => !j.demo) || E.list[0]).id;
-    store.set(LSK, E.list); store.set(LSL, E.cur); store.set(LSD, E.deleted); App.render(); if (!initial) App.toast('Journal updated from your cloud');
+    store.set(LSK, E.list); store.set(LSL, E.cur); store.set(LSD, E.deleted); store.set('ds_sync_base', cu); App.render(); if (!initial) App.toast('Journal updated from your cloud');
   } else if (lu > cu) await push();
   Cloud.mode = 'cloud'; Cloud.last = Date.now(); JR.paintSync();
 }
@@ -313,7 +338,8 @@ async function cloudInit() {
 JR.paintSync = () => { const p = $('#syncp'); if (!p) return; const m = Cloud.mode;
   p.className = 'pill ' + (m === 'cloud' ? 'ok' : m === 'error' ? 'bad' : m === 'signin' ? 'warn' : '');
   p.innerHTML = `<i></i>${m === 'cloud' ? 'Synced' : m === 'signin' ? 'Sign in' : m === 'error' ? 'Sync paused' : m === 'local' ? 'This device' : '…'}`;
-  p.title = m === 'cloud' ? `Journal saved here and in your cloud (${Cloud.email || ''})` : m === 'signin' ? 'Sign in to sync your journal' : 'Saved in this browser'; };
+  p.title = m === 'cloud' ? `Journal saved on this device and in your cloud (${Cloud.email || ''})${Cloud.pushed ? ', last saved to the cloud at ' + new Date(Cloud.pushed).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' }) : Cloud.last ? ', checked at ' + new Date(Cloud.last).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' }) : ''}` : m === 'signin' ? 'Sign in to sync your journal' : m === 'error' ? 'Sync paused: ' + (Cloud.err || '') + '. Your journal is saved on this device.' : 'Saved in this browser only';
+  JR.syncText = () => p.title; };
 JR.init = () => { load(); cloudInit(); };
 JR.loadLocal = load;                 // the local load path on its own (tests: schema-2 migration)
 

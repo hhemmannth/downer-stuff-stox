@@ -1,0 +1,49 @@
+name: replay
+
+# "Replay this day" (item 18): runs the live Nifty options engine candle by candle over a past day and publishes what it would have said
+# at each 5-minute candle (data/replay/options_<date>.json). It answers "was a trigger missed?" with evidence. Nothing is traded or alerted.
+# Runs after every close for that day, and on demand for any day in the last ~60 days (Actions → replay → Run workflow → date).
+on:
+  schedule:
+    - cron: '41 10 * * 1-5'           # 16:11 IST, after the close
+  workflow_dispatch:
+    inputs:
+      date:
+        description: Day to replay (YYYY-MM-DD). Empty = today.
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: replay
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Prepare
+        run: |
+          python publish.py prepare pub
+          echo "START=$(date +%s)" >> "$GITHUB_ENV"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Replay
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          DATE_IN: ${{ inputs.date }}
+        run: python replay.py --date "$DATE_IN" --out pub/data
+      - name: Publish
+        run: python publish.py push pub "$START" "replay"

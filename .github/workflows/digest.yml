@@ -7,12 +7,13 @@ on:
   schedule:
     - cron: '15 3 * * 1-5'            # 08:45 IST
     - cron: '15 10 * * 1-5'           # 15:45 IST
+    - cron: '44 4 * * 6'              # Saturday 10:14 IST: the scanner week (item 41)
   workflow_dispatch:
     inputs:
       mode:
         description: Which digest
         type: choice
-        options: [morning, evening]
+        options: [morning, evening, weekly]
         default: morning
       force:
         description: Send even on a holiday or weekend
@@ -52,7 +53,8 @@ jobs:
           mode="$MODE_IN"
           if [ -z "$mode" ]; then
             hour=$(TZ=Asia/Kolkata date +%H)
-            if [ "$hour" -lt 12 ]; then mode=morning; else mode=evening; fi
+            dow=$(TZ=Asia/Kolkata date +%u)
+            if [ "$dow" = "6" ]; then mode=weekly; elif [ "$hour" -lt 12 ]; then mode=morning; else mode=evening; fi
           fi
           extra=""; if [ "$FORCE_IN" = "true" ]; then extra="--force"; fi
           python digest.py --mode "$mode" --dir pub/data $extra

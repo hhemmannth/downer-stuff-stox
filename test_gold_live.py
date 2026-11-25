@@ -158,4 +158,6 @@ check('no hidden futures fallback: even with the old GOLD_SYMBOL=GC=F variable s
 try: gold_feed.fetch_like(['GC=F'], '5d', '5m', get=stand_in(f5, f15)); refused = False
 except gold_feed.FeedError: refused = True
 check('fetch_like refuses GC=F outright', refused)
+ch = doc.get('chart') or {}
+check('gold.json carries the last 5-minute candles for the page chart (times, OHLC, 9 EMA of equal length, at most 150)', ch.get('tf') == '5m' and 0 < len(ch.get('candles', [])) <= 150 and len(ch['candles']) == len(ch['times']) == len(ch['ema']) and len(ch['candles'][0]) == 4, {k: (len(v) if isinstance(v, list) else v) for k, v in ch.items()})
 os.environ.pop('NTFY_TOPIC'); print('ALL PASSED' if not fails else f'{len(fails)} FAILED'); raise SystemExit(1 if fails else 0)
