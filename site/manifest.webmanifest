@@ -1,22 +1,30 @@
 {
  "name": "DownerStuff",
  "short_name": "DownerStuff",
- "description": "Rule-book scanner for swing, Nifty options and intraday trades",
+ "description": "Rule-book scanner and journal for swing, Nifty options, intraday and XAUUSD gold",
  "start_url": "./index.html",
  "scope": "./",
  "display": "standalone",
- "background_color": "#EDEFF8",
- "theme_color": "#2E39A9",
+ "background_color": "#020202",
+ "theme_color": "#020202",
  "icons": [
   {
    "src": "icon-192.png",
    "sizes": "192x192",
-   "type": "image/png"
+   "type": "image/png",
+   "purpose": "any"
   },
   {
    "src": "icon-512.png",
    "sizes": "512x512",
-   "type": "image/png"
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
   }
  ]
 }
