@@ -135,6 +135,28 @@ def _publish_record(pub, mine):
     except Exception as ex:
         print(f'publish record skipped: {ex}', file=sys.stderr); return None
 
+def _keep_good_json(pub, mine):
+    """Item 327 (25 Nov 2026): a data file of ours that is not valid JSON is never published. The copy already on the site (the last good
+    one) is put back and the file is dropped from `mine`, so the site keeps working; the problem is printed to the run log."""
+    bad = []
+    for f in sorted(mine):
+        if not (f.startswith('data/') and f.endswith('.json')): continue
+        p = os.path.join(pub, f)
+        if not os.path.exists(p): continue
+        try:
+            with open(p) as fh: txt = fh.read()
+        except Exception: continue
+        if not txt.strip(): bad.append(f); continue                    # an empty file: the writer died before it wrote anything
+        if txt.lstrip()[:1] not in '{[': continue                       # not something our code writes as JSON
+        try: json.loads(txt)
+        except Exception: bad.append(f)                                # cut off part way (a crash or a full disk)
+    for f in bad:
+        print(f'publish: {f} is not valid JSON; keeping the last good copy on the site', file=sys.stderr)
+        if sh(['git', 'checkout', 'HEAD', '--', f], pub, check=False).returncode != 0:
+            try: os.remove(os.path.join(pub, f))
+            except OSError: pass
+    return set(mine) - set(bad)
+
 def publish(pub, since, site_dir='site', message='update', tries=5):
     """Push everything in `pub`. Files we changed (and the site files) are ours; for any other file, the version already on the
     branch wins, because another run may have refreshed it while we were scanning. `since` is only used when there is no record
@@ -150,6 +172,7 @@ def publish(pub, since, site_dir='site', message='update', tries=5):
     if seen is None: mine = {f for f, m in local.items() if m >= since} | site
     else:
         cur = _blobs(pub, local); mine = {f for f in local if cur.get(f) != seen.get(f)} | site
+    mine = _keep_good_json(pub, mine)
     rec = _publish_record(pub, mine)
     if rec: mine = mine | {rec}
     r = None

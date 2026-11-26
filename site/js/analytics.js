@@ -52,7 +52,14 @@ const nNote = n => n < 20 ? `<span class="nnote" title="Small samples mislead">$
 const tk = t => t ? `<p class="tk">${t}</p>` : '';                                                                                                                               // item 288
 const holdDays = t => t.xd && t.d ? Math.round((new Date(t.xd) - new Date(t.d)) / 864e5) : null;
 const holdBucket = t => { const h = holdDays(t); return h == null ? null : h === 0 ? 'Same day' : h <= 3 ? '1–3 days' : h <= 10 ? '4–10 days' : h <= 30 ? '11–30 days' : 'Over 30 days'; };
-DIMS.push(['hold', 'Holding time', holdBucket]);                                                                                                                                  // item 223
+DIMS.push(['hold', 'Holding time', holdBucket]);
+DIMS.push(['mood', 'Mood before trading', t => { const d = ((App.journal.J().days || {})[t.d]) || {}; return d.mood ? 'Mood ' + d.mood + ' of 5' : null; }], ['energy', 'Energy before trading', t => { const d = ((App.journal.J().days || {})[t.d]) || {}; return d.energy ? 'Energy ' + d.energy + ' of 5' : null; }]);   // item 375
+/* item 381: what your own R results could do over the next 100 trades at your normal risk. A random resample, not a forecast. */
+function projCard(C, S) { const R = C.filter(t => t.r != null).map(t => t.r), P = App.journal.projection && App.journal.projection(R, S.riskN || .005);
+  if (!P) return `<div class="card" style="margin:14px 0"><div class="hd"><h2>Drawdown and risk of ruin</h2></div><div class="bd"><p class="help">Needs at least 10 closed trades with a stop, to resample your own R results.</p></div></div>`;
+  return `<div class="card" style="margin:14px 0"><div class="hd"><h2>Drawdown and risk of ruin</h2><span class="cap">${P.runs} random reshuffles of your ${R.length} R results, ${P.n} trades each, at ${pct(S.riskN || .005, 2)} risk</span></div><div class="bd">
+    <div class="kpis">${[['Typical worst drawdown', pct(P.dd50, 1), 'half the runs were worse'], ['Bad-case drawdown', pct(P.dd95, 1), '1 run in 20 was worse', P.dd95 > .2 ? 'bad' : ''], ['Chance of a 20% drawdown', pct(P.p20, 0), '', P.p20 > .1 ? 'bad' : ''], ['Chance of losing half', pct(P.ruin, 1), '', P.ruin > .01 ? 'bad' : 'good'], ['Typical account after', ((P.med - 1) * 100).toFixed(1) + '%', '', cls(P.med - 1)], ['Bad-case account after', ((P.bad - 1) * 100).toFixed(1) + '%', '1 run in 20', cls(P.bad - 1)]].map(k => App.ui.kpi(...k)).join('')}</div>
+    <p class="help" style="margin-top:8px">This only reshuffles results you already had. If your edge changes, these numbers change. Nothing here changes your risk settings.</p></div></div>`; }                                                                                                                                  // item 223
 const ruleSkipped = (t, re) => !!(t.chk && Array.isArray(t.chk.skipped) && t.chk.skipped.some(r => re.test(r)));
 const cmp = (C, f, labA, labB) => { const a = C.filter(f), b = C.filter(t => !f(t)), s = x => ({ n: x.length, win: x.length ? x.filter(t => t.res === 'Win').length / x.length : null, R: avg(x.filter(t => t.r != null).map(t => t.r)), net: x.reduce((q, t) => q + t.net, 0) });
   return { a: Object.assign(s(a), { l: labA }), b: Object.assign(s(b), { l: labB }) }; };
@@ -89,6 +96,7 @@ App.pages.analytics = () => {
   if (u.tab === 'perf') {
     const ins = A.insights(st, C, S);
     h += lever(C, st, S);
+    h += projCard(C, S);
     h += `<div class="grid g-main" style="margin:14px 0"><div class="card"><div class="hd"><h2>Equity curve</h2><span class="cap">with the drawdown shaded below</span><span class="sp"></span>${nNote(st.n)}</div><div class="bd">${tk(`Net ${inrS(st.net)} over ${st.n} closed trades; the deepest drawdown was ${inr(st.dd)}${st.ddP != null ? ` (${pct(st.ddP, 1)} of capital)` : ''}.`)}<div id="chEq" data-w></div></div></div>
       <div class="card"><div class="hd"><h2>Insights</h2></div><div class="bd"><ul class="ins">${ins.map(([k, t]) => `<li class="${k}"><i></i><span>${t}</span></li>`).join('')}</ul></div></div></div>`;
     h += `<div class="grid g2" style="margin-bottom:14px"><div class="card"><div class="hd"><h2>R curve</h2><span class="cap">skill without position size</span></div><div class="bd">${tk(`${rr(totR, 1)} in total, ${rr(st.expR)} per trade on average.`)}<div id="chR" data-w></div></div></div>

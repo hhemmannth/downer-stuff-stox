@@ -44,23 +44,24 @@ def serve(d):
     s = socket.socket(); s.bind(('127.0.0.1', 0)); port = s.getsockname()[1]; s.close()
     p = subprocess.Popen([sys.executable, '-m', 'http.server', str(port), '-d', d, '--bind', '127.0.0.1'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); time.sleep(.8); return p, port
 
-PAGES = ['dashboard', 'premarket', 'swing', 'options', 'intraday', 'gold', 'journal', 'analytics', 'review', 'backtest', 'market', 'news', 'playbook', 'health', 'settings', 'design', 'stock?sym=AAA', 'trade?s=swing&id=AAA%7Clong', 'yearly']
+PAGES = ['dashboard', 'premarket', 'swing', 'options', 'intraday', 'gold', 'journal', 'analytics', 'review', 'backtest', 'market', 'news', 'playbook', 'health', 'settings', 'design', 'stock?sym=AAA', 'trade?s=swing&id=AAA%7Clong', 'yearly', 'help', 'glossary', 'privacy', 'launch', 'monthly']
 d = site_with_data(); srv, port = serve(d)
 seed = "if(!localStorage.getItem('seeded')){localStorage.setItem('tji_journals_v1',%s);localStorage.setItem('tji_last_v1','j1');localStorage.setItem('ds_tour_done','true');localStorage.setItem('ds_seen_ver','999');localStorage.setItem('seeded','1');}" % json.dumps(json.dumps(journal()))
 try:
     with sync_playwright() as p:
         try: b = p.chromium.launch()
         except Exception as e: print(f'SKIP test_ui_pages: Chromium is not installed ({str(e)[:80]})'); print('\nALL PASSED'); sys.exit(0)
-        for vw, label in (((1400, 1000), 'desktop'), ((390, 844), 'phone')):
+        for vw, label in (((1400, 1000), 'desktop'), ((390, 844), 'phone'), ((320, 640), 'small phone'), ((1400, 1000), 'desktop dark'), ((390, 844), 'phone dark')):      # both themes (item 459)
             ctx = b.new_context(viewport={'width': vw[0], 'height': vw[1]}); pg = ctx.new_page(); errs = []
             pg.on('console', lambda m: errs.append(m.text) if m.type == 'error' else None); pg.on('pageerror', lambda e: errs.append('PAGEERROR ' + str(e)))
             pg.route('**/cdn.jsdelivr.net/**', lambda r: r.fulfill(status=200, content_type='application/javascript', body=STUB)); pg.route('**/fonts.googleapis.com/**', lambda r: r.fulfill(status=200, body=''))
-            pg.add_init_script(seed)
+            pg.add_init_script(seed); pg.add_init_script("localStorage.setItem('tji_ui_v1', JSON.stringify({theme: '%s'}))" % ('dark' if 'dark' in label else 'light'))
             for r in PAGES:
                 pg.goto(f'http://127.0.0.1:{port}/index.html#/{r}'); pg.wait_for_timeout(1200)
                 body = pg.inner_text('#page')
                 check(f'{label}: {r} renders without a page error', 'This page hit an error' not in body, body[:160])
-                if label == 'phone': check(f'phone: {r} fits the screen width', pg.evaluate('document.documentElement.scrollWidth') <= vw[0] + 2, pg.evaluate('document.documentElement.scrollWidth'))
+                if 'dark' in label and r == PAGES[0]: check(f'{label}: the dark theme is applied', pg.evaluate("document.documentElement.getAttribute('data-theme')") == 'dark')
+                if not label.startswith('desktop'): check(f'{label}: {r} fits the screen width', pg.evaluate('document.documentElement.scrollWidth') <= vw[0] + 2, pg.evaluate('document.documentElement.scrollWidth'))
             real = sorted(set(e for e in errs if 'Failed to load resource' not in e and 'favicon' not in e))
             check(f'{label}: no console errors on any page', not real, real[:5]); ctx.close()
         b.close()

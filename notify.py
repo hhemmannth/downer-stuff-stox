@@ -80,7 +80,7 @@ def urgent(title, body=''):
     words = [x.strip().lower() for x in os.environ.get('NOTIFY_QUIET_ALLOW', 'stop,exit,target,triggered,closed').split(',') if x.strip()]
     t = f'{title} {body}'.lower(); return any(w in t for w in words)
 
-def post(base, topic, title, body, tags, click, photo=None, buttons=None):
+def _post_raw(base, topic, title, body, tags, click, photo=None, buttons=None):
     """Send to every configured channel (ntfy and/or Telegram). Fails only if every channel failed."""
     if quiet_now() and not urgent(title, body):
         print(f'  quiet hours: held back "{title}"', file=sys.stderr); return []
@@ -96,6 +96,24 @@ def post(base, topic, title, body, tags, click, photo=None, buttons=None):
     if not ok: raise RuntimeError('; '.join(errs) or 'no channel configured')
     if errs: print('  ' + '; '.join(errs), file=sys.stderr)
     return [c for c, on in (('ntfy', bool(topic)), ('Telegram', telegram_ready())) if on and not any(e.startswith(c.lower()) for e in errs)]
+
+LOG = []                                                             # items 479-486: every send attempt of this run, for data/health/alerts_log.json
+def post(base, topic, title, body, tags, click, photo=None, buttons=None):
+    """_post_raw plus a log line (time, title, channels, ok). The log never holds the topic, a token or a chat id."""
+    at = ist_now().strftime('%Y-%m-%dT%H:%M:%S+05:30')
+    try: sent = _post_raw(base, topic, title, body, tags, click, photo, buttons)
+    except Exception as ex: LOG.append(dict(at=at, title=title[:120], ok=False, channels=[], error=str(ex)[:160])); raise
+    LOG.append(dict(at=at, title=title[:120], ok=True, channels=sent, held=not sent)); return sent
+
+def write_log(data_dir, held=0, keep=300):
+    """Merge this run's sends into data/health/alerts_log.json (System health shows it). Best effort: never stops the alerts."""
+    try:
+        p = os.path.join(data_dir, 'health', 'alerts_log.json'); os.makedirs(os.path.dirname(p), exist_ok=True)
+        try: old = json.load(open(p))
+        except Exception: old = {}
+        today = ist_now().strftime('%Y-%m-%d'); h = (old.get('held_today') or 0) if old.get('day') == today else 0
+        json.dump(dict(day=today, held_today=h + held, items=((old.get('items') or []) + LOG)[-keep:]), open(p, 'w'), separators=(',', ':'))
+    except Exception as ex: print(f'  alert log not written: {ex}', file=sys.stderr)
 
 from urllib.parse import quote
 def deep(click, **q):
@@ -198,12 +216,14 @@ def main():
     state.setdefault('updated', {}); sent = ups = 0
     try: charts = json.load(open(os.path.join(a.dir, 'swing_charts.json'))).get('charts', {})
     except Exception: charts = {}
+    cap = int(os.environ.get('NTFY_MAX_PER_RUN', '12') or 12); extra = []     # item 481: at most `cap` trade alerts a run; the rest go in one summary
     for key, title in SECTIONS:
         try: data = json.load(open(os.path.join(a.dir, key + '.json')))
         except Exception: continue
         for s in data.get('setups', []):
             k = f"{key}|{s['symbol']}|{s['direction']}|{s['bos_date']}|{s['status'].split(' ')[0]}"
             if s['score'] < min_score or not s['status'].upper().startswith(statuses) or '(NOT TAKEN' in s['status'].upper() or k in state['sent']: continue      # a setup your daily rule did not take is not a trade to alert
+            if sent >= cap: extra.append((k, f"{s['symbol']} {s.get('label', s['direction'])} ({title})")); continue
             try:
                 link = deep(click, s=key, id=f"{s['symbol']}|{s['direction']}")
                 send_alert(base, topic, s, title, link, charts if key == 'swing' else None, (link + '&log=1') if link else None); state['sent'].append(k); sent += 1
@@ -211,6 +231,9 @@ def main():
         if updates == 'off' or (updates == 'swing' and key != 'swing') or state['updated'].get(key) == data.get('generated_at') or not fresh(data, datetime.datetime.now(datetime.timezone.utc)): continue
         try: post(base, topic, f'DownerStuffScreener: {title} scan updated', update_text(key, data), 'arrows_counterclockwise', click); state['updated'][key] = data['generated_at']; ups += 1
         except Exception as ex: print(f'  could not send update for {key}: {ex}', file=sys.stderr)
+    if extra:
+        try: post(base, topic, f'DownerStuffScreener: {len(extra)} more setups', 'Too many alerts in one run, so these are listed together:\n' + '\n'.join(x for _, x in extra[:30]), 'bell', click); state['sent'].extend(k for k, _ in extra)
+        except Exception as ex: print(f'  could not send the summary: {ex}', file=sys.stderr)
     evs = 0
     if os.environ.get('NTFY_EVENTS', 'on').strip().lower() != 'off':
         names = dict(SECTIONS); icon = {'t1': 'white_check_mark', 't2': 'white_check_mark', 'target': 'trophy', 'sl': 'x', 'trail': 'lock', 'expired': 'hourglass'}
@@ -224,8 +247,16 @@ def main():
                     what = sig.get('instrument') or f"{sig['symbol']} {sig.get('label', '')}"
                     try: post(base, topic, f"{title}: {what} {ev['kind'].upper()}", ev['text'], icon.get(ev['kind'], 'bell'), deep(click, s=key, sig=sig['id'])); state['sent'].append(k); evs += 1
                     except Exception as ex: print(f'  could not send event: {ex}', file=sys.stderr)
+    try:                                                                  # items 326, 495: a failing system check reaches the phone once a day
+        V = json.load(open(os.path.join(a.dir, 'health', 'validation.json'))); bad = [c for c in V.get('checks', []) if c.get('status') == 'fail']
+        key = 'health|' + '|'.join(sorted(c['check'] for c in bad))
+        if bad and os.environ.get('NTFY_HEALTH', 'on').strip().lower() != 'off' and key not in state['sent']:
+            post(base, topic, f'DownerStuffScreener: {len(bad)} system check{"s" if len(bad) > 1 else ""} failing', '\n'.join(f"• {c['check']}: {str(c.get('detail', ''))[:120]}" for c in bad[:5]) + '\nOpen System health before trading.', 'warning', (click.rstrip('/') + '/#/health') if click else click)
+            state['sent'].append(key)
+    except FileNotFoundError: pass
+    except Exception as ex: print(f'  health alert skipped: {ex}', file=sys.stderr)
     acts = action_alerts(base, topic, click, a.dir, state, today, min_score) if os.environ.get('NTFY_ACTIONS', 'on').strip().lower() != 'off' else 0
-    os.makedirs(os.path.dirname(a.state) or '.', exist_ok=True); json.dump(state, open(a.state, 'w')); print(f'alerts sent: {sent}, updates sent: {ups}, trade events sent: {evs}, action alerts sent: {acts}'); return 0
+    os.makedirs(os.path.dirname(a.state) or '.', exist_ok=True); json.dump(state, open(a.state, 'w')); write_log(a.dir, held=len(extra)); print(f'alerts sent: {sent}, updates sent: {ups}, trade events sent: {evs}, action alerts sent: {acts}'); return 0
 
 if __name__ == '__main__':
     sys.exit(main())
