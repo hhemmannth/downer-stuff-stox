@@ -87,7 +87,11 @@ jobs:
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
           ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
-        run: python strategy_scanner.py --mode ${{ steps.m.outputs.mode }} --out pub/data --state-dir .cache
+        # item 487: if the scan crashes (a data source timing out, say), wait a minute and try once more before giving up
+        run: |
+          python strategy_scanner.py --mode ${{ steps.m.outputs.mode }} --out pub/data --state-dir .cache || {
+            echo "::warning::scan failed, retrying once in 60 seconds"; sleep 60
+            python strategy_scanner.py --mode ${{ steps.m.outputs.mode }} --out pub/data --state-dir .cache; }
 
       - name: Push alerts to the phone
         env:
