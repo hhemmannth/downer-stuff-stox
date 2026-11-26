@@ -26,5 +26,23 @@
    "type": "image/png",
    "purpose": "maskable"
   }
+ ],
+ "shortcuts": [
+  {
+   "name": "Swing",
+   "url": "index.html#/swing"
+  },
+  {
+   "name": "New trade",
+   "url": "index.html#/journal"
+  },
+  {
+   "name": "Options",
+   "url": "index.html#/options"
+  },
+  {
+   "name": "Pre-market",
+   "url": "index.html#/premarket"
+  }
  ]
 }
