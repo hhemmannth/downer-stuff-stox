@@ -35,7 +35,8 @@ App.charts.candles = function (d, o = {}) {
   const PH = o.H || (land ? Math.max(170, Math.min(260, innerHeight * .52)) : narrow ? 240 : 310);
   App.charts._grp = App.charts._grp || {}; const N = d.candles.length, v0 = App.charts._view[id] || (o.zoomGroup && App.charts._grp[o.zoomGroup] ? { bars: App.charts._grp[o.zoomGroup] } : {}), defBars = o.bars || (narrow ? 60 : 90);
   const bars = Math.max(Math.min(20, N), Math.min(N, v0.bars || defBars)), end = Math.max(bars, Math.min(N, v0.end == null ? N : v0.end)), start = end - bars;
-  const C = d.candles.slice(start, end), off = start, n = C.length, Vall = d.volume || null, V = Vall ? Vall.slice(start, end) : null, E = d.ema ? d.ema.slice(start, end) : null, T = (d.times || []).slice(start, end);
+  const HA = P.style === 'heikin' ? (() => { const o2 = []; d.candles.forEach((c, i) => { const cl = (c[0] + c[1] + c[2] + c[3]) / 4, op = i ? (o2[i - 1][0] + o2[i - 1][3]) / 2 : (c[0] + c[3]) / 2; o2.push([op, Math.max(c[1], op, cl), Math.min(c[2], op, cl), cl]); }); return o2; })() : null;
+  const C = (HA || d.candles).slice(start, end), off = start, n = C.length, Vall = d.volume || null, V = Vall ? Vall.slice(start, end) : null, E = d.ema ? d.ema.slice(start, end) : null, T = (d.times || []).slice(start, end);
   const VH = (V || o.noVolNote) && o.volume !== false ? 44 : 0, OVH = N > bars ? 18 : 0, H = PT + PH + (VH ? VH + 12 : 0) + 22 + OVH;
   let levels = showLv ? (o.levels || []).filter(l => isNum(l.p)) : [], zones = showLv ? (o.zones || []).filter(z => isNum(z.lo) && isNum(z.hi)) : [];
   if (clean) { levels = levels.filter(l => (l.k || 2) >= 2 || /^(✓ )?(SL|Stop now|My )/.test(l.label || '')); zones = zones.filter(z => (z.k || 2) >= 2); }
@@ -67,6 +68,7 @@ App.charts.candles = function (d, o = {}) {
   /* candles: hollow, filled or bars (153), thicker on phones (154) */
   const wk = narrow ? 1.2 : 1;
   for (let i = 0; i < n; i++) { const [O, Hh, L, Cc] = C[i], up = Cc >= O, x = X(i);
+    if (P.style === 'line') { if (i) g.push(`<line x1="${X(i - 1)}" x2="${x}" y1="${Y(C[i - 1][3])}" y2="${Y(Cc)}" stroke="var(--ink)" stroke-width="1.6"/>`); continue; }
     if (P.style === 'bars') g.push(`<path d="M${x} ${Y(Hh)}V${Y(L)}M${x - bw / 2} ${Y(O)}H${x}M${x} ${Y(Cc)}H${x + bw / 2}" stroke="${up ? 'var(--ink)' : 'var(--ink-3)'}" stroke-width="${wk + .2}"/>`);
     else g.push(`<line x1="${x}" x2="${x}" y1="${Y(Hh)}" y2="${Y(L)}" stroke="var(--ink)" stroke-width="${wk}"/><rect x="${x - bw / 2}" y="${Y(Math.max(O, Cc))}" width="${bw}" height="${Math.max(1, Math.abs(Y(O) - Y(Cc)))}" fill="${up ? (P.style === 'filled' ? 'var(--good)' : 'var(--bg)') : (P.style === 'filled' ? 'var(--bad)' : 'var(--ink)')}" stroke="${P.style === 'filled' ? (up ? 'var(--good)' : 'var(--bad)') : 'var(--ink)'}" stroke-width="1"/>`); }
   /* 9 EMA: changes tone when price closes below it (173), value and slope in the label column (121, 171) */
@@ -96,6 +98,12 @@ App.charts.candles = function (d, o = {}) {
     const aL = A[n - 1] * rule; if (aL && aL < vmax) { const y = vt + VH - aL / vmax * VH; g.push(`<line x1="${PL}" x2="${PL + PW}" y1="${y}" y2="${y}" stroke="var(--ink-3)" stroke-dasharray="3 3"/><text x="${PL + PW + 6}" y="${y + 4}" font-size="10" fill="var(--ink-3)">${rule}× avg vol</text>`); }
     if (tIdx >= 0 && tIdx < n && A[tIdx]) { const r = V[tIdx] / A[tIdx]; g.push(`<text x="${X(tIdx)}" y="${vt - 2}" font-size="10.5" font-weight="700" text-anchor="middle" fill="${r >= rule ? 'var(--good)' : 'var(--warn)'}">${r.toFixed(1)}×</text>`); } }
   else if (VH && o.noVolNote) g.push(`<text x="${PL + 4}" y="${vt + VH / 2 + 4}" font-size="11" fill="var(--ink-3)">${esc(o.noVolNote)}</text>`);
+  if (V && VH && !clean) { const avgAt = i => { const a = Vall.slice(Math.max(0, i + off - 20), i + off).filter(isNum); return a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0; }; V.forEach((v, i) => { const a = avgAt(i); if (a && v >= (o.volRule || 1.5) * a) g.push(`<circle cx="${X(i)}" cy="${Y(C[i][1]) - 5}" r="1.8" fill="var(--sun)" opacity=".85"><title>Volume ${(v / a).toFixed(1)}× its 20-candle average</title></circle>`); }); }      // 1.5x volume candles (370)
+  /* your drawings (362) */
+  (o.drawings || []).forEach(dr => { const i1 = T.indexOf(dr.t1), i2 = T.indexOf(dr.t2); if (i1 < 0 && i2 < 0) return; const x1 = i1 >= 0 ? X(i1) : (T.length && dr.t1 < T[0] ? PL : PL + PW), x2 = i2 >= 0 ? X(i2) : PL + PW;
+    if (dr.type === 'box') g.push(`<rect x="${Math.min(x1, x2)}" y="${Y(Math.max(dr.p1, dr.p2))}" width="${Math.abs(x2 - x1)}" height="${Math.abs(Y(dr.p1) - Y(dr.p2))}" fill="var(--accent, var(--brand))" opacity=".08" stroke="var(--accent, var(--brand))" stroke-opacity=".6"/>`);
+    else g.push(`<line x1="${x1}" y1="${Y(dr.p1)}" x2="${x2}" y2="${Y(dr.p2)}" stroke="var(--accent, var(--brand))" stroke-width="1.4"/>`); });
+  /* score badges (367) */
   /* news and results dates on the time axis (170) */
   (o.events || []).forEach(ev => { let i = T.findIndex(t => String(t).startsWith(ev.t)); if (i < 0) return; const x = X(i), y = PT + PH + (VH ? VH + 12 : 0) + 2; g.push(`<path d="M${x - 4} ${y + 7}L${x} ${y}L${x + 4} ${y + 7}Z" fill="${ev.c ? cv(ev.c) : 'var(--sun)'}"><title>${esc(ev.label)}</title></path>`); });
   /* labels: never overlap; a leader line shows where a moved label belongs (8, 116) */
@@ -107,6 +115,7 @@ App.charts.candles = function (d, o = {}) {
   const top = [`<text x="${PL + 2}" y="12" font-size="10.5" fill="var(--ink-3)">${esc((d.times || [])[N - 1] ? (narrow ? 'Last ' : 'Last candle ') + (d.times || [])[N - 1] : '')}${o.stale ? ' · data late' : ''}</text>`];
   if (o.corner && !narrow) top.push(`<text x="${PL + PW}" y="12" font-size="10.5" text-anchor="end" fill="var(--ink-3)">${esc(o.corner)}</text>`);
   (o.ribbons || []).forEach((r, k) => top.push(`<rect x="${PL}" y="${PT + k * 4}" width="${PW}" height="3" fill="${cv(r.c)}" opacity=".5"><title>${esc(r.t)}</title></rect>`));
+  if (o.badges && o.badges.length && !narrow) top.push(`<text x="${PL + 4}" y="${PT + 13}" font-size="10" fill="var(--ink-3)">${esc(o.badges.join('  ·  '))}</text>`);
   if (o.block) top.push(`<text x="${PL + 4}" y="${PT + PH - 6}" font-size="10.5" font-weight="650" fill="var(--warn)">${esc(o.block)}</text>`);
   /* overview strip (160) */
   let ov = ''; if (OVH) { const all = d.candles.map(c => c[3]), alo = Math.min(...all), ahi = Math.max(...all), oy = H - OVH + 2, oh = OVH - 4, ox = i => PL + i / (N - 1) * PW, oyv = v => oy + (ahi - v) / ((ahi - alo) || 1) * oh;
@@ -117,9 +126,9 @@ App.charts.candles = function (d, o = {}) {
   const tb = o.toolbar === false ? '' : `<div class="ch-tb" role="toolbar" aria-label="Chart options">
     <button type="button" data-ch="mode" aria-pressed="${!clean}" title="Clean shows only the key levels">${clean ? 'Clean' : 'Full'}</button>
     <button type="button" data-ch="levels" aria-pressed="${!showLv}">${showLv ? 'Hide levels' : 'Show levels'}</button>
-    <button type="button" data-ch="style">${P.style === 'hollow' ? 'Hollow' : P.style === 'filled' ? 'Filled' : 'Bars'}</button>
+    <button type="button" data-ch="style" title="Candle style">${{ hollow: 'Hollow', filled: 'Filled', bars: 'Bars', line: 'Line', heikin: 'Heikin-Ashi' }[P.style] || 'Hollow'}</button>
     ${end < N || bars < N ? `<button type="button" data-ch="fit">Fit</button>` : ''}${end < N ? `<button type="button" data-ch="now">Jump to now</button>` : ''}
-    <span class="sp"></span><button type="button" data-ch="zout" aria-label="Zoom out" title="Zoom out (or Ctrl + scroll, or pinch)">−</button><button type="button" data-ch="zin" aria-label="Zoom in" title="Zoom in">+</button><button type="button" data-ch="fs" aria-label="Full screen" title="Full screen">⤢</button><button type="button" data-ch="png" aria-label="Save image" title="Save image">⤓</button></div>`;
+    <span class="sp"></span><button type="button" data-ch="zout" aria-label="Zoom out" title="Zoom out (or Ctrl + scroll, or pinch)">−</button><button type="button" data-ch="zin" aria-label="Zoom in" title="Zoom in">+</button><button type="button" data-ch="measure" aria-pressed="${(App.charts._mode || {})[id] === 'measure'}" title="Measure: drag between two prices">Measure</button>${o.onDraw ? `<button type="button" data-ch="draw" aria-pressed="${(App.charts._mode || {})[id] === 'draw'}" title="Draw a line (or hold Shift for a box); saved with your journal">Draw</button>${(o.drawings || []).length ? '<button type="button" data-ch="undraw" title="Remove your last drawing">Undo drawing</button>' : ''}` : ''}<button type="button" data-ch="replay" title="Replay the chart candle by candle">${App.charts._play && App.charts._play[id] ? 'Stop replay' : 'Replay'}</button><button type="button" data-ch="csv" title="Download the candles as CSV">CSV</button><button type="button" data-ch="fs" aria-label="Full screen" title="Full screen">⤢</button><button type="button" data-ch="png" aria-label="Save image" title="Save image">⤓</button></div>`;
   return `<div class="chw" data-chw="${esc(id)}">${tb}<div class="ch-box"><svg class="chart${fresh && !(App.ux && App.ux.reduced && App.ux.reduced()) ? ' draw-in' : ''}" data-chart="${esc(id)}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.label || 'Price chart')}">${top.join('')}${g.join('')}${lt}${xt}${ov}<g class="xh"></g></svg><div class="ch-read" aria-live="polite"></div><div class="ch-pop" hidden></div></div></div>`;
 };
 
@@ -138,14 +147,21 @@ App.charts.bind = id => {
     read.innerHTML = `<b>${esc(G.T[i] || '')}</b> O ${nice(c[0])} H ${nice(c[1])} L ${nice(c[2])} C <b>${nice(c[3])}</b>${G.V && isNum(G.V[i]) ? ' · Vol ' + Math.round(G.V[i]).toLocaleString('en-IN') : ''}${G.E && isNum(G.E[i]) ? ' · 9 EMA ' + nice(G.E[i]) : ''} · <span class="muted">cursor ${nice(price(y))}</span>`; };
   svg.addEventListener('wheel', e => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); const f = e.deltaY > 0 ? 1.15 : 1 / 1.15, x = sx(e), anchor = (x - G.PL) / G.PW, nb = G.bars * f; setView(nb, G.start + anchor * G.bars + (1 - anchor) * Math.max(Math.min(20, G.N), Math.min(G.N, nb))); }, { passive: false });
   const pts = new Map(); let drag = null, pinch = null, lp = null, lastTap = 0;
-  svg.addEventListener('pointerdown', e => { svg.setPointerCapture(e.pointerId); pts.set(e.pointerId, e);
+  App.charts._mode = App.charts._mode || {}; const mode = () => App.charts._mode[id]; let mz = null;
+  const tAt = x => G.T[idx(x)], drawMz = (a, b, end) => { const p1 = price(a.y), p2 = price(b.y), dp = p2 - p1, ref = R.o.entryRef, rv = ref && isNum(ref.entry) && isNum(ref.sl) && ref.entry !== ref.sl ? dp / Math.abs(ref.entry - ref.sl) : null, n = Math.abs(idx(b.x) - idx(a.x));
+    xh.innerHTML = mode() === 'draw' ? (e2 => e2.shiftKey ? `<rect x="${Math.min(a.x, b.x)}" y="${Math.min(a.y, b.y)}" width="${Math.abs(b.x - a.x)}" height="${Math.abs(b.y - a.y)}" fill="var(--accent, var(--brand))" opacity=".1" stroke="var(--accent, var(--brand))"/>` : `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--accent, var(--brand))" stroke-width="1.4"/>`)(end || {})
+      : `<rect x="${Math.min(a.x, b.x)}" y="${Math.min(a.y, b.y)}" width="${Math.abs(b.x - a.x)}" height="${Math.abs(b.y - a.y)}" fill="${dp >= 0 ? 'var(--good)' : 'var(--bad)'}" opacity=".1"/><text x="${b.x + 4}" y="${b.y - 4}" font-size="11" font-weight="700" fill="var(--ink)">${dp >= 0 ? '+' : '−'}${nice(Math.abs(dp))} · ${(dp / p1 * 100).toFixed(2)}%${rv != null ? ' · ' + (rv >= 0 ? '+' : '−') + Math.abs(rv).toFixed(2) + 'R' : ''} · ${n} bars</text>`; };
+  svg.addEventListener('pointerdown', e => { if (mode()) { e.preventDefault(); svg.setPointerCapture(e.pointerId); mz = { x: sx(e), y: sy(e), t: tAt(sx(e)) }; return; } });
+  svg.addEventListener('pointermove', e => { if (mode() && mz) { drawMz(mz, { x: sx(e), y: sy(e) }, e); } });
+  svg.addEventListener('pointerup', e => { if (!mode() || !mz) return; const b = { x: sx(e), y: sy(e) }; if (mode() === 'draw' && R.o.onDraw && Math.hypot(b.x - mz.x, b.y - mz.y) > 6) { R.o.onDraw({ type: e.shiftKey ? 'box' : 'line', t1: mz.t, p1: +price(mz.y).toFixed(2), t2: tAt(b.x), p2: +price(b.y).toFixed(2) }); App.charts._mode[id] = null; later(); } mz = null; });
+  svg.addEventListener('pointerdown', e => { if (mode()) return; svg.setPointerCapture(e.pointerId); pts.set(e.pointerId, e);
     if (pts.size === 1) { drag = { x: e.clientX, end: G.end, moved: false }; clearTimeout(lp); const ex = e; lp = setTimeout(() => { if (drag && !drag.moved) { drag = null; menu(ex); } }, 550); }
     if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), bars: G.bars, end: G.end }; drag = null; clearTimeout(lp); } });
-  svg.addEventListener('pointermove', e => { if (pts.has(e.pointerId)) pts.set(e.pointerId, e);
+  svg.addEventListener('pointermove', e => { if (mode()) return; if (pts.has(e.pointerId)) pts.set(e.pointerId, e);
     if (pinch && pts.size === 2) { const [a, b] = [...pts.values()], d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); if (d > 10) setView(pinch.bars * pinch.d / d, pinch.end); return; }
-    if (drag && pts.size === 1) { const dx = e.clientX - drag.x, per = svg.getBoundingClientRect().width * (G.PW / G.W) / G.n; if (Math.abs(dx) > 6) { drag.moved = true; clearTimeout(lp); } if (drag.moved) { setView(G.bars, drag.end - dx / per); return; } }
+    if (drag && pts.size === 1) { wrap.classList.toggle('dragging', !!drag.moved); const dx = e.clientX - drag.x, per = svg.getBoundingClientRect().width * (G.PW / G.W) / G.n; if (Math.abs(dx) > 6) { drag.moved = true; clearTimeout(lp); } if (drag.moved) { setView(G.bars, drag.end - dx / per); return; } }
     showX(e); });
-  const up = e => { pts.delete(e.pointerId); clearTimeout(lp); if (!pts.size) { if (drag && !drag.moved && e.type === 'pointerup') { const now = Date.now(); if (now - lastTap < 320) { delete App.charts._view[id]; later(); } lastTap = now; showX(e); } drag = null; pinch = null; } };
+  const up = e => { wrap.classList.remove('dragging'); pts.delete(e.pointerId); clearTimeout(lp); if (!pts.size) { if (drag && !drag.moved && e.type === 'pointerup') { const now = Date.now(); if (now - lastTap < 320) { delete App.charts._view[id]; later(); } lastTap = now; showX(e); } drag = null; pinch = null; } };
   svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up); svg.addEventListener('pointerleave', e => { if (!pts.size) { xh.innerHTML = ''; read.textContent = ''; } });
   svg.addEventListener('dblclick', () => { delete App.charts._view[id]; later(); });
   svg.style.touchAction = 'pan-y';
@@ -161,9 +177,13 @@ App.charts.bind = id => {
   wrap.querySelectorAll('[data-ch]').forEach(b => b.onclick = () => { const k = b.dataset.ch, P = CPREF();
     if (k === 'mode') { App.charts.setPref('mode', P.mode === 'full' ? 'clean' : 'full'); store.set('tji_keylv', P.mode === 'full'); later(); }
     if (k === 'levels') { App.charts.setPref('levels', P.levels === false); later(); }
-    if (k === 'style') { App.charts.setPref('style', { hollow: 'filled', filled: 'bars', bars: 'hollow' }[P.style] || 'hollow'); later(); }
+    if (k === 'style') { App.charts.setPref('style', { hollow: 'filled', filled: 'bars', bars: 'line', line: 'heikin', heikin: 'hollow' }[P.style] || 'hollow'); later(); }
     if (k === 'fit') { delete App.charts._view[id]; const v = V(); v.bars = G.N; v.end = G.N; later(); }
     if (k === 'now') { setView(G.bars, G.N); }
+    if (k === 'measure' || k === 'draw') { App.charts._mode[id] = App.charts._mode[id] === k ? null : k; later(); App.toast(App.charts._mode[id] ? (k === 'measure' ? 'Drag between two prices to measure' : 'Drag to draw a line; hold Shift for a box') : 'Back to normal'); }
+    if (k === 'undraw' && R.o.onUndraw) { R.o.onUndraw(); later(); }
+    if (k === 'replay') { App.charts._play = App.charts._play || {}; if (App.charts._play[id]) { clearInterval(App.charts._play[id]); App.charts._play[id] = null; later(); } else { let e2 = Math.max(Math.min(20, G.N), G.N - 60); const bars = Math.min(G.bars, e2); App.charts._play[id] = setInterval(() => { e2++; if (e2 > G.N || !document.querySelector(`[data-chw="${CSS.escape(id)}"]`)) { clearInterval(App.charts._play[id]); App.charts._play[id] = null; } const v = V(); v.bars = bars; v.end = Math.min(G.N, e2); App.charts.redraw(id); }, 380); } }
+    if (k === 'csv') { const d0 = R.d, rows = [['time', 'open', 'high', 'low', 'close', 'volume', 'ema9'].join(',')].concat(d0.candles.map((c, i) => [(d0.times || [])[i] || i, ...c, (d0.volume || [])[i] ?? '', (d0.ema || [])[i] ?? ''].join(','))); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' })); a.download = (R.o.label || 'chart').replace(/\W+/g, '-') + '.csv'; a.click(); App.toast('Candles saved as CSV'); }
     if (k === 'zin' || k === 'zout') { const nb = G.bars * (k === 'zin' ? .75 : 1.33); setView(nb, G.end); }
     if (k === 'fs') App.charts.full(id);
     if (k === 'png') App.charts.savePng(svg, (R.o.label || 'chart').replace(/\W+/g, '-'), R.o.frame); });

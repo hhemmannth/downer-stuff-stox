@@ -142,7 +142,7 @@ JR.openForm = function (id, prefill) {
 const conf0 = window.confirm; window.confirm = msg => conf0(msg === 'Delete this trade?' ? 'Delete this trade? It goes to the recycle bin for 30 days (Journal → Recycle bin), where you can restore it.' : msg);
 
 /* keep the scanner's planned entry with the trade so slippage can be measured once you edit the entry to your fill (item 229) */
-const fs0 = JR.fromScanner; JR.fromScanner = function (it, sig) { const o = fs0.call(JR, it, sig); if (!it.options_trade && isNum(it.entry)) o.plan_entry = sig && isNum(sig.entry) ? sig.entry : it.entry; return o; };
+const fs0 = JR.fromScanner; JR.fromScanner = function (it, sig) { const o = fs0.call(JR, it, sig); if (!it.options_trade && isNum(it.entry)) { o.plan_entry = sig && isNum(sig.entry) ? sig.entry : it.entry; o.plan_sl = it.sl; o.plan_tgt = it.t1; o.plan_grade = it.grade; } return o; };
 /* ---------- auto-fill from the scanner (item 45): grade, timeframe and the rules the scanner already ticked ---------- */
 const gate0 = JR.gate; JR.gate = function (o, done) { gate0.call(JR, o, done); const bg = [...document.querySelectorAll('.gate-bg')].pop(); if (!bg) return;
   const rules = JR.RULES[o.cat] || JR.RULES.Swing, ds = JR.dayStatus(), from = String(o.note || '').includes('DS:');

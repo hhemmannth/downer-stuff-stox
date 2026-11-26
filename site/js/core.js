@@ -17,7 +17,7 @@ const todayIST = () => istNow().toISOString().slice(0, 10);
 const hmIST = d => new Date(d).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' });
 const dateIST = d => new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' });
 const ago = d => { const m = Math.round((Date.now() - new Date(d)) / 6e4); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
-const store = { get(k, d) { try { const r = localStorage.getItem(k); return r == null ? d : JSON.parse(r); } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } } };
+const store = { get(k, d) { try { const r = localStorage.getItem(k); return r == null ? d : JSON.parse(r); } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { if (!window._dsStoreWarned && window.App && App.toast) { window._dsStoreWarned = 1; setTimeout(() => App.toast('This browser is not saving changes (storage full or blocked). Your journal still syncs to the cloud when signed in; free space or allow site data.', 9000), 50); } if (window.App) App._storeFail = String(e && e.name || e); return false; } } };
 App.toast = (msg, ms = 2600) => { let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); } t.textContent = msg; t.hidden = false; clearTimeout(t._t); t._t = setTimeout(() => t.hidden = true, ms); };
 
 /* ---------- icons ---------- */
@@ -49,9 +49,9 @@ const NAV = [
   ['Journal', [['journal', 'Trades', 'journal'], ['analytics', 'Analytics', 'analytics'], ['review', 'Weekly review', 'playbook']]],
   ['Research', [['backtest', 'Backtest lab', 'analytics']]],
   ['Context', [['market', 'Market', 'market'], ['news', 'News & events', 'news']]],
-  ['You', [['playbook', 'Playbook & rules', 'playbook'], ['health', 'System health', 'pulse'], ['settings', 'Settings', 'settings']]]];
+  ['You', [['playbook', 'Playbook & rules', 'playbook'], ['health', 'System health', 'pulse'], ['launch', 'Launch checklist', 'pulse'], ['help', 'Help', 'playbook'], ['settings', 'Settings', 'settings']]]];
 const TABS = [['dashboard', 'Today', 'home'], ['swing', 'Swing', 'swing'], ['options', 'Options', 'options'], ['journal', 'Journal', 'journal'], ['analytics', 'Stats', 'analytics']];
-const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade', backtest: 'Backtest lab', review: 'Weekly review', gold: 'XAUUSD Gold', premarket: 'Pre-market', stock: 'Stock', design: 'Design check', yearly: 'Year in review' };
+const TITLES = { dashboard: 'Today', swing: 'Swing scanner', options: 'Nifty options', intraday: 'Intraday', journal: 'Journal', analytics: 'Analytics', market: 'Market', news: 'News & events', playbook: 'Playbook & rules', health: 'System health', settings: 'Settings', trade: 'Trade', backtest: 'Backtest lab', review: 'Weekly review', gold: 'XAUUSD Gold', premarket: 'Pre-market', stock: 'Stock', design: 'Design check', yearly: 'Year in review', monthly: 'Monthly report', help: 'Help', glossary: 'Glossary', privacy: 'Privacy', launch: 'Launch checklist' };
 
 App.route = () => { const h = location.hash.replace(/^#\/?/, ''); const [p, q] = h.split('?'); return { page: p || 'dashboard', q: new URLSearchParams(q || '') }; };
 App.go = (page, q) => { location.hash = '#/' + page + (q ? '?' + new URLSearchParams(q).toString() : ''); };

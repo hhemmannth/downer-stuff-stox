@@ -111,6 +111,7 @@ JR.livePx = t => { try { return livePrice(t); } catch (e) { return { txt: '-', r
    Alerts are checked each time fresh data arrives while the app is open (a browser page cannot watch prices when it is closed). */
 /* Your daily rule (stated 18 Nov 2026): at most two trades a day, A+ only, every segment; and the options rule "stop after two losses". */
 JR.dayStatus = () => { const d = todayIST(), T = JR.enrich().filter(t => t.d === d), losses = T.filter(t => !t.open && isNum(t.pnl) && t.pnl < 0).length; return { n: T.length, losses, left: Math.max(0, 2 - T.length), blocked: T.length >= 2 || losses >= 2, why: T.length >= 2 ? 'two trades taken today' : losses >= 2 ? 'two losses today' : '' }; };
+JR.cloudUser = () => Cloud.userId;
 JR.lvx = () => { const J = JR.J(); J.lvx = J.lvx || { alerts: [], notes: [] }; J.lvx.alerts = J.lvx.alerts || []; J.lvx.notes = J.lvx.notes || []; return J.lvx; };
 JR.addAlert = (sym, p, last) => { const L = JR.lvx(); L.alerts.push({ id: 'a' + Date.now().toString(36), sym, p, dir: isNum(last) && last > p ? 'below' : 'above', at: new Date().toISOString() }); JR.touch(); JR.persist(); };
 JR.addNote = (sym, p, text) => { const L = JR.lvx(); L.notes.push({ id: 'n' + Date.now().toString(36), sym, p, text: String(text || '').slice(0, 200), at: new Date().toISOString() }); JR.touch(); JR.persist(); };
@@ -360,7 +361,7 @@ JR.deleteJournal = id => { if (E.list.filter(j => !j.demo).length <= 1 && !E.lis
 const U = () => App.ui.j || (App.ui.j = { period: 'all', cat: 'all', res: 'all', q: '', n: 60 });
 App.pages.journal = () => {
   const u = U(), J = JR.J(), all = JR.enrich(J), P = JR.period(all, u.period), S = J.set;
-  let T = P.filter(t => (u.cat === 'all' || t.cat === u.cat) && (u.res === 'all' || (u.res === 'open' ? t.open : u.res === 'brk' ? t.brkd : t.res === u.res)) && (!u.q || (t.inst + ' ' + t.setup + ' ' + t.note).toLowerCase().includes(u.q.toLowerCase())));
+  let T = P.filter(t => (u.cat === 'all' || t.cat === u.cat) && (u.res === 'all' || (u.res === 'open' ? t.open : u.res === 'brk' ? t.brkd : t.res === u.res)) && (!u.q || (t.inst + ' ' + t.setup + ' ' + t.note + ' ' + (t.tags || []).map(x => '#' + x).join(' ')).toLowerCase().includes(u.q.toLowerCase())));
   const C = T.filter(t => t.closed && t.net != null), net = C.reduce((a, t) => a + t.net, 0), wins = C.filter(t => t.res === 'Win'), losses = C.filter(t => t.res === 'Loss'), gw = wins.reduce((a, t) => a + t.net, 0), gl = -losses.reduce((a, t) => a + t.net, 0), Rs = C.filter(t => t.r != null);
   const open = all.filter(t => t.open);
   const jsel = `<select class="inp" style="width:auto" id="jSel" aria-label="Journal">${E.list.map(j => `<option value="${j.id}"${j.id === J.id ? ' selected' : ''}>${esc(j.name)}${j.demo ? ' (sample)' : ''}</option>`).join('')}</select>`;

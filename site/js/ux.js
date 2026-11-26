@@ -8,7 +8,7 @@ const UX_KEY = 'ds_ux_v1';
 const DEF = { preset: 'midnight', accent: 'mono', cb: false, calm: false, density: 'comfortable', text: 'm', priv: false, softRed: true, dimOff: true, collapse: {} };
 const U = App.ux = { get: () => Object.assign({}, DEF, store.get(UX_KEY, {}) || {}) };
 U.set = (k, v) => { const p = U.get(); p[k] = v; store.set(UX_KEY, p); U.apply(); };
-U.VERSION = 34;
+U.VERSION = 35;
 
 /* ---------- appearance (items 2, 26, 28, 51-56, 60, 79, 246) ---------- */
 U.lowPower = () => { const p = U.get(); return p.calm || (matchMedia('(pointer:coarse)').matches && (navigator.connection && navigator.connection.saveData)); };
@@ -91,7 +91,7 @@ App.render = () => {
 };
 
 /* ---------- back arrow on inner pages (item 299) ---------- */
-const INNER = { trade: 1, design: 1, stock: 1, yearly: 1, review: 0 };
+const INNER = { trade: 1, design: 1, stock: 1, yearly: 1, glossary: 1, privacy: 1, review: 0 };
 function backArrow(page) {
   const t = $('#ttl'); if (!t) return; let b = $('#backB');
   if (INNER[page]) { if (!b) { b = document.createElement('button'); b.id = 'backB'; b.type = 'button'; b.className = 'btn icon ghost'; b.setAttribute('aria-label', 'Back'); b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; b.onclick = () => history.length > 1 ? history.back() : App.go('dashboard'); t.parentElement.insertBefore(b, t); } }
@@ -145,7 +145,7 @@ U.openSearch = () => {
   const q = $('#gsQ'), L = $('#gsL'); let sel = 0, rows = [];
   const draw = () => { rows = U.search(q.value); L.innerHTML = rows.length ? rows.map((r, i) => `<li><a href="${r.href || '#'}" data-i="${i}" class="${i === sel ? 'on' : ''}"><small>${esc(r.kind)}</small><b>${esc(r.t)}</b>${r.s ? `<span class="muted">${esc(r.s)}</span>` : ''}</a></li>`).join('') : `<li class="muted">${q.value ? 'Nothing found.' : 'Type a symbol like GABRIEL, a trade or a page name.'}</li>`;
     $$('a[data-i]', L).forEach(a => a.onclick = e => { const r = rows[+a.dataset.i]; if (r.jid) { e.preventDefault(); close(); App.journal.openForm(r.jid); } else close(); }); };
-  q.oninput = () => { sel = 0; draw(); };
+  q.oninput = () => { sel = 0; draw(); }; draw();
   q.onkeydown = e => { if (e.key === 'Escape') close(); if (e.key === 'ArrowDown') { sel = Math.min(rows.length - 1, sel + 1); draw(); e.preventDefault(); } if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); draw(); e.preventDefault(); } if (e.key === 'Enter' && rows[sel]) { const a = $(`a[data-i="${sel}"]`, L); if (a) a.click(); if (rows[sel] && rows[sel].href) location.hash = rows[sel].href.slice(1); } };
   setTimeout(() => q.focus(), 30);
 };
@@ -153,6 +153,14 @@ addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key.toLower
 
 /* ---------- "What's new" after each update (item 300) ---------- */
 U.CHANGES = [
+  [35, '25 Nov 2026', [
+    'Works offline with the last data, tells you when a new version is ready, and remembers your filters, recent symbols and pinned watchlist.',
+    'Charts: measure tool, draw lines and boxes (saved with your journal), candle-by-candle replay, Heikin-Ashi and line styles, export the candles as CSV.',
+    'Journal: five review questions, tags you can search with #, mood and energy before trading, a no-rule-break streak, trade of the week, the scanner plan next to your own trade.',
+    'Monthly report page, goal progress bars, a capital tracker for deposits and withdrawals, and a drawdown and risk-of-ruin card from your own results (Analytics).',
+    'Screen lock with a PIN or Face ID, start in private mode, a change log across your devices, settings export to a new phone, and a feedback note for the next update (Settings).',
+    'System health: run all checks now, journal checks with a link to each trade, errors history, phone alerts sent, and a push when a system check fails.',
+    'Help, Glossary, Privacy and Launch checklist pages; keyboard shortcuts (press ?).']],
   [34, '25 Nov 2026', [
     'Appearance: theme presets, accent colour, colour-blind-safe mode, calm mode, text size, compact cards and a private mode that hides rupee amounts (Settings → Appearance).',
     'Search anything with the search button, Ctrl/Cmd+K or "/": symbols, past setups, your trades and pages.',
@@ -193,7 +201,7 @@ U.settingsCard = () => {
   const tog = (k, l, s) => `<label class="ux-tog"><input type="checkbox" data-uxt="${k}" ${p[k] ? 'checked' : ''}><span><b>${l}</b>${s ? `<small class="muted">${s}</small>` : ''}</span></label>`;
   return `<div class="card"><div class="hd"><h2>Appearance</h2><span class="cap">this device</span></div><div class="bd ux-set">
     <div class="ux-row"><span>Theme</span>${App.ui.seg('theme', [['auto', 'Match device'], ['light', 'Light'], ['dark', 'Dark']], (store.get('tji_ui_v1', {}) || {}).theme || 'auto')}</div>
-    <div class="ux-row"><span>Dark style</span>${seg('preset', [['midnight', 'Midnight'], ['graphite', 'Graphite']])}</div>
+    <div class="ux-row"><span>Dark style</span>${seg('preset', [['midnight', 'Midnight'], ['graphite', 'Graphite'], ['warm', 'Warm']])}</div>
     <div class="ux-row"><span>Accent</span><div class="ux-acc">${[['mono', 'Mono'], ['blue', 'Blue'], ['gold', 'Gold'], ['teal', 'Teal'], ['violet', 'Violet']].map(([v, t]) => `<button type="button" data-acc="${v}" aria-pressed="${p.accent === v}" aria-label="${t}" title="${t}" class="acc-${v}"></button>`).join('')}</div></div>
     <div class="ux-row"><span>Cards</span>${seg('density', [['comfortable', 'Comfortable'], ['compact', 'Compact']])}</div>
     <div class="ux-row"><span>Text size</span>${seg('text', [['m', 'Normal'], ['l', 'Large'], ['xl', 'Larger']])}</div>
