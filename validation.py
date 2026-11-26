@@ -187,6 +187,8 @@ def run(out_dir, now=None, health=None):
     if ci and 'ok' in ci and ci_age_h is not None and ci_age_h > 24: rep.add('Automated test suite (last local/CI run)', 'tests', 'not_tested', f'the last test result on this machine is {ci_age_h:.0f} h old: not counted')
     elif ci and 'ok' in ci: rep.add('Automated test suite (last local/CI run)', 'tests', 'pass' if ci['ok'] else 'fail', ci.get('headline', ''), None if ci['ok'] else 'HIGH')
     else: rep.add('Automated test suite (last local/CI run)', 'tests', 'not_tested', 'no test result available to this job: see the ci workflow on GitHub')
+    try: import checks as _ck; _ck.extra(rep, out_dir, now)                 # deeper checks (items 401-486); never stops the scan
+    except Exception as ex: rep.add('Deeper checks', 'checks', 'not_tested', f'could not run: {str(ex)[:80]}')
     summ = {k: sum(1 for c in rep.checks if c['status'] == k) for k in ('pass', 'fail', 'warn', 'not_tested', 'unavailable')}
     level = 'fail' if summ['fail'] else 'warn' if summ['warn'] else 'pass' if summ['pass'] else 'not_tested'
     return dict(generated_at=now.isoformat(timespec='seconds'), level=level, summary=summ, checks=rep.checks, errors=sorted(rep.errors, key=lambda e: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].index(e['severity'])))
@@ -194,7 +196,10 @@ def run(out_dir, now=None, health=None):
 def write(out_dir, now=None, health=None):
     doc = run(out_dir, now, health); d = os.path.join(out_dir, 'health'); os.makedirs(d, exist_ok=True); p = os.path.join(d, 'validation.json'); tmp = p + '.tmp'
     with open(tmp, 'w') as f: json.dump(doc, f, separators=(',', ':'), default=str)
-    os.replace(tmp, p); return doc
+    os.replace(tmp, p)
+    try: import checks as _ck; _ck.history(out_dir, doc)
+    except Exception as ex: print(f'checks history not written: {ex}')
+    return doc
 
 if __name__ == '__main__':
     import sys

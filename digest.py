@@ -16,7 +16,8 @@ def _read(d, name):
 def load(d):
     return dict(swing=_read(d, 'swing'), options=_read(d, 'options'), intraday=_read(d, 'intraday'), market=_read(d, 'market'), news=_read(d, 'news'),
                 led={k: _read(d, 'signals_' + k) for k in ('swing', 'options', 'intraday')},
-                gold={k: _read(d, 'signals_gold_' + k) for k in ('intraday', 'swing', 'positional')})
+                gold={k: _read(d, 'signals_gold_' + k) for k in ('intraday', 'swing', 'positional')},
+                health=_read(d, 'health/validation'), hist=_read(d, 'health/checks_history'))
 
 def _n(x, nd=0): return f'{x:,.{nd}f}' if isinstance(x, (int, float)) else '-'
 def _pct(x): return f'{x:+.2f}%' if isinstance(x, (int, float)) else ''
@@ -91,6 +92,14 @@ def _closed_today(led, today):
             if s.get('status') == 'CLOSED' and str(s.get('closed', ''))[:10] == today: out.append((k, s))
     return out
 
+def health_line(V):
+    """Item 495: one line on the system's own checks, so a problem reaches you even if you never open System health."""
+    if not V or not V.get('summary'): return None
+    s = V['summary']; bad = [c['check'] for c in V.get('checks', []) if c['status'] == 'fail']
+    if bad: return f"System checks: {s.get('fail', 0)} failing ({', '.join(bad[:3])}). Open System health before trading."
+    if s.get('warn'): return f"System checks: all passing, {s['warn']} to look at."
+    return f"System checks: all {s.get('pass', 0)} passing."
+
 def evening_text(D, now):
     today = now.strftime('%Y-%m-%d'); L = []; mk = market_line(D['market'])
     if mk: L.append('Close: ' + mk)
@@ -114,6 +123,8 @@ def evening_text(D, now):
     if sl: L += ['', 'Swing watch for tomorrow:'] + ['• ' + setup_line(s) for s in sl]
     ev = events(D['news'], 1, 2, impact=('high', 'medium'))
     if ev: L += ['', 'Tomorrow:'] + [ev_line(e) for e in ev[:4]]
+    hl = health_line(D.get('health'))
+    if hl: L += ['', hl]
     L += ['', 'Log your own trades and notes in the journal tonight, while you remember why.']
     return f"Day recap · {now:%a %d %b}", '\n'.join(L).strip(), 'city_sunset'
 
@@ -128,6 +139,11 @@ def weekly_text(D, now):
         L.append(f"{k.capitalize()}: {len(trig)} triggered, {len(clo)} closed ({len(won)} won, {sum(s.get('r_final') or 0 for s in clo):+.1f}R), {len(gone)} left the list, {len(near)} near misses")
     g = sum(1 for Lg in (D.get('gold') or {}).values() for d in (Lg or {}).get('dropped', []) if 'low volume' in str(d.get('status', '')) and str(d.get('first_seen', ''))[:10] >= since)
     if g: L.append(f"Gold: {g} A+ triggers withheld because spot has no volume (your decision is pending on the Gold page)")
+    H = [x for x in ((D.get('hist') or {}).get('items') or []) if str(x.get('at', ''))[:10] >= since]           # item 496: weekly error report
+    if H:
+        from collections import Counter
+        cnt = Counter(c for x in H for c in x.get('failing') or []); bad = sum(1 for x in H if x.get('level') == 'fail')
+        L += ['', f"System checks this week: {len(H)} runs, {bad} with a failure" + (': ' + ', '.join(f'{k} ({v})' for k, v in cnt.most_common(3)) if cnt else '')]
     L += ['', 'Tracked results are the scanner following its own signals, not your trades. Your own numbers are in Analytics.']
     return f"Scanner week · to {now:%d %b}", '\n'.join(L).strip(), 'bar_chart'
 
