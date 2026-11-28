@@ -1,0 +1,1 @@
+{"workflow": "backtest-intraday", "at": "2026-11-28T17:04:40+05:30", "run": "46140144878", "files": ["data/backtest_gold_intraday.json", "data/backtest_gold_intraday_trades.json", "data/backtest_intraday.json", "data/backtest_intraday_trades.json", "data/backtest_options.json", "data/backtest_options_trades.json"], "n": 6}

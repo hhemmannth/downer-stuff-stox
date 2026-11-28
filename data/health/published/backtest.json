@@ -1,0 +1,1 @@
+{"workflow": "backtest", "at": "2026-11-28T15:27:28+05:30", "run": "46128911602", "files": ["data/backtest.json", "data/backtest_gold_positional.json", "data/backtest_gold_positional_trades.json", "data/backtest_gold_swing.json", "data/backtest_gold_swing_trades.json", "data/backtest_positional.json", "data/backtest_positional_trades.json", "data/backtest_trades.json"], "n": 8}
